@@ -430,6 +430,7 @@ async fn row_filters_bind_matches_and_searches() {
         ..RowFilter::default()
     };
     assert_eq!(ops::row_count(&*s, &object, &none).await.unwrap().count, 0, "`%` is a literal");
-    let null = RowFilter { matches: vec![ColumnValue { column: "discount".into(), value: None }], ..RowFilter::default() };
+    let null =
+        RowFilter { matches: vec![ColumnValue { column: "discount".into(), value: None }], ..RowFilter::default() };
     assert!(ops::row_count(&*s, &object, &null).await.unwrap().count > 0);
 }

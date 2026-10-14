@@ -143,20 +143,31 @@ pub fn decode(c: &Column, value: &Value, limits: CellLimits) -> Cell {
         // Binary protocol (parameterised statements) sends dates and times as structs.
         Value::Date(..) | Value::Time(..) => {
             let date_only = matches!(c.column_type(), MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE);
-            Cell::Temporal { value: temporal_text(value, date_only), zoned: false }
+            Cell::Temporal { value: temporal_text(value, date_only, c.decimals()), zoned: false }
         }
     }
 }
 
-/// Server-style text for binary-protocol `DATE`/`DATETIME`/`TIME` values.
-fn temporal_text(value: &Value, date_only: bool) -> String {
-    let fraction = |us: u32| if us == 0 { String::new() } else { format!(".{us:06}") };
+/// Server-style text for binary-protocol `DATE`/`DATETIME`/`TIME` values,
+/// with as many fractional digits as the column declares (as the text protocol does).
+fn temporal_text(value: &Value, date_only: bool, decimals: u8) -> String {
+    let digits = usize::from(decimals.min(6));
+    let fraction = |us: u32| {
+        if digits == 0 {
+            String::new()
+        } else {
+            let scaled = us / 10u32.pow(6 - digits as u32);
+            format!(".{scaled:0digits$}")
+        }
+    };
     match *value {
-        Value::Date(y, m, d, ..) if date_only => format!("{y:04}-{m:02}-{d:02}"),
-        Value::Date(y, m, d, h, i, s, us) => format!("{y:04}-{m:02}-{d:02} {h:02}:{i:02}:{s:02}{}", fraction(us)),
-        Value::Time(negative, days, h, i, s, us) => {
-            let hours = days * 24 + u32::from(h);
-            format!("{}{hours:02}:{i:02}:{s:02}{}", if negative { "-" } else { "" }, fraction(us))
+        Value::Date(year, month, day, ..) if date_only => format!("{year:04}-{month:02}-{day:02}"),
+        Value::Date(year, month, day, hour, minute, second, us) => {
+            format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}{}", fraction(us))
+        }
+        Value::Time(negative, days, hour, minute, second, us) => {
+            let hours = days * 24 + u32::from(hour);
+            format!("{}{hours:02}:{minute:02}:{second:02}{}", if negative { "-" } else { "" }, fraction(us))
         }
         _ => String::new(),
     }

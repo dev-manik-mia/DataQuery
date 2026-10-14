@@ -17,7 +17,7 @@
     "lint": "eslint src",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-    "test:integration": "DATAQUERY_TEST_PG=localhost:55432 DATAQUERY_TEST_MYSQL=localhost:53306 cargo test --workspace && DATAQUERY_TEST_MYSQL=localhost:53307 cargo test -p dq-mysql --test mysql",
+    "test:integration": "DATAQUERY_TEST_PG=localhost:55432 DATAQUERY_TEST_MYSQL=localhost:53306 DATAQUERY_TEST_SSH=localhost:52222 cargo test --workspace && DATAQUERY_TEST_MYSQL=localhost:53307 cargo test -p dq-mysql --test mysql",
     "db:up": "docker compose -p dataquery up -d",
     "db:down": "docker compose -p dataquery down -v"
   },

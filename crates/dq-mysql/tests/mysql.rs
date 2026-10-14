@@ -431,20 +431,35 @@ async fn export_and_import_round_trip() -> DbResult<()> {
 async fn parameters_are_bound_with_prepared_statements() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let params = [Some("18446744073709551615".to_owned()), None, Some("it's; DROP TABLE x".to_owned())];
-    let r = s.execute("SELECT CAST(? AS UNSIGNED), ? IS NULL, ?", &params, OPTS).await.unwrap();
-    assert_eq!(text(&r.rows[0][0]), "18446744073709551615");
-    assert_eq!(text(&r.rows[0][1]), "1");
-    assert_eq!(text(&r.rows[0][2]), "it's; DROP TABLE x");
-    // Binary-protocol dates keep the server's text form.
-    let r = s.execute("SELECT DATE('2026-10-14'), TIMESTAMP('2026-10-14 07:59:00.5')", &[], OPTS).await.unwrap();
-    let p = s.execute("SELECT DATE(?), TIMESTAMP(?)", &[Some("2026-10-14".into()), Some("2026-10-14 07:59:00.5".into())], OPTS)
+    let params = [Some("1".to_owned()), None, Some("it's; DROP TABLE x".to_owned())];
+    let r = s
+        .execute(
+            "SELECT big, exact, ? IS NULL, ? FROM type_samples WHERE id = ?",
+            &[params[1].clone(), params[2].clone(), params[0].clone()],
+            OPTS,
+        )
         .await
         .unwrap();
-    assert_eq!(text(&p.rows[0][0]), "2026-10-14");
-    assert_eq!(text(&p.rows[0][1]), text(&r.rows[0][1]));
+    // Unsigned BIGINT and DECIMAL keep every digit through the binary protocol.
+    assert_eq!(text(&r.rows[0][0]), "18446744073709551615");
+    assert_eq!(text(&r.rows[0][1]), "1234567890123456789012345678.0123456789");
+    assert_eq!(text(&r.rows[0][2]), "1");
+    assert_eq!(text(&r.rows[0][3]), "it's; DROP TABLE x");
+    // Binary-protocol dates and times read like the text protocol.
+    let sql = "SELECT ts, DATE(ts), TIME(ts) FROM type_samples WHERE id = 1";
+    let plain = s.execute(sql, &[], OPTS).await.unwrap();
+    let bound = s.execute(&format!("{sql} AND ? = 1"), &[Some("1".into())], OPTS).await.unwrap();
+    for i in 0..3 {
+        assert_eq!(text(&bound.rows[0][i]), text(&plain.rows[0][i]), "column {i}");
+    }
+    assert_eq!(text(&plain.rows[0][0]), "2026-10-14 09:59:00.123");
     // A prepared result can be paged like a plain one.
-    let big = s.execute("SELECT n FROM seq WHERE n > ?", &[Some("0".into())], ExecOptions { row_limit: 10, timeout_secs: 30 })
+    let big = s
+        .execute(
+            "SELECT id FROM orders WHERE id > ?",
+            &[Some("0".into())],
+            ExecOptions { row_limit: 10, timeout_secs: 30 },
+        )
         .await
         .unwrap();
     assert!(big.has_more);
@@ -475,9 +490,10 @@ async fn row_filters_bind_matches_and_searches() {
         matches: vec![ColumnValue { column: "status".into(), value: Some("paid".into()) }],
         searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "PAI".into() }],
     };
-    let page = ops::table_page(&*s, &TablePageRequest { object: object.clone(), rows, sort: None, offset: 0, limit: 5 })
-        .await
-        .unwrap();
+    let page =
+        ops::table_page(&*s, &TablePageRequest { object: object.clone(), rows, sort: None, offset: 0, limit: 5 })
+            .await
+            .unwrap();
     assert!(!page.rows.is_empty());
     let none = RowFilter {
         searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "_aid".into() }],
