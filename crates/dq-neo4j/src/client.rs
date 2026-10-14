@@ -224,8 +224,12 @@ impl Client {
             (None, true) => (self.url(query.database, "/tx"), None),
             (None, false) => (self.url(query.database, ""), None),
         };
-        let response =
-            self.request(reqwest::Method::POST, &url, affinity).json(&body).send().await.map_err(|e| self.network(&e))?;
+        let response = self
+            .request(reqwest::Method::POST, &url, affinity)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| self.network(&e))?;
         let new_affinity = response
             .headers()
             .get("neo4j-cluster-affinity")

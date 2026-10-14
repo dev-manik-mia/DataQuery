@@ -34,7 +34,9 @@ pub fn node(plan: &Value, profiled: bool) -> PlanNode {
     let mut props: Vec<(String, String)> = Vec::new();
     let number = |k: &str| plan.get(k).and_then(Value::as_f64);
     if profiled {
-        for (key, name) in [("dbHits", "DB hits"), ("pageCacheHits", "Page cache hits"), ("pageCacheMisses", "Page cache misses")] {
+        for (key, name) in
+            [("dbHits", "DB hits"), ("pageCacheHits", "Page cache hits"), ("pageCacheMisses", "Page cache misses")]
+        {
             if let Some(n) = number(key) {
                 props.push((name.to_owned(), format!("{n}")));
             }

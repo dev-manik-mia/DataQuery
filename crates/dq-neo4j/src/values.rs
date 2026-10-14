@@ -24,11 +24,13 @@ fn inner_str(v: &Value) -> &str {
 pub fn text(v: &Value) -> Option<String> {
     match type_of(v) {
         "Null" => None,
-        "List" => Some(inner(v).as_array().map(|a| a.iter().filter_map(text).collect::<Vec<_>>().join(", ")).unwrap_or_default()),
+        "List" => Some(
+            inner(v).as_array().map(|a| a.iter().filter_map(text).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
+        ),
         "Boolean" => Some(inner(v).as_bool().unwrap_or(false).to_string()),
         "Point" => Some(point_text(inner_str(v))),
-        "String" | "Integer" | "Float" | "Date" | "Time" | "LocalTime" | "DateTime" | "OffsetDateTime" | "LocalDateTime"
-        | "Duration" | "Base64" => Some(inner_str(v).to_owned()),
+        "String" | "Integer" | "Float" | "Date" | "Time" | "LocalTime" | "DateTime" | "OffsetDateTime"
+        | "LocalDateTime" | "Duration" | "Base64" => Some(inner_str(v).to_owned()),
         _ => Some(plain(v).to_string()),
     }
 }
@@ -104,13 +106,14 @@ pub fn cell(v: &Value, limits: CellLimits) -> Cell {
             let s = inner_str(v);
             if s.parse::<f64>().is_ok_and(f64::is_finite) { Cell::number(s) } else { Cell::text(s, limits) }
         }
-        "String" => Cell::text(inner_str(v), limits),
+        "String" | "Duration" => Cell::text(inner_str(v), limits),
         "Base64" => BASE64
             .decode(inner_str(v))
             .map_or_else(|_| Cell::text(inner_str(v), limits), |bytes| Cell::binary(&bytes, limits)),
-        "Date" | "Time" | "LocalTime" | "LocalDateTime" => Cell::Temporal { value: inner_str(v).to_owned(), zoned: false },
+        "Date" | "Time" | "LocalTime" | "LocalDateTime" => {
+            Cell::Temporal { value: inner_str(v).to_owned(), zoned: false }
+        }
         "DateTime" | "OffsetDateTime" => Cell::Temporal { value: inner_str(v).to_owned(), zoned: true },
-        "Duration" => Cell::text(inner_str(v), limits),
         "Point" => Cell::text(point_text(inner_str(v)), limits),
         _ => Cell::json(plain(v).to_string(), limits),
     }
@@ -138,10 +141,9 @@ pub fn point_text(wkt: &str) -> String {
 pub fn plain(v: &Value) -> Value {
     match type_of(v) {
         "Null" => Value::Null,
-        "Boolean" => inner(v).clone(),
-        "Integer" => {
-            inner_str(v).parse::<i64>().map_or_else(|_| Value::String(inner_str(v).to_owned()), |n| Value::Number(n.into()))
-        }
+        "Integer" => inner_str(v)
+            .parse::<i64>()
+            .map_or_else(|_| Value::String(inner_str(v).to_owned()), |n| Value::Number(n.into())),
         "Float" => inner_str(v)
             .parse::<f64>()
             .ok()
@@ -182,14 +184,13 @@ pub fn field(key: &str, v: &Value, limits: CellLimits) -> DocField {
     match type_of(v) {
         "List" | "Path" => {
             let items = inner(v).as_array().cloned().unwrap_or_default();
-            let children: Vec<DocField> = items.iter().enumerate().map(|(i, x)| field(&i.to_string(), x, limits)).collect();
+            let children: Vec<DocField> =
+                items.iter().enumerate().map(|(i, x)| field(&i.to_string(), x, limits)).collect();
             DocField::container(key, label, cell(v, limits), children.into_iter())
         }
         "Map" => {
-            let children: Vec<DocField> = inner(v)
-                .as_object()
-                .map(|m| m.iter().map(|(k, x)| field(k, x, limits)).collect())
-                .unwrap_or_default();
+            let children: Vec<DocField> =
+                inner(v).as_object().map(|m| m.iter().map(|(k, x)| field(k, x, limits)).collect()).unwrap_or_default();
             DocField::container(key, label, cell(v, limits), children.into_iter())
         }
         "Node" | "Relationship" => {
@@ -299,8 +300,14 @@ mod tests {
             cell(&t("OffsetDateTime", json!("2026-10-14T10:06:31.29Z")), g),
             Cell::Temporal { value: "2026-10-14T10:06:31.29Z".into(), zoned: true }
         );
-        assert_eq!(cell(&t("Date", json!("2026-10-14")), g), Cell::Temporal { value: "2026-10-14".into(), zoned: false });
-        assert_eq!(cell(&t("Point", json!("SRID=7203;POINT (1.0 2.0)")), g), Cell::text("point({srid: 7203, x: 1.0, y: 2.0})", g));
+        assert_eq!(
+            cell(&t("Date", json!("2026-10-14")), g),
+            Cell::Temporal { value: "2026-10-14".into(), zoned: false }
+        );
+        assert_eq!(
+            cell(&t("Point", json!("SRID=7203;POINT (1.0 2.0)")), g),
+            Cell::text("point({srid: 7203, x: 1.0, y: 2.0})", g)
+        );
     }
 
     #[test]
@@ -313,7 +320,10 @@ mod tests {
             "Relationship",
             json!({ "_element_id": "5:x:0", "_start_node_element_id": "4:x:0", "_end_node_element_id": "4:x:1", "_type": "KNOWS", "_properties": {} }),
         );
-        assert_eq!(plain(&node), json!({ "elementId": "4:x:1", "labels": ["P"], "properties": { "n": 9_007_199_254_740_993_i64 } }));
+        assert_eq!(
+            plain(&node),
+            json!({ "elementId": "4:x:1", "labels": ["P"], "properties": { "n": 9_007_199_254_740_993_i64 } })
+        );
         assert_eq!(plain(&rel)["type"], "KNOWS");
         let path = t("Path", json!([node, rel]));
         assert_eq!(plain(&path).as_array().unwrap().len(), 2);
@@ -328,7 +338,11 @@ mod tests {
         assert_eq!(duration_ms("P1DT2H"), Some(93_600_000));
         assert_eq!(duration_ms("PT1M0.5S"), Some(60_500));
         assert_eq!(duration_ms("bad"), None);
-        assert_eq!(text(&t("List", json!([{ "$type": "String", "_value": "a" }, { "$type": "String", "_value": "b" }]))).as_deref(), Some("a, b"));
+        assert_eq!(
+            text(&t("List", json!([{ "$type": "String", "_value": "a" }, { "$type": "String", "_value": "b" }])))
+                .as_deref(),
+            Some("a, b")
+        );
     }
 
     #[test]
@@ -339,7 +353,10 @@ mod tests {
         assert_eq!(param(None), t("Null", Value::Null));
         assert_eq!(param(Some("\"123\"")), t("String", json!("123")));
         assert_eq!(param(Some("Ann")), t("String", json!("Ann")));
-        assert_eq!(param(Some("[1, \"a\"]")), t("List", json!([{ "$type": "Integer", "_value": "1" }, { "$type": "String", "_value": "a" }])));
+        assert_eq!(
+            param(Some("[1, \"a\"]")),
+            t("List", json!([{ "$type": "Integer", "_value": "1" }, { "$type": "String", "_value": "a" }]))
+        );
         assert_eq!(param(Some("inf")), t("String", json!("inf")));
         assert_eq!(import_value("Integer", Some(" 7 ")).unwrap(), t("Integer", json!("7")));
         assert!(import_value("Integer", Some("x")).is_err());

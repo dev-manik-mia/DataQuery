@@ -19,8 +19,9 @@ use crate::values::{self, int, text, type_label};
 const MAX_COUNTED: usize = 200;
 const SAMPLE: u32 = 100;
 
+/// A label, type or key, quoted with backticks only when needed.
 pub fn quote(name: &str) -> String {
-    CypherDialect.quote_ident(name)
+    CypherDialect.display_ident(name)
 }
 
 /// Rows of a read query as typed values.
@@ -33,7 +34,8 @@ fn column_text(row: &[Value], i: usize) -> String {
 }
 
 pub async fn databases(client: &Client, current: &str) -> DbResult<Vec<Node>> {
-    let rows = rows(client, current, "SHOW DATABASES YIELD name, currentStatus RETURN DISTINCT name, currentStatus").await?;
+    let rows =
+        rows(client, current, "SHOW DATABASES YIELD name, currentStatus RETURN DISTINCT name, currentStatus").await?;
     let mut nodes: Vec<Node> = rows
         .iter()
         .map(|r| {
@@ -56,9 +58,12 @@ pub async fn labels(client: &Client, database: &str) -> DbResult<Vec<String>> {
 }
 
 pub async fn relationship_types(client: &Client, database: &str) -> DbResult<Vec<String>> {
-    let rows =
-        rows(client, database, "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType")
-            .await?;
+    let rows = rows(
+        client,
+        database,
+        "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType",
+    )
+    .await?;
     Ok(rows.iter().map(|r| column_text(r, 0)).collect())
 }
 
@@ -88,7 +93,10 @@ pub struct SchemaItem {
 }
 
 fn list(v: Option<&Value>) -> Vec<String> {
-    v.and_then(|v| v.get("_value")).and_then(Value::as_array).map(|a| a.iter().filter_map(text).collect()).unwrap_or_default()
+    v.and_then(|v| v.get("_value"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(text).collect())
+        .unwrap_or_default()
 }
 
 pub async fn schema_items(client: &Client, database: &str) -> DbResult<Vec<SchemaItem>> {
@@ -140,7 +148,7 @@ pub async fn items_for(client: &Client, object: &ObjectRef) -> DbResult<Vec<Sche
     Ok(schema_items(client, &object.database)
         .await?
         .into_iter()
-        .filter(|i| i.entity == entity && i.owners.iter().any(|o| *o == object.name))
+        .filter(|i| i.entity == entity && i.owners.contains(&object.name))
         .collect())
 }
 
@@ -218,7 +226,8 @@ pub async fn sampled_properties(client: &Client, object: &ObjectRef, sample: u32
     };
     let mut seen: BTreeMap<String, BTreeMap<&'static str, u32>> = BTreeMap::new();
     for row in rows(client, &object.database, &statement).await? {
-        let Some(props) = row.first().and_then(values::entity).and_then(|e| e.get("_properties")).and_then(Value::as_object)
+        let Some(props) =
+            row.first().and_then(values::entity).and_then(|e| e.get("_properties")).and_then(Value::as_object)
         else {
             continue;
         };
@@ -244,7 +253,8 @@ fn column(name: &str, data_type: &str, key: bool) -> ColumnInfo {
         primary_key: key,
         generated: key,
         identity: false,
-        editable: false,
+        // Properties take imported values; grid editing is off for Neo4j.
+        editable: !key,
         numeric: values::is_numeric(data_type),
         comment: None,
         read_as_text: false,
@@ -319,7 +329,8 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         _ => Vec::new(),
     };
     if statements.is_empty() {
-        let what = if object.kind == NodeKind::View { format!("[:{}]", object.name) } else { format!(":{}", object.name) };
+        let what =
+            if object.kind == NodeKind::View { format!("[:{}]", object.name) } else { format!(":{}", object.name) };
         return Ok(format!("// No indexes or constraints on {what}.\n"));
     }
     Ok(statements.iter().map(|s| format!("{s};")).collect::<Vec<_>>().join("\n") + "\n")
@@ -346,7 +357,8 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
     let mut deps = Dependencies::default();
     for rel in entities(1).iter().filter_map(values::entity) {
         let ty = rel.get("_type").and_then(Value::as_str).unwrap_or_default();
-        let end = |k: &str| rel.get(k).and_then(Value::as_str).and_then(|id| label_of.get(id)).cloned().unwrap_or_default();
+        let end =
+            |k: &str| rel.get(k).and_then(Value::as_str).and_then(|id| label_of.get(id)).cloned().unwrap_or_default();
         let (start, finish) = (end("_start_node_element_id"), end("_end_node_element_id"));
         let rel_ref = ObjectRef::new(NodeKind::View, object.database.clone(), None, ty);
         let label_ref = |l: &str| ObjectRef::new(NodeKind::Table, object.database.clone(), None, l);

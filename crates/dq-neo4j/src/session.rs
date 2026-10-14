@@ -131,7 +131,8 @@ impl Neo4jSession {
         let discovery = client.discovery().await?;
         let database = config.database.trim().to_owned();
         let database = if database.is_empty() { "neo4j".to_owned() } else { database };
-        let reply = client.run(&Query::read(&database, "CALL dbms.components() YIELD versions, edition"), false).await?;
+        let reply =
+            client.run(&Query::read(&database, "CALL dbms.components() YIELD versions, edition"), false).await?;
         let latency_ms = started.elapsed().as_millis() as u64;
         let row = reply.values.first();
         let version = row
@@ -220,7 +221,10 @@ impl Neo4jSession {
                     state.tx = None;
                 }
                 Err(if kind == ErrorKind::Timeout {
-                    DbError::new(ErrorKind::Timeout, format!("The statement ran longer than {timeout_secs} seconds and was stopped."))
+                    DbError::new(
+                        ErrorKind::Timeout,
+                        format!("The statement ran longer than {timeout_secs} seconds and was stopped."),
+                    )
                 } else {
                     DbError::new(ErrorKind::Cancelled, "The statement was cancelled.")
                 })
@@ -279,9 +283,18 @@ impl Neo4jSession {
     }
 
     /// A read on the catalog path (not the editor's transaction).
-    pub(crate) async fn read(&self, database: &str, statement: &str, parameters: Map<String, Value>) -> DbResult<Reply> {
+    pub(crate) async fn read(
+        &self,
+        database: &str,
+        statement: &str,
+        parameters: Map<String, Value>,
+    ) -> DbResult<Reply> {
         let query = Query { parameters, ..Query::read(database, statement) };
         self.client.run(&query, false).await
+    }
+
+    pub(crate) fn info_version(&self) -> String {
+        self.info.version.clone()
     }
 
     pub(crate) fn current_database(&self) -> String {
@@ -304,7 +317,8 @@ fn expired(e: DbError) -> DbError {
 /// Ends the transaction whose current statement carries `tag`. Retries briefly
 /// while the server registers it; returns whether one was terminated.
 pub async fn terminate(client: &Client, database: &str, tag: &str) -> bool {
-    let find = "SHOW TRANSACTIONS YIELD transactionId, currentQuery WHERE currentQuery CONTAINS $tag RETURN transactionId";
+    let find =
+        "SHOW TRANSACTIONS YIELD transactionId, currentQuery WHERE currentQuery CONTAINS $tag RETURN transactionId";
     for _ in 0..10 {
         let query = Query::read(database, find).with("tag", values::param(Some(&format!("\"dq:{tag}\""))));
         if let Ok(reply) = client.run(&Query { access: Access::Write, ..query }, false).await {
@@ -331,7 +345,8 @@ fn spawn_keepalive(state: Weak<Mutex<QueryState>>, client: Arc<Client>) {
             // Busy means a statement is running, which keeps it alive anyway.
             let Ok(guard) = state.try_lock() else { continue };
             if let Some(tx) = guard.tx.as_ref() {
-                let _ = client.run(&Query { transaction: Some(tx), ..Query::read(&tx.database, "RETURN 1") }, false).await;
+                let _ =
+                    client.run(&Query { transaction: Some(tx), ..Query::read(&tx.database, "RETURN 1") }, false).await;
             }
         }
     });
@@ -453,11 +468,10 @@ impl Session for Neo4jSession {
                     .enumerate()
                     .map(|(i, v)| (format!("p{}", i + 1), values::param(v.as_deref())))
                     .collect();
-                let query =
-                    Query { parameters, transaction: tx.as_ref(), ..Query::write(database, &statement.sql) };
+                let query = Query { parameters, transaction: tx.as_ref(), ..Query::write(database, &statement.sql) };
                 let reply = self.client.run(&query, tx.is_none()).await?;
                 if tx.is_none() {
-                    tx = reply.transaction.clone();
+                    tx.clone_from(&reply.transaction);
                 }
                 counts.push(reply.affected().unwrap_or(1));
             }
@@ -478,10 +492,17 @@ impl Session for Neo4jSession {
         }
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         let body = sql.trim().trim_end_matches(';');
         let upper = body.to_ascii_uppercase();
-        let body = ["EXPLAIN ", "PROFILE "].iter().find(|p| upper.starts_with(*p)).map_or(body, |p| body[p.len()..].trim());
+        let body =
+            ["EXPLAIN ", "PROFILE "].iter().find(|p| upper.starts_with(*p)).map_or(body, |p| body[p.len()..].trim());
         if analyze {
             self.refuse_writes(body)?;
         }
@@ -527,7 +548,9 @@ mod tests {
 
     #[test]
     fn binds_named_params() {
-        let p = bind("MATCH (n {id: $id, name: $name}) WHERE n.id = $id RETURN n", &[Some("7".into()), Some("Ann".into())]).unwrap();
+        let p =
+            bind("MATCH (n {id: $id, name: $name}) WHERE n.id = $id RETURN n", &[Some("7".into()), Some("Ann".into())])
+                .unwrap();
         assert_eq!(p["id"]["$type"], "Integer");
         assert_eq!(p["name"]["_value"], "Ann");
         assert!(bind("RETURN $a", &[Some("1".into()), Some("2".into())]).is_err());
