@@ -44,6 +44,49 @@ services:
       interval: 2s
       retries: 60
 
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # Only published for x86-64; Docker runs it under emulation on Apple silicon.
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "DataQuery#2026"
+    command: ["/bin/bash", "/seed/sqlserver-init.sh"]
+    ports: ["51433:1433"]
+    volumes:
+      - ./docker/sqlserver-init.sh:/seed/sqlserver-init.sh:ro
+      - ./docker/sqlserver-seed.sql:/seed/sqlserver-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/opt/mssql/.seeded"]
+      interval: 3s
+      retries: 100
+
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    environment:
+      ORACLE_PASSWORD: dataquery
+      APP_USER: dataquery
+      APP_USER_PASSWORD: dataquery
+    ports: ["51521:1521"]
+    volumes: ["./docker/oracle-seed.sql:/container-entrypoint-initdb.d/seed.sql:ro"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      retries: 60
+
+  cockroach:
+    image: cockroachdb/cockroach:latest-v25.2
+    command: ["start-single-node", "--insecure"]
+    environment:
+      COCKROACH_DATABASE: dataquery_test
+    ports: ["56257:26257"]
+    volumes: ["./docker/cockroach-seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro"]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/health?ready=1"]
+      interval: 2s
+      retries: 60
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }
