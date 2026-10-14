@@ -189,6 +189,18 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 18. Engines: Elasticsearch / OpenSearch, Neo4j
+
+- [x] T18.1 `query_dsl` flavor: Kibana Dev Tools requests (`GET /index/_search` + JSON body) split at method lines, `#`/`//` comments; read/write classification by method and endpoint (`_search`, `_count`, `_sql`, `_cat` read; `DELETE /index` and `_delete_by_query` with `match_all` destructive; cluster settings and index close/shrink ask first).
+- [x] T18.2 `cypher` flavor: backtick names, `//` comments, `$name` parameters (named, in order of first appearance); clause-based classification (`DETACH DELETE` without a filter, `DROP`, `TERMINATE` are destructive; read-only procedures recognised); `BEGIN`/`COMMIT`/`ROLLBACK` explicit transactions.
+- [x] T18.3 Templates per language (search request, `MATCH … RETURN`, index/update/delete requests, `CREATE`/`SET`/`DETACH DELETE`), Neo4j URLs (`neo4j://`, `neo4j+s://`, `neo4j+ssc://`, `bolt://`), optional Elasticsearch user (API key in the password).
+- [x] T18.4 Adapter `dq-elasticsearch` (reqwest): Elasticsearch and OpenSearch, cluster → indices / aliases / data streams, request results as grids (hits, `_cat`, `_sql`, text), read-only Documents view (Query DSL or query string filters, `_source` fields, sort, search_after paging), profile-based explain, `_tasks` monitoring and cancel, mapping-based structure, `_bulk` imports, point-in-time exports.
+- [x] T18.5 Adapter `dq-neo4j`: databases → labels / relationship types / indexes and constraints, typed `$parameters`, nodes / relationships / paths as JSON cells, explicit transactions, EXPLAIN / PROFILE plan trees, read-only Documents view over labels and relationship types (Cypher WHERE / RETURN / ORDER BY fragments), `SHOW TRANSACTIONS` monitoring and `TERMINATE TRANSACTION`, imports as nodes.
+- [x] T18.6 UI: Dev Tools editor mode (method, path, JSON highlighting, endpoint completion), Cypher highlighting, per-language Documents-view labels and examples, explorer groups for labels / relationship types / indexes, connection form labels.
+- [x] T18.7 Test databases: `elasticsearch` (8.15, :59200, elastic / dataquery) and `neo4j` (5 community, Bolt :57687, HTTP :57474, neo4j / dataquery123); integration tests in `crates/dq-elasticsearch/tests` and `crates/dq-neo4j/tests`.
+
+---
+
 ## Verification
 
 | Area | How it was verified |

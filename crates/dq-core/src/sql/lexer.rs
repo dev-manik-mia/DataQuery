@@ -96,7 +96,7 @@ impl Lexer<'_> {
                 b'\'' | b'"' => return self.quoted(c, true),
                 b'`' => return self.quoted(b'`', false).ident(),
                 b'/' if self.peek(1) == Some(b'/') => return self.line_comment(),
-                b'$' if self.peek(1).is_some_and(|n| is_word_continue(n)) => {
+                b'$' if self.peek(1).is_some_and(is_word_continue) => {
                     self.pos += 1;
                     while self.peek(0).is_some_and(is_word_continue) {
                         self.pos += 1;

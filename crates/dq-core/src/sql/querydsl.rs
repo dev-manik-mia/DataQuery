@@ -1,4 +1,4 @@
-//! Elasticsearch / OpenSearch requests in Kibana Dev Tools form:
+//! Elasticsearch / `OpenSearch` requests in Kibana Dev Tools form:
 //!
 //! ```text
 //! GET /orders/_search

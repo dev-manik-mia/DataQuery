@@ -1558,6 +1558,7 @@ dependencies = [
  "dq-core",
  "dq-duckdb",
  "dq-dynamodb",
+ "dq-elasticsearch",
  "dq-mongodb",
  "dq-mysql",
  "dq-oracle",

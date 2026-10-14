@@ -170,9 +170,10 @@ fn column(name: &str, data_type: &str, primary_key: bool) -> ColumnInfo {
         nullable: !primary_key,
         default: None,
         primary_key,
-        generated: primary_key,
+        generated: false,
         identity: false,
-        editable: false,
+        // Imports write any field; the grid never edits (no grid-edit capability).
+        editable: true,
         numeric: is_numeric_type(data_type),
         comment: None,
         read_as_text: false,

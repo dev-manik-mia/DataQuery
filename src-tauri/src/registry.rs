@@ -25,6 +25,7 @@ impl Registry {
             (Engine::Valkey, Arc::new(dq_redis::RedisAdapter::VALKEY)),
             (Engine::Cassandra, Arc::new(dq_cassandra::CassandraAdapter::CASSANDRA)),
             (Engine::Scylladb, Arc::new(dq_cassandra::CassandraAdapter::SCYLLA)),
+            (Engine::Elasticsearch, Arc::new(dq_elasticsearch::ElasticsearchAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];

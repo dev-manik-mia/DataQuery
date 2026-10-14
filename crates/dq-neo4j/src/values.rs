@@ -20,6 +20,52 @@ fn inner_str(v: &Value) -> &str {
     inner(v).as_str().unwrap_or_default()
 }
 
+/// A scalar's text (`None` for null); lists are joined with `, `.
+pub fn text(v: &Value) -> Option<String> {
+    match type_of(v) {
+        "Null" => None,
+        "List" => Some(inner(v).as_array().map(|a| a.iter().filter_map(text).collect::<Vec<_>>().join(", ")).unwrap_or_default()),
+        "Boolean" => Some(inner(v).as_bool().unwrap_or(false).to_string()),
+        "Point" => Some(point_text(inner_str(v))),
+        "String" | "Integer" | "Float" | "Date" | "Time" | "LocalTime" | "DateTime" | "OffsetDateTime" | "LocalDateTime"
+        | "Duration" | "Base64" => Some(inner_str(v).to_owned()),
+        _ => Some(plain(v).to_string()),
+    }
+}
+
+/// An integer value, if it is one.
+pub fn int(v: &Value) -> Option<i64> {
+    (type_of(v) == "Integer").then(|| inner_str(v).parse().ok()).flatten()
+}
+
+/// The element id, labels/type and properties of a node or relationship value.
+pub fn entity(v: &Value) -> Option<&Value> {
+    matches!(type_of(v), "Node" | "Relationship").then(|| inner(v))
+}
+
+/// Milliseconds of an ISO-8601 duration such as `PT44.356S` or `P1DT2H` (months count as 30 days).
+pub fn duration_ms(iso: &str) -> Option<i64> {
+    let s = iso.strip_prefix('P')?;
+    let (date, time) = s.split_once('T').unwrap_or((s, ""));
+    let mut ms = 0f64;
+    let mut take = |part: &str, units: &[(char, f64)]| -> Option<()> {
+        let mut number = String::new();
+        for c in part.chars() {
+            if c.is_ascii_digit() || c == '.' || c == '-' {
+                number.push(c);
+            } else {
+                let unit = units.iter().find(|(u, _)| *u == c)?.1;
+                ms += number.parse::<f64>().ok()? * unit;
+                number.clear();
+            }
+        }
+        Some(())
+    };
+    take(date, &[('Y', 31_536_000_000.0), ('M', 2_592_000_000.0), ('W', 604_800_000.0), ('D', 86_400_000.0)])?;
+    take(time, &[('H', 3_600_000.0), ('M', 60_000.0), ('S', 1_000.0)])?;
+    Some(ms.round() as i64)
+}
+
 /// The Cypher type name shown in headers and the Documents view.
 pub fn type_label(v: &Value) -> &'static str {
     match type_of(v) {
@@ -274,6 +320,15 @@ mod tests {
         let f = field("n", &node, CellLimits::GRID);
         assert_eq!((f.type_label.as_str(), f.children[0].type_label.as_str()), ("Node", "Integer"));
         assert_eq!(f.children[0].value, Cell::number("9007199254740993"));
+    }
+
+    #[test]
+    fn durations() {
+        assert_eq!(duration_ms("PT44.356S"), Some(44_356));
+        assert_eq!(duration_ms("P1DT2H"), Some(93_600_000));
+        assert_eq!(duration_ms("PT1M0.5S"), Some(60_500));
+        assert_eq!(duration_ms("bad"), None);
+        assert_eq!(text(&t("List", json!([{ "$type": "String", "_value": "a" }, { "$type": "String", "_value": "b" }]))).as_deref(), Some("a, b"));
     }
 
     #[test]

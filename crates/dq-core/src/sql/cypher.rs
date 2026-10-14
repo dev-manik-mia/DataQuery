@@ -112,16 +112,16 @@ mod tests {
     #[test]
     fn classifies_cypher() {
         assert_eq!(one("MATCH (p:Person {name: 'Ann'})-[:KNOWS]->(f) RETURN f.name"), (K::Select, false, None));
-        assert_eq!(one("CREATE (n:Person {name: $name})").1, true);
+        assert!(one("CREATE (n:Person {name: $name})").1);
         assert_eq!(one("MATCH (n) DETACH DELETE n"), (K::Delete, true, Some(D::DeleteAllDocuments)));
         assert_eq!(one("MATCH (n:Tmp) WHERE n.age > 3 DELETE n").2, None);
         assert_eq!(one("DROP INDEX person_name").2, Some(D::Drop));
-        assert_eq!(one("SHOW TRANSACTIONS").1, false);
-        assert_eq!(one("CALL db.labels()").1, false);
-        assert_eq!(one("CALL apoc.periodic.iterate('a', 'b', {})").1, true);
+        assert!(!one("SHOW TRANSACTIONS").1);
+        assert!(!one("CALL db.labels()").1);
+        assert!(one("CALL apoc.periodic.iterate('a', 'b', {})").1);
         assert_eq!(one("CREATE INDEX FOR (p:Person) ON (p.name)").0, K::Create);
         assert_eq!(one("TERMINATE TRANSACTIONS 'neo4j-transaction-3'").2, Some(D::ServerCommand));
-        assert_eq!(one("EXPLAIN MATCH (n) RETURN n").1, false);
+        assert!(!one("EXPLAIN MATCH (n) RETURN n").1);
         assert_eq!(one("BEGIN").0, K::Transaction);
         let s = split_statements("MATCH (n) RETURN n; // c;\nRETURN 'a;b';", SqlFlavor::Cypher);
         assert_eq!(s.len(), 2);

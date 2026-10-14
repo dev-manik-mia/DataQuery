@@ -90,10 +90,9 @@ pub fn hit_fields(hit: &Value, types: &FieldTypes, limits: CellLimits) -> Vec<Do
     let mut fields = vec![
         DocField::scalar("_index", "keyword", cell(&hit["_index"], limits)),
         DocField::scalar("_id", "keyword", cell(&hit["_id"], limits)),
+        // Null when the search sorts by a field; kept so the columns stay the same.
+        DocField::scalar("_score", "float", cell(&hit["_score"], limits)),
     ];
-    if !hit["_score"].is_null() {
-        fields.push(DocField::scalar("_score", "float", cell(&hit["_score"], limits)));
-    }
     if let Some(source) = hit["_source"].as_object() {
         fields.extend(object_fields(source, types, limits));
     }
