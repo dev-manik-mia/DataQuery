@@ -23,14 +23,31 @@ const ALERT_RATIO = 0.8;
 function Gauge({ used, max }: { used: number; max: number }) {
   const ratio = max > 0 ? Math.min(1, used / max) : 0;
   return (
-    <div className={styles.gauge} role="meter" aria-valuemin={0} aria-valuemax={max} aria-valuenow={used} aria-label="Connections in use">
+    <div
+      className={styles.gauge}
+      role="meter"
+      aria-valuemin={0}
+      aria-valuemax={max}
+      aria-valuenow={used}
+      aria-label="Connections in use"
+    >
       <div className={styles.gaugeFill} style={{ width: `${ratio * 100}%` }} data-alert={ratio >= ALERT_RATIO} />
       <div className={styles.gaugeTick} style={{ left: `${ALERT_RATIO * 100}%` }} aria-hidden />
     </div>
   );
 }
 
-function Tile({ label, value, help, children }: { label: string; value: string; help?: string; children?: React.ReactNode }) {
+function Tile({
+  label,
+  value,
+  help,
+  children,
+}: {
+  label: string;
+  value: string;
+  help?: string;
+  children?: React.ReactNode;
+}) {
   return (
     <div className={styles.tile}>
       <span className="dq-eyebrow">{label}</span>
@@ -83,14 +100,20 @@ export function MonitorView({ active }: { active: boolean }) {
 
   useEffect(() => {
     if (!active || panel !== 'sizes' || sizes) return;
-    api.largestTables(sid, session.server.database, 50).then(setSizes).catch((e) => setError(toAppError(e).info));
+    api
+      .largestTables(sid, session.server.database, 50)
+      .then(setSizes)
+      .catch((e) => setError(toAppError(e).info));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, panel, sizes]);
 
   useEffect(() => {
     if (!active || panel !== 'settings') return;
     const timer = window.setTimeout(() => {
-      api.serverSettings(sid, search.trim() || null).then(setSettings).catch((e) => setError(toAppError(e).info));
+      api
+        .serverSettings(sid, search.trim() || null)
+        .then(setSettings)
+        .catch((e) => setError(toAppError(e).info));
     }, 200);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,7 +123,12 @@ export function MonitorView({ active }: { active: boolean }) {
     try {
       const done = await guarded((c) => api.killProcess(sid, Number(p.pid), p.user, terminate, c));
       if (done === null) return;
-      useUi.getState().toast(done ? `${terminate ? 'Terminated' : 'Cancelled'} pid ${p.pid}.` : `pid ${p.pid} had already finished.`, done ? 'positive' : 'info');
+      useUi
+        .getState()
+        .toast(
+          done ? `${terminate ? 'Terminated' : 'Cancelled'} pid ${p.pid}.` : `pid ${p.pid} had already finished.`,
+          done ? 'positive' : 'info',
+        );
       void refresh();
     } catch (e) {
       useUi.getState().toastError(e);
@@ -120,7 +148,9 @@ export function MonitorView({ active }: { active: boolean }) {
           actions={
             <>
               <span className="ink-3" style={{ fontSize: 12 }}>
-                {updated ? `Refreshed ${Math.max(0, Math.round((now - updated) / 1000))} s ago${auto ? ' · every 5 s' : ''}` : 'Loading…'}
+                {updated
+                  ? `Refreshed ${Math.max(0, Math.round((now - updated) / 1000))} s ago${auto ? ' · every 5 s' : ''}`
+                  : 'Loading…'}
               </span>
               <Checkbox label="Auto-refresh" checked={auto} onChange={setAuto} />
               <Button size="sm" onClick={() => void refresh()}>
@@ -129,25 +159,45 @@ export function MonitorView({ active }: { active: boolean }) {
             </>
           }
         />
-        {session.connection.environment === 'Production' && <Alert tone="caution">Production: cancel and terminate ask for confirmation and terminating needs the connection name.</Alert>}
+        {session.connection.environment === 'Production' && (
+          <Alert tone="caution">
+            Production: cancel and terminate ask for confirmation and terminating needs the connection name.
+          </Alert>
+        )}
         {error && <ErrorAlert error={error} />}
         {!s && !error && <Spinner label="Reading server activity" />}
         {s && (
           <>
             <div className={styles.tiles}>
               {s.connections && (
-                <Tile label="Connections" value={`${formatCount(s.connections.used)} / ${formatCount(s.connections.max)}`} help="Tick marks the 80% alert threshold.">
+                <Tile
+                  label="Connections"
+                  value={`${formatCount(s.connections.used)} / ${formatCount(s.connections.max)}`}
+                  help="Tick marks the 80% alert threshold."
+                >
                   <Gauge used={s.connections.used} max={s.connections.max} />
                 </Tile>
               )}
-              {s.active_queries !== null && <Tile label="Active queries" value={formatCount(s.active_queries)} help={s.long_running ? `${s.long_running} running longer than ${LONG_RUNNING_SECS} s` : undefined} />}
+              {s.active_queries !== null && (
+                <Tile
+                  label="Active queries"
+                  value={formatCount(s.active_queries)}
+                  help={s.long_running ? `${s.long_running} running longer than ${LONG_RUNNING_SECS} s` : undefined}
+                />
+              )}
               {s.blocked !== null && (
-                <Tile label="Blocked sessions" value={formatCount(s.blocked)} help={blockers.size ? `Waiting on pid ${[...blockers].join(', ')}` : undefined} />
+                <Tile
+                  label="Blocked sessions"
+                  value={formatCount(s.blocked)}
+                  help={blockers.size ? `Waiting on pid ${[...blockers].join(', ')}` : undefined}
+                />
               )}
               {s.replication && (
                 <Tile
                   label="Replication"
-                  value={s.replication.lag_secs !== null ? `${s.replication.lag_secs.toFixed(1)} s` : s.replication.role}
+                  value={
+                    s.replication.lag_secs !== null ? `${s.replication.lag_secs.toFixed(1)} s` : s.replication.role
+                  }
                   help={`${s.replication.role}${s.replication.role === 'primary' ? ` · ${s.replication.replicas} replica${s.replication.replicas === 1 ? '' : 's'}` : ''}${s.replication.state ? ` · ${s.replication.state}` : ''}`}
                 />
               )}
@@ -177,70 +227,91 @@ export function MonitorView({ active }: { active: boolean }) {
                 actions={<Checkbox label="Show idle sessions" checked={idle} onChange={setIdle} />}
                 footer="Cancel and terminate open a confirmation naming the pid, user and connection. What is shown depends on server version and the account's privileges."
               >
-                <div className={`${styles.row} ${styles.head}`}>
-                  <span>pid</span>
-                  <span>User</span>
-                  <span>State</span>
-                  <span>Duration</span>
-                  <span>Query</span>
-                  <span />
-                </div>
-                {processes.length === 0 && <div className={styles.row}>No {idle ? '' : 'active '}sessions.</div>}
-                {processes.map((p) => (
-                  <div key={String(p.pid)} className={styles.row} data-blocked={p.blocked_by.length > 0} data-blocker={blockers.has(Number(p.pid))}>
-                    <span className="mono">{String(p.pid)}</span>
-                    <span className="ellipsis" title={p.client ?? undefined}>
-                      {p.user ?? '—'}
-                      {p.database ? <span className="ink-3"> · {p.database}</span> : null}
-                    </span>
-                    <span className="ellipsis" title={p.wait ?? undefined}>
-                      {p.state ?? '—'}
-                      {p.blocked_by.length > 0 && <span className={styles.blocked}> · waits on {p.blocked_by.join(', ')}</span>}
-                    </span>
-                    <span className="tabular" data-long={(p.duration_ms ?? 0) > LONG_RUNNING_SECS * 1000 && p.active}>
-                      {p.duration_ms !== null ? formatDuration(Number(p.duration_ms)) : ''}
-                    </span>
-                    <span className="mono ellipsis" title={p.query ?? undefined}>
-                      {p.query ?? <span className="ink-3">not visible</span>}
-                    </span>
-                    <span className={styles.actions}>
-                      {p.active && (
-                        <Button size="xs" onClick={() => void kill(p, false)}>
-                          Cancel…
-                        </Button>
-                      )}
-                      <Button size="xs" variant="danger" onClick={() => void kill(p, true)}>
-                        Terminate…
-                      </Button>
-                    </span>
+                <div className={styles.scroll}>
+                  <div className={`${styles.row} ${styles.head}`}>
+                    <span>pid</span>
+                    <span>User</span>
+                    <span>State</span>
+                    <span>Duration</span>
+                    <span>Query</span>
+                    <span />
                   </div>
-                ))}
+                  {processes.length === 0 && <div className={styles.row}>No {idle ? '' : 'active '}sessions.</div>}
+                  {processes.map((p) => (
+                    <div
+                      key={String(p.pid)}
+                      className={styles.row}
+                      data-blocked={p.blocked_by.length > 0}
+                      data-blocker={blockers.has(Number(p.pid))}
+                    >
+                      <span className="mono">{String(p.pid)}</span>
+                      <span className="ellipsis" title={p.client ?? undefined}>
+                        {p.user ?? '—'}
+                        {p.database ? <span className="ink-3"> · {p.database}</span> : null}
+                      </span>
+                      <span className="ellipsis" title={p.wait ?? undefined}>
+                        {p.state ?? '—'}
+                        {p.blocked_by.length > 0 && (
+                          <span className={styles.blocked}> · waits on {p.blocked_by.join(', ')}</span>
+                        )}
+                      </span>
+                      <span className="tabular" data-long={(p.duration_ms ?? 0) > LONG_RUNNING_SECS * 1000 && p.active}>
+                        {p.duration_ms !== null ? formatDuration(Number(p.duration_ms)) : ''}
+                      </span>
+                      <span className="mono ellipsis" title={p.query ?? undefined}>
+                        {p.query ?? <span className="ink-3">not visible</span>}
+                      </span>
+                      <span className={styles.actions}>
+                        {p.active && (
+                          <Button size="xs" onClick={() => void kill(p, false)}>
+                            Cancel…
+                          </Button>
+                        )}
+                        <Button size="xs" variant="danger" onClick={() => void kill(p, true)}>
+                          Terminate…
+                        </Button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </Card>
             )}
             {panel === 'locks' && (
-              <Card title="Locks and blocking" flush footer="Waiting locks first. Blocked sessions are highlighted in the process list.">
-                <div className={`${styles.lockRow} ${styles.head}`}>
-                  <span>pid</span>
-                  <span>Type</span>
-                  <span>Mode</span>
-                  <span>Object</span>
-                  <span>Status</span>
-                </div>
-                {s.locks.length === 0 && <div className={styles.lockRow}>No locks of interest.</div>}
-                {s.locks.map((l, i) => (
-                  <div key={i} className={styles.lockRow}>
-                    <span className="mono">{String(l.pid)}</span>
-                    <span>{l.lock_type}</span>
-                    <span className="mono">{l.mode}</span>
-                    <span className="mono ellipsis">{l.object ?? ''}</span>
-                    <span style={{ color: l.granted ? undefined : 'var(--caution)' }}>{l.granted ? 'granted' : 'waiting'}</span>
+              <Card
+                title="Locks and blocking"
+                flush
+                footer="Waiting locks first. Blocked sessions are highlighted in the process list."
+              >
+                <div className={styles.scroll}>
+                  <div className={`${styles.lockRow} ${styles.head}`}>
+                    <span>pid</span>
+                    <span>Type</span>
+                    <span>Mode</span>
+                    <span>Object</span>
+                    <span>Status</span>
                   </div>
-                ))}
+                  {s.locks.length === 0 && <div className={styles.lockRow}>No locks of interest.</div>}
+                  {s.locks.map((l, i) => (
+                    <div key={i} className={styles.lockRow}>
+                      <span className="mono">{String(l.pid)}</span>
+                      <span>{l.lock_type}</span>
+                      <span className="mono">{l.mode}</span>
+                      <span className="mono ellipsis">{l.object ?? ''}</span>
+                      <span style={{ color: l.granted ? undefined : 'var(--caution)' }}>
+                        {l.granted ? 'granted' : 'waiting'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </Card>
             )}
             {panel === 'sizes' && (
               <Card title={`Largest tables in ${session.server.database}`} flush>
-                {!sizes && <div className={styles.row}><Spinner /></div>}
+                {!sizes && (
+                  <div className={styles.row}>
+                    <Spinner />
+                  </div>
+                )}
                 {sizes?.map((t) => (
                   <div key={objectLabel(t.object)} className={styles.sizeRow}>
                     <span className="mono ellipsis">{objectLabel(t.object)}</span>
@@ -253,8 +324,23 @@ export function MonitorView({ active }: { active: boolean }) {
               </Card>
             )}
             {panel === 'settings' && (
-              <Card title="Server settings" flush actions={<Input label="Search settings" placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />}>
-                {!settings && <div className={styles.row}><Spinner /></div>}
+              <Card
+                title="Server settings"
+                flush
+                actions={
+                  <Input
+                    label="Search settings"
+                    placeholder="Search"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                }
+              >
+                {!settings && (
+                  <div className={styles.row}>
+                    <Spinner />
+                  </div>
+                )}
                 {settings?.map((st) => (
                   <div key={st.name} className={styles.settingRow} title={st.description ?? undefined}>
                     <span className="mono ellipsis">{st.name}</span>

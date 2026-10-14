@@ -14,6 +14,9 @@
   padding: 0 var(--space-3);
   border-bottom: 1px solid var(--line);
   background: var(--bg);
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
 }
 
 .meta {
