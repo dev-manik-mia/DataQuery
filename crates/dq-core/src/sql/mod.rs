@@ -7,12 +7,13 @@ pub mod ddl;
 pub mod dialect;
 pub mod format;
 pub mod lexer;
+mod mongo;
 
 pub use analyze::{
     DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, named_params, redact_literals,
     split_statements, transaction_effect,
 };
 pub use dialect::{
-    ClickhouseDialect, Dialect, DuckdbDialect, MysqlDialect, OracleDialect, PostgresDialect, SnowflakeDialect,
-    SqlFlavor, SqlServerDialect,
+    ClickhouseDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect, PostgresDialect,
+    SnowflakeDialect, SqlFlavor, SqlServerDialect,
 };

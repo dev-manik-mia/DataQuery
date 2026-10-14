@@ -38,6 +38,10 @@ pub enum DestructiveReason {
     AlterDrop,
     DeleteWithoutWhere,
     UpdateWithoutWhere,
+    /// `MongoDB` `deleteMany({})`.
+    DeleteAllDocuments,
+    /// `MongoDB` `updateMany({}, …)`.
+    UpdateAllDocuments,
 }
 
 impl DestructiveReason {
@@ -48,6 +52,8 @@ impl DestructiveReason {
             Self::AlterDrop => "ALTER … DROP removes part of the object and its data.",
             Self::DeleteWithoutWhere => "DELETE without WHERE removes every row.",
             Self::UpdateWithoutWhere => "UPDATE without WHERE changes every row.",
+            Self::DeleteAllDocuments => "An empty filter deletes every document in the collection.",
+            Self::UpdateAllDocuments => "An empty filter changes every document in the collection.",
         }
     }
 }
@@ -123,6 +129,11 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             _ => TxEffect::None,
         },
         SqlFlavor::Clickhouse => TxEffect::None,
+        SqlFlavor::Mongodb | SqlFlavor::Partiql => match word(0) {
+            "BEGIN" => TxEffect::Begin,
+            "COMMIT" | "ROLLBACK" => TxEffect::End,
+            _ => TxEffect::None,
+        },
         SqlFlavor::Postgres | SqlFlavor::Mysql | SqlFlavor::Duckdb => match word(0) {
             "BEGIN" | "START" => TxEffect::Begin,
             "COMMIT" | "END" | "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
@@ -167,8 +178,15 @@ pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
     let mut utf16 = Utf16Index::new(src);
     let mut chunk_start = 0;
     let mut block = Block::default();
+    let mongo = flavor == SqlFlavor::Mongodb;
+    let mut depth = 0;
     for (i, tok) in tokens.iter().enumerate() {
+        if mongo {
+            depth += super::mongo::depth_delta(src, tok);
+        }
         let ends = match tok.kind {
+            TokenKind::Semicolon if mongo => depth <= 0,
+            TokenKind::Whitespace if mongo => super::mongo::line_ends_statement(src, &tokens, i, depth),
             TokenKind::Semicolon => !block.inside(),
             TokenKind::Word | TokenKind::Punct => is_separator_line(src, &tokens, i, flavor),
             _ => false,
@@ -177,6 +195,7 @@ pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
             push_statement(src, &tokens[chunk_start..i], flavor, &mut utf16, &mut out);
             chunk_start = i + 1;
             block = Block::default();
+            depth = 0;
         } else if tok.kind == TokenKind::Word {
             block.observe(src, &tokens, i, flavor);
         }
@@ -288,9 +307,13 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
     let separator = match flavor {
         SqlFlavor::Sqlserver => tokens[i].kind == TokenKind::Word && text.eq_ignore_ascii_case("GO"),
         SqlFlavor::Oracle => tokens[i].kind == TokenKind::Punct && text == "/",
-        SqlFlavor::Postgres | SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Duckdb | SqlFlavor::Snowflake => {
-            false
-        }
+        SqlFlavor::Postgres
+        | SqlFlavor::Mysql
+        | SqlFlavor::Clickhouse
+        | SqlFlavor::Duckdb
+        | SqlFlavor::Snowflake
+        | SqlFlavor::Mongodb
+        | SqlFlavor::Partiql => false,
     };
     if !separator {
         return false;
@@ -381,6 +404,9 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
 }
 
 fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool, Option<DestructiveReason>) {
+    if flavor == SqlFlavor::Mongodb {
+        return super::mongo::classify(src, sig);
+    }
     let word = |i: usize| sig.get(i).filter(|t| t.kind == TokenKind::Word).map(|t| t.text(src).to_ascii_uppercase());
     let head = word(0).unwrap_or_default();
     let mut kind = keyword_kind(&head);
