@@ -11,7 +11,7 @@ async-trait.workspace = true
 csv.workspace = true
 encoding_rs = "0.8"
 encoding_rs_io = "0.1"
-rust_xlsxwriter = { version = "0.99", default-features = false }
+rust_xlsxwriter = { version = "0.99", default-features = false, features = ["constant_memory"] }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
