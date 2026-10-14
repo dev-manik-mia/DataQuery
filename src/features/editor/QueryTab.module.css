@@ -31,6 +31,40 @@
   color: var(--ink);
 }
 
+.metaSelect {
+  margin-left: 4px;
+  padding: 1px 4px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+}
+
+.analysis {
+  flex: none;
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.analysis[data-level='good'] {
+  background: var(--positive-tint);
+  color: var(--positive);
+}
+
+.analysis[data-level='info'] {
+  background: var(--accent-tint);
+  color: var(--accent-on-tint);
+}
+
+.analysis[data-level='caution'] {
+  background: var(--caution-tint);
+  color: var(--caution);
+}
+
 .metaValue {
   font-family: var(--font-mono);
   color: var(--ink);

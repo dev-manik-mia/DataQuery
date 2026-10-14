@@ -26,6 +26,9 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
     case 'redis':
     case 'valkey':
       return 'redis';
+    case 'cassandra':
+    case 'scylladb':
+      return 'cql';
     default:
       return 'postgres';
   }
@@ -33,7 +36,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
 
 /** Databases contain schemas (all but MySQL / MariaDB, where the database is the schema). */
 export function hasSchemas(flavor: SqlFlavor): boolean {
-  return !['mysql', 'clickhouse', 'mongodb', 'partiql', 'redis'].includes(flavor);
+  return !['mysql', 'clickhouse', 'mongodb', 'partiql', 'redis', 'cql'].includes(flavor);
 }
 
 /** The schema new objects land in when none is named; Oracle uses the user's own schema. */
@@ -80,6 +83,7 @@ export function databaseLabel(engine: Engine): string {
   if (engine === 'duckdb' || engine === 'sqlite') return 'Database file';
   if (engine === 'mongodb') return 'Default database';
   if (engine === 'redis' || engine === 'valkey') return 'Database number';
+  if (engine === 'cassandra' || engine === 'scylladb') return 'Keyspace';
   return 'Database';
 }
 
@@ -90,6 +94,9 @@ export function hostField(engine: Engine): { label: string; hint?: string } {
       return { label: 'Account', hint: 'Account identifier (myorg-myaccount or xy12345.eu-west-1) or the full host name.' };
     case 'mongodb':
       return { label: 'Host', hint: 'One host, or host1:27017,host2:27017 for a replica set. With DNS seed list, the cluster host name.' };
+    case 'cassandra':
+    case 'scylladb':
+      return { label: 'Contact points', hint: 'One node, or node1,node2:9043 — the driver discovers the rest of the cluster.' };
     case 'dynamodb':
       return { label: 'Endpoint', hint: 'Leave empty for AWS in the region below, or e.g. localhost for DynamoDB Local.' };
     default:
@@ -107,6 +114,9 @@ export function credentialLabels(engine: Engine): { username: string; password: 
     case 'redis':
     case 'valkey':
       return { username: 'Username (ACL)', password: 'Password', usernameRequired: false };
+    case 'cassandra':
+    case 'scylladb':
+      return { username: 'Username', password: 'Password', usernameRequired: false };
     default:
       return { username: 'Username', password: 'Password', usernameRequired: true };
   }
@@ -133,6 +143,9 @@ export function connectionDefaults(engine: Engine): { database: string; username
     case 'redis':
     case 'valkey':
       return { database: '0', username: '' };
+    case 'cassandra':
+    case 'scylladb':
+      return { database: '', username: '' };
     default:
       return { database: '', username: '' };
   }

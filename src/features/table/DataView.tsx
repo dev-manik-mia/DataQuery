@@ -42,6 +42,7 @@ import {
   type Value,
 } from './edits';
 import { ImportDialog } from './ImportDialog';
+import { useTableKeyBadges } from './useKeyBadges';
 import styles from './Table.module.css';
 
 interface DataViewProps {
@@ -148,9 +149,10 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
     [pending.total, ask, setEdits],
   );
 
+  const badges = useTableKeyBadges(structure.object);
   const columns = useMemo<GridColumn[]>(
-    () => structure.columns.map((c) => ({ name: c.name, typeName: c.data_type, numeric: c.numeric, editable: editable && c.editable })),
-    [structure, editable],
+    () => structure.columns.map((c) => ({ name: c.name, typeName: c.data_type, numeric: c.numeric, editable: editable && c.editable, badge: badges.get(c.name) })),
+    [structure, editable, badges],
   );
 
   const pageRows = useMemo(() => page?.rows ?? [], [page]);

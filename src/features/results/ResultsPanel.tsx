@@ -5,6 +5,8 @@ import { DataGrid, type GridColumn, type GridRow } from '@/features/grid/DataGri
 import { exportData } from '@/features/transfer/exportData';
 import { copyText, serializeRows, type CopyFormat } from '@/lib/clipboard';
 import { formatCount, formatDuration, formatTimer } from '@/lib/format';
+import { api } from '@/lib/ipc';
+import { keyBadges } from '@/lib/objects';
 import { useSettings } from '@/stores/settings';
 import { useUi } from '@/stores/ui';
 import { useWorkspace, type QueryTab, type ResultSet, type ResultsTab, type RunMessage } from '@/stores/workspace';
@@ -60,7 +62,11 @@ export function ResultsPanel({ tab }: { tab: QueryTab }) {
 }
 
 function ResultGrid({ result }: { result: ResultSet }) {
-  const columns = useMemo<GridColumn[]>(() => result.columns.map((c) => ({ name: c.name, typeName: c.type_name, numeric: c.numeric })), [result.columns]);
+  const badges = useResultKeyBadges(result.sql);
+  const columns = useMemo<GridColumn[]>(
+    () => result.columns.map((c) => ({ name: c.name, typeName: c.type_name, numeric: c.numeric, badge: badges.get(c.name) })),
+    [result.columns, badges],
+  );
   const rows = useMemo<GridRow[]>(() => result.rows.map((cells, i) => ({ key: String(i), cells })), [result.rows]);
   return <DataGrid label="Query result" columns={columns} rows={rows} emptyText="The statement returned no rows." />;
 }
@@ -179,4 +185,24 @@ function MessagesView({ messages, idle }: { messages: RunMessage[]; idle: boolea
       ))}
     </div>
   );
+}
+
+const NO_BADGES = new Map<string, string>();
+
+/** CQL: `PK` / `CK` markers for the columns of the table a SELECT read. */
+function useResultKeyBadges(sql: string): Map<string, string> {
+  const session = useWorkspace((s) => s.session);
+  const [badges, setBadges] = useState(NO_BADGES);
+  useEffect(() => {
+    if (session?.flavor !== 'cql') return;
+    let stale = false;
+    api
+      .queryAnalysis({ sessionId: session.session_id }, sql)
+      .then((a) => !stale && setBadges(a ? keyBadges(a.keys) : NO_BADGES))
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [session?.flavor, session?.session_id, sql]);
+  return badges;
 }

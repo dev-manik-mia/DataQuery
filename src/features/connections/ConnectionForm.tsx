@@ -63,6 +63,8 @@ const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; pl
     { key: 'srv', label: 'DNS seed list (mongodb+srv)', check: true },
   ],
   dynamodb: [{ key: 'region', label: 'Region', placeholder: 'us-east-1' }],
+  cassandra: [{ key: 'datacenter', label: 'Local datacenter', placeholder: 'any (e.g. dc1)' }],
+  scylladb: [{ key: 'datacenter', label: 'Local datacenter', placeholder: 'any (e.g. dc1)' }],
 };
 
 /** Engines whose server has no single database to pick in the form. */

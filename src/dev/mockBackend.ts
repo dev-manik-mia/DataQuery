@@ -33,7 +33,8 @@ const ENGINES: EngineInfo[] = [
   engine('valkey', 'Valkey', 'Vk', 175, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),
   engine('mongodb', 'MongoDB', 'Mg', 145, 'document', 'MQL', 27017, '27017 · MQL · v5–8', 'P2', true),
   engine('dynamodb', 'DynamoDB', 'Dy', 330, 'document', 'PartiQL', 443, 'AWS · PartiQL', 'P2', true),
-  engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2'),
+  engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2', true),
+  engine('scylladb', 'ScyllaDB', 'Sc', 330, 'wide_column', 'CQL', 9042, '9042 · CQL', 'P2', true),
   engine('neo4j', 'Neo4j', 'N4', 190, 'search_graph', 'Cypher', 7687, '7687 · Cypher', 'P2'),
 ];
 
@@ -48,7 +49,15 @@ const CONNECTIONS = [
   conn('c4', 'local-postgres', 'Local', 'localhost', 'postgres', null, false, null),
   { ...conn('c5', 'events-mongo', 'Development', 'events.dev.kestrel.internal', 'analytics', 'f1', false, now - 2 * 86_400_000), config: { ...conn('c5', '', 'Development', 'events.dev.kestrel.internal', 'analytics', null, false, null).config, engine: 'mongodb', port: 27017 } } as SavedConnection,
   { ...conn('c6', 'cache-redis', 'Staging', 'cache.stg.kestrel.internal', '0', 'f1', false, now - 3_600_000), config: { ...conn('c6', '', 'Staging', 'cache.stg.kestrel.internal', '0', null, false, null).config, engine: 'redis', port: 6379 } } as SavedConnection,
+  { ...conn('c7', 'telemetry-cassandra', 'Production', '10.0.4.12', 'telemetry', 'f1', false, now - 7 * 86_400_000), config: { ...conn('c7', '', 'Production', '10.0.4.12', 'telemetry', null, false, null).config, engine: 'cassandra', port: 9042 } } as SavedConnection,
 ];
+
+const CQL_KEYS = [
+  { column: 'device_id', role: 'partition', descending: false },
+  { column: 'bucket', role: 'partition', descending: false },
+  { column: 'ts', role: 'clustering', descending: true },
+];
+let consistency = 'LOCAL_QUORUM';
 
 const rs = (text: string) => ({ text, binary: false });
 const REDIS_KEYS = [
@@ -176,6 +185,10 @@ const handlers: Record<string, (a: Args) => unknown> = {
   list_connections: () => ({ connections: CONNECTIONS, folders: [{ id: 'f1', name: 'Kestrel' }] }),
   connect: (a) => {
     const c = CONNECTIONS.find((x) => x.id === a.connectionId)!;
+    if (c.config.engine === 'cassandra') {
+      const cqlCaps = { ...caps, schemas: false, transactions: false, schema_diff: false };
+      return { session_id: `s-${c.id}`, connection: c, capabilities: cqlCaps, flavor: 'cql', documents: null, keys: null, tunneled: false, insecure: null, server: { engine: 'cassandra', version: 'Cassandra 5.0.2', latency_ms: 12, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'analyst', database: 'telemetry', read_only: false } };
+    }
     if (c.config.engine === 'redis') {
       const redisCaps = { ...caps, ddl: false, schemas: false, materialized_views: false, explain: false, schema_diff: false };
       return { session_id: `s-${c.id}`, connection: c, capabilities: redisCaps, flavor: 'redis', documents: null, keys: { databases: 16, memory_usage: true }, tunneled: false, insecure: null, server: { engine: 'redis', version: 'Redis 7.4.1', latency_ms: 3, tls: null, user: 'default', database: '0', read_only: false } };
@@ -254,6 +267,13 @@ const handlers: Record<string, (a: Args) => unknown> = {
   ai_ask: () => ({ text: 'Here is a query:\n```sql\nSELECT 1;\n```', sql: 'SELECT 1;', model: 'claude-opus-5-5', disclosure: null }),
   run_sql: (a) => {
     const sql = String(a.sql);
+    if (String(a.sessionId) === 's-c7') {
+      const cols = [['device_id', 'text', false], ['bucket', 'date', false], ['ts', 'timestamp', false], ['metric', 'text', false], ['value', 'double', true]] as const;
+      const metrics = ['cpu.temp', 'battery.v', 'rssi'];
+      const rows = Array.from({ length: 18 }, (_, i) => [text('dev-88f2'), { kind: 'temporal', value: '2026-10-14', zoned: false }, { kind: 'temporal', value: `2026-10-14T09:${String(59 - i * 3).padStart(2, '0')}:12.000Z`, zoned: true }, text(metrics[i % 3]!), num(((i * 7.3) % 60 + 3).toFixed(2))]);
+      const result = { columns: cols.map(([name, type_name, numeric]) => ({ name, type_name, numeric })), rows, has_more: false, command: 'SELECT', affected: null, duration_ms: 9, notices: [] };
+      return { status: 'done', value: { outcomes: [{ index: 0, from: 0, to: sql.length, result, error: null, can_fetch_more: false }], skipped: 0, duration_ms: 9, tx: 'auto' } };
+    }
     const parts = split(sql);
     if (!a.confirmation && parts.some((p) => p.destructive)) {
       return { status: 'needs_confirmation', request: { title: 'Run a destructive statement?', reasons: ['DELETE without WHERE removes every row.'], require_typed_name: 'kestrel-prod', destructive: true, connection_name: 'kestrel-prod', environment: 'Production' } };
@@ -310,6 +330,29 @@ const handlers: Record<string, (a: Args) => unknown> = {
   }),
   list_scripts: () => [{ id: 'sc1', name: 'paid-orders', sql: "SELECT * FROM public.orders WHERE status = 'paid';", connection_id: 'c1', created_at: now, updated_at: now, folder: 'Reports', tags: ['billing'], pinned: true }],
   test_connection: () => ({ engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: 'app_dev', read_only: false }),
+  session_options: (a) =>
+    String(a.sessionId) === 's-c7'
+      ? [
+          { name: 'consistency', label: 'Consistency', value: consistency, choices: ['ONE', 'QUORUM', 'LOCAL_QUORUM', 'LOCAL_ONE', 'ALL'] },
+          { name: 'page_size', label: 'Page size', value: '100', choices: ['100', '500', '1000', '5000'] },
+        ]
+      : [],
+  set_session_option: (a) => {
+    if (a.name === 'consistency') consistency = String(a.value);
+    return handlers.session_options!({ sessionId: a.sessionId });
+  },
+  key_roles: (a) => (String(a.sessionId) === 's-c7' ? CQL_KEYS : []),
+  query_analysis: (a) => {
+    if (String(a.sessionId) !== 's-c7' || !/^\s*select/i.test(String(a.sql))) return null;
+    const sql = String(a.sql);
+    const single = /device_id\s*=/.test(sql) && /bucket\s*=/.test(sql) && !/allow filtering/i.test(sql);
+    return {
+      level: single ? 'good' : 'caution',
+      message: single ? 'Single-partition read. Partition key fully specified, no ALLOW FILTERING.' : 'ALLOW FILTERING: Cassandra reads whole partitions and discards rows that do not match. It can be slow and time out on large tables.',
+      object: { kind: 'table', database: 'telemetry', schema: null, name: 'readings_by_device' },
+      keys: CQL_KEYS,
+    };
+  },
   keys_scan: (a) => {
     const r = a.request as { cursor: string | null };
     return r.cursor ? { keys: [], cursor: null, duration_ms: 2 } : { keys: REDIS_KEYS, cursor: '1840', duration_ms: 4 };

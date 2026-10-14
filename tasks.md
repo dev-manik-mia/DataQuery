@@ -176,6 +176,19 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 17. Engines: Cassandra, ScyllaDB
+
+- [x] T17.1 `cql` flavor and `CqlDialect`: `"Name"` quoting with lower-case folding, `?` markers typed by the prepared statement, `//` comments and `$$` bodies, `BEGIN … APPLY BATCH` kept as one statement, cqlsh `CONSISTENCY`/`TRACING`/`PAGING` as settings; no transactions (manual-commit mode skips engines without them).
+- [x] T17.2 Paging without `OFFSET`: `Dialect::client_side_offset` (table views read `offset + limit` rows and drop the offset, capped at 100,000); `ALLOW FILTERING` added when the table view filters.
+- [x] T17.3 Schema changes in CQL: create table (primary key required), add/drop column, rename key columns, single-column secondary indexes; everything Cassandra cannot do is refused with a reason.
+- [x] T17.4 Core hooks: `Session::key_roles` (partition/clustering columns with order), `Session::options`/`set_option` (consistency, serial consistency, page size), `NodeKind::Type` and a Types group for UDTs.
+- [x] T17.5 Read analysis `dq-core/sql/cql.rs` (screen 14 banner): single-partition, multi-partition (IN), token range, full scan, `ALLOW FILTERING`, incomplete partition key.
+- [x] T17.6 Adapter `dq-cassandra` (scylla driver, rustls) for Cassandra and ScyllaDB: keyspaces → tables / materialized views / types / functions, prepared binding of text values by type, exact varint/decimal, collections and UDTs as JSON, paging state kept in memory, edits with `IF EXISTS`, batches, explain from the analysis and traced explain analyze, system tables monitoring.
+- [x] T17.7 UI: consistency and page-size selectors in the editor toolbar, analysis banner, `PK` / `CK ↑↓` markers in result and table headers, CQL highlighting, contact points and local datacenter fields.
+- [x] T17.8 Test databases: `cassandra` (5.0, :59042, PasswordAuthenticator) and `scylla` (2025.1, :59043); seed `docker/cassandra-seed.cql`; integration tests in `crates/dq-cassandra/tests` run against both.
+
+---
+
 ## Verification
 
 | Area | How it was verified |

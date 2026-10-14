@@ -15,7 +15,9 @@ import { useUi } from '@/stores/ui';
 import { useWorkspace, type QueryTab } from '@/stores/workspace';
 
 import { openSqlFiles, saveTabAsScript, saveTabToFile } from './fileActions';
+import type { QueryAnalysis } from '@/bindings/QueryAnalysis';
 import { ParamsDialog } from './ParamsDialog';
+import { AnalysisBanner, SessionOptions } from './SessionBar';
 import styles from './QueryTab.module.css';
 import { SqlEditor, type SqlEditorHandle, type StatementTarget } from './SqlEditor';
 
@@ -35,6 +37,7 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[]; label: string } | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  const [analysis, setAnalysis] = useState<QueryAnalysis | null>(null);
   const running = tab.run.status === 'running';
   const flavor = session?.flavor ?? 'postgres';
   const caps = session?.capabilities;
@@ -43,6 +46,24 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
   useEffect(() => {
     if (session && active) void useCompletion.getState().load(session.session_id, session.server.database);
   }, [session, active]);
+
+  // CQL: classify the statement at the cursor (single partition, several, scan) as the user types.
+  const sessionId = session?.session_id;
+  useEffect(() => {
+    if (!sessionId || session?.flavor !== 'cql' || !active) return;
+    let stale = false;
+    const timer = window.setTimeout(() => {
+      void editor.current
+        ?.statementTarget()
+        .then((target) => (target?.sql.trim() ? api.queryAnalysis({ sessionId }, target.sql) : null))
+        .then((a) => !stale && setAnalysis(a ?? null))
+        .catch(() => !stale && setAnalysis(null));
+    }, 400);
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [tab.sql, sessionId, session?.flavor, active]);
 
   const execute = async (target: StatementTarget, mode: Pending['mode'], params: (string | null)[] | null) => {
     if (mode === 'run') await run(tab.id, target.sql, target.base, params);
@@ -186,6 +207,7 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
           </span>
         )}
         <span style={{ flex: 1 }} />
+        {sessionId && <SessionOptions sessionId={sessionId} />}
         {settings.ai_enabled && (
           <Button size="sm" aria-pressed={aiOpen} onClick={() => setAiOpen((o) => !o)}>
             Assistant
@@ -227,6 +249,7 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
               onSave={saveTab}
             />
           </div>
+          <AnalysisBanner analysis={analysis} />
           <Splitter
             axis="y"
             label="Resize editor"

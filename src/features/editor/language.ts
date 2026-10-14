@@ -1,6 +1,6 @@
 import { snippetCompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
 import { javascript } from '@codemirror/lang-javascript';
-import { MSSQL, MySQL, PLSQL, PostgreSQL, StandardSQL, sql, type SQLDialect, type SQLNamespace } from '@codemirror/lang-sql';
+import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLDialect, StandardSQL, sql, type SQLNamespace } from '@codemirror/lang-sql';
 import { StreamLanguage } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 
@@ -8,6 +8,16 @@ import type { SchemaModel } from '@/bindings/SchemaModel';
 import type { Snippet } from '@/bindings/Snippet';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import { defaultSchema } from '@/lib/engines';
+
+/** CQL: SQL-like with its own keywords, collection types and `//` comments. */
+const CQL = SQLDialect.define({
+  keywords:
+    'select from where and in contains key limit per partition allow filtering order by asc desc group insert into values json default unset if not exists update set delete using ttl timestamp begin unlogged counter batch apply create alter drop truncate keyspace keyspaces table tables columnfamily materialized view index custom type function functions aggregate returns called null input language on to as with primary clustering compact storage replication durable_writes grant revoke all permissions role roles user users list describe desc use token writetime ttl cast distinct is consistency serial tracing paging expand',
+  types:
+    'ascii bigint blob boolean counter date decimal double duration float inet int smallint text time timestamp timeuuid tinyint uuid varchar varint list set map tuple frozen vector',
+  slashComments: true,
+  doubleQuotedStrings: false,
+});
 
 const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   postgres: PostgreSQL,
@@ -22,6 +32,7 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   mongodb: StandardSQL,
   partiql: StandardSQL,
   redis: StandardSQL,
+  cql: CQL,
 };
 
 /** Common commands offered at the start of a Redis line. */

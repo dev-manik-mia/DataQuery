@@ -70,6 +70,8 @@ const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   oracle: 'Sessions from V$SESSION',
   clickhouse: 'Running queries from system.processes',
   mongodb: 'Operations from currentOp',
+  cassandra: 'Client connections from system_views.clients',
+  scylladb: 'Client connections from system.clients',
 };
 
 export function MonitorView({ active }: { active: boolean }) {

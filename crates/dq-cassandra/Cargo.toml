@@ -9,13 +9,20 @@ license.workspace = true
 [dependencies]
 dq-core.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
+num-bigint = "0.4"
+rustls.workspace = true
+rustls-native-certs.workspace = true
 scylla.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
-uuid.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
