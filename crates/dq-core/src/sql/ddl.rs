@@ -162,6 +162,9 @@ pub fn validate_type(d: &dyn Dialect, data_type: &str) -> DbResult<String> {
     let lower = t.to_ascii_lowercase();
     let strings_ok = lower.starts_with("enum") || lower.starts_with("set");
     let mut depth = 0i32;
+    // CQL collection types nest with angle brackets: `map<text, frozen<list<int>>>`.
+    let mut angles = 0i32;
+    let cql = d.flavor() == SqlFlavor::Cql;
     for token in tokenize(t, d.flavor()) {
         let ok = match token.kind {
             TokenKind::Word | TokenKind::Number | TokenKind::Whitespace | TokenKind::QuotedIdent => true,
@@ -173,6 +176,14 @@ pub fn validate_type(d: &dyn Dialect, data_type: &str) -> DbResult<String> {
                 depth -= 1;
                 depth >= 0
             }
+            TokenKind::Punct if cql && token.text(t) == "<" => {
+                angles += 1;
+                true
+            }
+            TokenKind::Punct if cql && token.text(t) == ">" => {
+                angles -= 1;
+                angles >= 0
+            }
             TokenKind::Punct => matches!(token.text(t), "," | "." | "[" | "]" | "[]"),
             TokenKind::String => strings_ok,
             _ => false,
@@ -181,7 +192,7 @@ pub fn validate_type(d: &dyn Dialect, data_type: &str) -> DbResult<String> {
             return Err(DbError::invalid(format!("`{t}` is not a valid column type.")));
         }
     }
-    if depth != 0 {
+    if depth != 0 || angles != 0 {
         return Err(DbError::invalid(format!("`{t}` has unbalanced parentheses.")));
     }
     Ok(t.to_owned())
@@ -964,5 +975,25 @@ mod tests {
             "RENAME TABLE `shop`.`orders` TO `shop`.`sales`"
         );
         assert_eq!(preview(&["SELECT 1".into(), "SELECT 2".into()]), "SELECT 1;\n\nSELECT 2;\n");
+    }
+
+    #[test]
+    fn cql_changes() {
+        use crate::sql::dialect::CqlDialect;
+        let d = &CqlDialect;
+        let t = ObjectRef::new(NodeKind::Table, "telemetry", None, "readings");
+        let add = SchemaChange::AddColumn { table: t.clone(), column: col("tags", "map<text, frozen<list<int>>>") };
+        assert_eq!(
+            statements(d, &add, None).unwrap(),
+            ["ALTER TABLE \"telemetry\".\"readings\" ADD \"tags\" map<text, frozen<list<int>>>"]
+        );
+        let bad = SchemaChange::AddColumn { table: t.clone(), column: col("x", "map<text, int") };
+        assert!(statements(d, &bad, None).is_err());
+        let drop = SchemaChange::DropColumn { table: t.clone(), column: "tags".into() };
+        assert_eq!(statements(d, &drop, None).unwrap(), ["ALTER TABLE \"telemetry\".\"readings\" DROP \"tags\""]);
+        let no_key =
+            SchemaChange::CreateTable { table: t.clone(), columns: vec![col("a", "int")], primary_key: vec![] };
+        assert!(statements(d, &no_key, None).is_err());
+        assert!(statements(d, &SchemaChange::RenameTable { table: t, new_name: "r2".into() }, None).is_err());
     }
 }

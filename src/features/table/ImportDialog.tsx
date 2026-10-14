@@ -250,7 +250,12 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
             </div>
           </div>
           <Alert tone="info">
-            Every row is checked first (types, NULLs, lengths). {options.commit_rows ? `Rows are committed every ${formatCount(options.commit_rows)} rows.` : 'Rows are inserted in one transaction: if any fails, nothing is imported.'}
+            Every row is checked first (types, NULLs, lengths).{' '}
+            {session.flavor === 'cql'
+              ? 'Cassandra has no transactions: rows are written as they go, so rows written before a failure stay.'
+              : options.commit_rows
+                ? `Rows are committed every ${formatCount(options.commit_rows)} rows.`
+                : 'Rows are inserted in one transaction: if any fails, nothing is imported.'}
           </Alert>
           </>
           )}

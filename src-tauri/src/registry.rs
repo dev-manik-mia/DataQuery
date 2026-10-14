@@ -23,6 +23,8 @@ impl Registry {
             (Engine::Dynamodb, Arc::new(dq_dynamodb::DynamodbAdapter)),
             (Engine::Redis, Arc::new(dq_redis::RedisAdapter::REDIS)),
             (Engine::Valkey, Arc::new(dq_redis::RedisAdapter::VALKEY)),
+            (Engine::Cassandra, Arc::new(dq_cassandra::CassandraAdapter::CASSANDRA)),
+            (Engine::Scylladb, Arc::new(dq_cassandra::CassandraAdapter::SCYLLA)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];

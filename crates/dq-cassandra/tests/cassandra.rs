@@ -4,6 +4,7 @@
 //! `DATAQUERY_TEST_SCYLLA=localhost:59043` (no auth). Each test runs on every
 //! server that is configured, in its own keyspace, which it drops afterwards.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use dq_cassandra::CassandraAdapter;
@@ -374,7 +375,7 @@ async fn imports_and_exports() {
         let csv = dir.path().join("in.csv");
         let mut body = String::from("id,name,amount,seen\n");
         for i in 0..30 {
-            body.push_str(&format!("{i},name {i},{i}.25,2026-10-14 09:00:{:02}\n", i % 60));
+            let _ = writeln!(body, "{i},name {i},{i}.25,2026-10-14 09:00:{:02}", i % 60);
         }
         std::fs::write(&csv, body).unwrap();
         let mapping: Vec<ImportMapping> = ["id", "name", "amount", "seen"]

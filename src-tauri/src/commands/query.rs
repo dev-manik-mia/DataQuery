@@ -100,7 +100,7 @@ pub(crate) fn next_tx(current: TxStatus, sql: &str, flavor: SqlFlavor, failed: b
 }
 
 /// Starts a transaction when manual-commit mode is on and none is open.
-/// Engines without transactions (ClickHouse, CQL) run every statement on its own.
+/// Engines without transactions (`ClickHouse`, CQL) run every statement on its own.
 async fn begin_if_manual(
     state: &AppState,
     open: &OpenSession,
