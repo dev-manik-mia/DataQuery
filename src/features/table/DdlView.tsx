@@ -33,12 +33,12 @@ function useDdl(object: ObjectRef) {
 }
 
 /** Generated DDL with Copy and Open in editor. Never executed from here. */
-export function DdlCard({ object, flavor, onOpenSql, full }: { object: ObjectRef; flavor: SqlFlavor; onOpenSql: (sql: string) => void; full?: boolean }) {
+export function DdlCard({ object, flavor, onOpenSql, full, title = 'Generated DDL' }: { object: ObjectRef; flavor: SqlFlavor; onOpenSql: (sql: string) => void; full?: boolean; title?: string }) {
   const { ddl, error } = useDdl(object);
   const toast = useUi((s) => s.toast);
   return (
     <Card
-      title="Generated DDL"
+      title={title}
       className={full ? styles.ddlFull : styles.ddlCard}
       flush
       actions={

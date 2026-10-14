@@ -7,7 +7,10 @@ import { toAppError } from '@/lib/errors';
 import { api } from '@/lib/ipc';
 import { useWorkspace, type TableTab, type TableView } from '@/stores/workspace';
 
+import { KIND_LABEL, isRelation, objectLabel } from '@/lib/objects';
+
 import { DataView } from './DataView';
+import { DependenciesView } from './DependenciesView';
 import { DdlCard } from './DdlView';
 import { StructureView } from './StructureView';
 import styles from './Table.module.css';
@@ -20,7 +23,10 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
   const [error, setError] = useState<DbError | null>(null);
   const [version, setVersion] = useState(0);
 
+  const relation = isRelation(tab.object);
+
   useEffect(() => {
+    if (!relation) return;
     let stale = false;
     setError(null);
     api
@@ -30,7 +36,7 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
     return () => {
       stale = true;
     };
-  }, [tab.object, session.session_id, version]);
+  }, [tab.object, session.session_id, version, relation]);
 
   const reloadStructure = useCallback(() => setVersion((v) => v + 1), []);
   const openSql = (sql: string) => openQueryTab({ sql, title: `${tab.object.name}.sql` });
@@ -44,9 +50,19 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
         { value: 'data', label: 'Data' },
         { value: 'structure', label: 'Structure' },
         { value: 'ddl', label: 'DDL' },
+        { value: 'dependencies', label: 'Dependencies' },
       ]}
     />
   );
+
+  if (!relation) {
+    // Indexes, sequences, triggers and routines: their definition only.
+    return (
+      <div className={styles.tab} style={active ? undefined : { display: 'none' }}>
+        <DdlCard object={tab.object} flavor={session.flavor} onOpenSql={openSql} full title={`${KIND_LABEL[tab.object.kind]} ${objectLabel(tab.object)}`} />
+      </div>
+    );
+  }
 
   return (
     <div className={styles.tab} style={active ? undefined : { display: 'none' }}>
@@ -64,7 +80,9 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
       ) : tab.view === 'data' ? (
         <DataView object={tab.object} structure={structure} onReloadStructure={reloadStructure} leading={switcher} />
       ) : tab.view === 'structure' ? (
-        <StructureView structure={structure} flavor={session.flavor} onOpenSql={openSql} />
+        <StructureView structure={structure} flavor={session.flavor} readOnly={session.server.read_only} onOpenSql={openSql} onChanged={reloadStructure} />
+      ) : tab.view === 'dependencies' ? (
+        <DependenciesView object={tab.object} />
       ) : (
         <DdlCard object={tab.object} flavor={session.flavor} onOpenSql={openSql} full />
       )}
