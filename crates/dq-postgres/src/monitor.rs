@@ -145,7 +145,7 @@ impl Monitor for PgSession {
 
     async fn server_settings(&self, search: Option<&str>) -> DbResult<Vec<ServerSetting>> {
         let client = self.catalog_client("").await?;
-        let pattern = search.map(|s| format!("%{}%", dq_core::sql::builder::like_contains(s).trim_matches('%')));
+        let pattern = search.map(dq_core::sql::builder::like_contains);
         let rows = client
             .query(
                 "SELECT name, setting, unit, category, short_desc FROM pg_settings \

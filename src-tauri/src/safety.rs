@@ -72,6 +72,43 @@ pub fn required(connection: &SavedConnection, settings: &Settings, intent: &Inte
     })
 }
 
+/// The confirmation for cancelling a statement or terminating a session from Monitoring.
+pub fn kill_request(connection: &SavedConnection, pid: i64, user: Option<&str>, terminate: bool) -> ConfirmationRequest {
+    let production = connection.environment == Environment::Production;
+    let what = if terminate { "Terminate" } else { "Cancel" };
+    let mut reasons = vec![format!(
+        "pid {pid} · user {} · connection {}",
+        user.unwrap_or("unknown"),
+        connection.name
+    )];
+    reasons.push(if terminate {
+        "Terminating ends the session; its open transaction is rolled back.".to_owned()
+    } else {
+        "Cancelling stops the running statement; its transaction may roll back.".to_owned()
+    });
+    ConfirmationRequest {
+        title: format!("{what} process {pid}?"),
+        reasons,
+        require_typed_name: (production && terminate).then(|| connection.name.clone()),
+        destructive: terminate,
+        connection_name: connection.name.clone(),
+        environment: connection.environment,
+    }
+}
+
+/// Checks a confirmation against a request that must always be confirmed.
+pub fn confirm(request: ConfirmationRequest, confirmation: Option<&Confirmation>) -> DbResult<Option<ConfirmationRequest>> {
+    let Some(confirmation) = confirmation.filter(|c| c.acknowledged) else {
+        return Ok(Some(request));
+    };
+    if let Some(expected) = &request.require_typed_name
+        && confirmation.typed_name.as_deref().map(str::trim) != Some(expected.as_str())
+    {
+        return Err(DbError::invalid(format!("Type {expected} exactly to confirm.")));
+    }
+    Ok(None)
+}
+
 /// `Ok(None)` to proceed, `Ok(Some(request))` to ask the user first.
 pub fn check(
     connection: &SavedConnection,
@@ -83,18 +120,10 @@ pub fn check(
         return Err(DbError::new(ErrorKind::Permission, format!("{} is a read-only connection.", connection.name))
             .with_action(Some("Edit the connection and turn off Read-only to make changes.")));
     }
-    let Some(request) = required(connection, settings, intent) else {
-        return Ok(None);
-    };
-    let Some(confirmation) = confirmation.filter(|c| c.acknowledged) else {
-        return Ok(Some(request));
-    };
-    if let Some(expected) = &request.require_typed_name
-        && confirmation.typed_name.as_deref().map(str::trim) != Some(expected.as_str())
-    {
-        return Err(DbError::invalid(format!("Type {expected} exactly to confirm.")));
+    match required(connection, settings, intent) {
+        Some(request) => confirm(request, confirmation),
+        None => Ok(None),
     }
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -177,6 +206,18 @@ mod tests {
         assert!(check(&c, &s, &intent("select 1"), None).unwrap().is_none());
         let err = check(&c, &s, &intent("update t set a = 1 where id = 1"), None).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Permission);
+    }
+
+    #[test]
+    fn kills_always_ask_and_production_terminate_needs_the_name() {
+        let dev = kill_request(&conn(Environment::Development), 42, Some("app"), false);
+        assert!(dev.reasons[0].contains("pid 42 · user app"));
+        assert!(confirm(dev.clone(), None).unwrap().is_some());
+        let yes = Confirmation { acknowledged: true, typed_name: None };
+        assert!(confirm(dev, Some(&yes)).unwrap().is_none());
+        let prod = kill_request(&conn(Environment::Production), 42, None, true);
+        assert_eq!(prod.require_typed_name.as_deref(), Some("kestrel-prod"));
+        assert!(confirm(prod, Some(&yes)).is_err());
     }
 
     #[test]

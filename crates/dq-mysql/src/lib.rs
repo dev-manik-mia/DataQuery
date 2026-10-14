@@ -6,6 +6,7 @@
 mod catalog;
 mod connect;
 mod error;
+mod monitor;
 mod session;
 pub mod values;
 

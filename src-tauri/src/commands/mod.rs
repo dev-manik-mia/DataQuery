@@ -5,6 +5,7 @@
 pub mod connections;
 pub mod explorer;
 pub mod history;
+pub mod monitor;
 pub mod query;
 pub mod session;
 pub mod settings;

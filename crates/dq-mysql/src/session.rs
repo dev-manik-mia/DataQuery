@@ -97,6 +97,15 @@ impl MySession {
         self.catalog.get_conn().await.map_err(|e| self.err(&e))
     }
 
+    /// A pooled read-only catalog connection, for monitoring.
+    pub(crate) async fn catalog_conn(&self) -> DbResult<Conn> {
+        self.catalog().await
+    }
+
+    pub(crate) fn flavor(&self) -> Flavor {
+        self.flavor
+    }
+
     /// Interrupts whatever the query connection is running, from another connection.
     async fn kill_query(&self) -> DbResult<()> {
         let mut conn = self.catalog().await?;
@@ -387,6 +396,10 @@ impl Session for MySession {
         tx.commit().await.map_err(|e| self.err(&e))?;
         let _ = conn.disconnect().await;
         Ok(counts)
+    }
+
+    fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
+        Some(self)
     }
 
     async fn close(&self) {
