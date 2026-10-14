@@ -46,8 +46,13 @@ export function TextField({
   mono,
   className,
   suffix,
+  action,
   ...rest
-}: Common & ComponentPropsWithRef<'input'> & { suffix?: string }) {
+}: Common & ComponentPropsWithRef<'input'> & {
+  suffix?: string;
+  /** Buttons beside the input (e.g. Save key), at the input's height; the hint spans both. */
+  action?: ReactNode;
+}) {
   return (
     <FieldShell label={label} hint={hint} error={error} className={className}>
       {(id, describedBy) => {
@@ -63,13 +68,21 @@ export function TextField({
             {...rest}
           />
         );
-        return suffix ? (
+        const control = suffix ? (
           <span className="dq-input-wrap">
             {input}
             <span className="dq-input-wrap__suffix">{suffix}</span>
           </span>
         ) : (
           input
+        );
+        return action ? (
+          <span className="dq-input-row">
+            {control}
+            {action}
+          </span>
+        ) : (
+          control
         );
       }}
     </FieldShell>

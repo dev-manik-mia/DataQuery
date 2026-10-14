@@ -95,6 +95,11 @@
   padding: 12px var(--space-4) var(--space-4);
 }
 
+/* A field across both columns, e.g. an input with buttons beside it. */
+.wide {
+  grid-column: 1 / -1;
+}
+
 .matrix {
   overflow: auto;
 }

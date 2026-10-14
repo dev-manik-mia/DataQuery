@@ -404,41 +404,41 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
         <span style={{ flex: 1 }} />
         {/* One group, so the actions wrap to a new row together on narrow tabs. */}
         <div className={styles.toolbarGroup}>
-        {editable && (
-          <>
-            <IconButton label="Undo edit" disabled={!undo.past.length} onClick={undoEdit}>
-              <Icon name="undo" size={12} />
-            </IconButton>
-            <IconButton label="Redo edit" disabled={!undo.future.length} onClick={redoEdit}>
-              <Icon name="redo" size={12} />
-            </IconButton>
-            <Button size="sm" onClick={() => setEdits((e) => addInsert(e))}>
-              + Row
-            </Button>
-            <Button size="sm" disabled={!selection.size} onClick={() => duplicateSelected()}>
-              Duplicate
-            </Button>
-            <Button size="sm" disabled={!selection.size} onClick={deleteSelected}>
-              − Delete
-            </Button>
-          </>
-        )}
-        <Button
-          size="sm"
-          onClick={(e) =>
-            openMenu(e, [
-              { label: 'Export…', onSelect: () => exportData(exportSource, 'csv', object.name) },
-              ...(structure.object.kind === 'table' && session.capabilities.import_export && !session.server.read_only
-                ? [{ type: 'separator' as const }, { label: 'Import CSV or JSON…', onSelect: () => setImporting(true) }]
-                : []),
-            ])
-          }
-        >
-          Export / Import
-        </Button>
-        <IconButton label="Reload rows" onClick={() => void guardEdits(() => setReload((n) => n + 1))}>
-          <Icon name="refresh" size={12} />
-        </IconButton>
+          {editable && (
+            <>
+              <IconButton label="Undo edit" disabled={!undo.past.length} onClick={undoEdit}>
+                <Icon name="undo" size={12} />
+              </IconButton>
+              <IconButton label="Redo edit" disabled={!undo.future.length} onClick={redoEdit}>
+                <Icon name="redo" size={12} />
+              </IconButton>
+              <Button size="sm" onClick={() => setEdits((e) => addInsert(e))}>
+                + Row
+              </Button>
+              <Button size="sm" disabled={!selection.size} onClick={() => duplicateSelected()}>
+                Duplicate
+              </Button>
+              <Button size="sm" disabled={!selection.size} onClick={deleteSelected}>
+                − Delete
+              </Button>
+            </>
+          )}
+          <Button
+            size="sm"
+            onClick={(e) =>
+              openMenu(e, [
+                { label: 'Export…', onSelect: () => exportData(exportSource, 'csv', object.name) },
+                ...(structure.object.kind === 'table' && session.capabilities.import_export && !session.server.read_only
+                  ? [{ type: 'separator' as const }, { label: 'Import CSV or JSON…', onSelect: () => setImporting(true) }]
+                  : []),
+              ])
+            }
+          >
+            Export / Import
+          </Button>
+          <IconButton label="Reload rows" onClick={() => void guardEdits(() => setReload((n) => n + 1))}>
+            <Icon name="refresh" size={12} />
+          </IconButton>
         </div>
       </div>
       {matches.length > 0 && (

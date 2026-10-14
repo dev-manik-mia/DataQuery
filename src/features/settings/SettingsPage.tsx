@@ -393,6 +393,7 @@ function AiSettings() {
             <span />
           )}
           <TextField
+            className={styles.wide}
             label={custom ? 'API key (optional)' : `${info?.name ?? 'Provider'} API key`}
             type="password"
             mono
@@ -401,18 +402,22 @@ function AiSettings() {
             hint="Stored in the system keychain for this provider only, never in the settings file or logs."
             value={key}
             onChange={(e) => setKey(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && key.trim() && void saveKey(key.trim())}
+            action={
+              <>
+                <Button disabled={!key.trim()} onClick={() => void saveKey(key.trim())}>
+                  Save key
+                </Button>
+                {hasKey && (
+                  <Button variant="plain" onClick={() => void saveKey(null)}>
+                    Remove
+                  </Button>
+                )}
+              </>
+            }
           />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', alignSelf: 'start', paddingTop: 22 }}>
-            <Button size="sm" disabled={!key.trim()} onClick={() => void saveKey(key.trim())}>
-              Save key
-            </Button>
-            {hasKey && (
-              <Button size="sm" variant="plain" onClick={() => void saveKey(null)}>
-                Remove saved key
-              </Button>
-            )}
-          </div>
           <TextField
+            className={styles.wide}
             label="Model"
             mono
             list="dq-ai-models"
@@ -421,17 +426,17 @@ function AiSettings() {
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onBlur={() => model.trim() !== settings.ai_model && void update({ ai_model: model.trim() })}
+            action={
+              <Button busy={loading} disabled={!custom && !hasKey} onClick={() => void loadModels()} title="Asks the provider which models this key can use (also checks the key)">
+                Load models
+              </Button>
+            }
           />
           <datalist id="dq-ai-models">
             {models.map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', alignSelf: 'start', paddingTop: 22 }}>
-            <Button size="sm" busy={loading} disabled={!custom && !hasKey} onClick={() => void loadModels()} title="Asks the provider which models this key can use (also checks the key)">
-              Load models
-            </Button>
-          </div>
         </div>
       </Card>
     </>

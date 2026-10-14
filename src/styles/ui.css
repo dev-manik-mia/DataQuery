@@ -135,6 +135,25 @@
 }
 
 /* ---------------------------------------------------------------- Fields */
+/* An input with buttons beside it: the buttons take the input's height. */
+.dq-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dq-input-row > .dq-input,
+.dq-input-row > .dq-input-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.dq-input-row > .dq-btn {
+  flex: none;
+  height: var(--input-h);
+}
+
 .dq-field {
   display: flex;
   flex-direction: column;
