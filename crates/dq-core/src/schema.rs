@@ -1,6 +1,6 @@
 //! Table structure read from the catalog.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::node::ObjectRef;
@@ -28,7 +28,7 @@ pub struct ColumnInfo {
     pub read_as_text: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ConstraintKind {

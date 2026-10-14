@@ -4,4 +4,9 @@ import type { NodeKind } from "./NodeKind";
 /**
  * Identifies a database object. For engines without schemas `schema` is `None`.
  */
-export type ObjectRef = { kind: NodeKind, database: string, schema: string | null, name: string, };
+export type ObjectRef = { kind: NodeKind, database: string, schema: string | null, name: string, 
+/**
+ * The owning table of an index or trigger, or the argument list of a
+ * function or procedure (which may be overloaded).
+ */
+parent?: string, };

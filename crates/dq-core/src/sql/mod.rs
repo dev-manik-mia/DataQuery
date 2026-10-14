@@ -3,6 +3,7 @@
 
 pub mod analyze;
 pub mod builder;
+pub mod ddl;
 pub mod dialect;
 pub mod format;
 pub mod lexer;

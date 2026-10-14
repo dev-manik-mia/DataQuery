@@ -7,9 +7,11 @@
 
 pub mod adapter;
 pub mod config;
+pub mod diff;
 pub mod edit;
 pub mod engine;
 pub mod error;
+pub mod migrations;
 pub mod explain;
 pub mod monitor;
 pub mod node;
