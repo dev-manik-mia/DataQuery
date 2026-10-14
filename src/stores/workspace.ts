@@ -97,7 +97,7 @@ interface OpenQueryOptions {
 }
 
 /** Health of the open session, shown in the title and status bars. */
-export type LinkStatus = 'connected' | 'connecting' | 'failed';
+export type LinkStatus = 'connected' | 'connecting' | 'failed' | 'disconnected';
 
 interface WorkspaceState {
   session: SessionInfo | null;
@@ -245,7 +245,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       if (!session || get().link === 'connecting') return;
       set({ link: 'connecting' });
       try {
-        const fresh = await api.reconnect({ sessionId: session.session_id });
+        const fresh = await api.reconnect({ sessionId: session.session_id }, session.connection.id);
         // Results held server-side by the old connections are gone.
         set((s) => ({
           session: fresh,
@@ -377,6 +377,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     setActiveResult: (tabId, active) => patchRun(tabId, { active }),
   };
 });
+
+/** The backend closed the session (idle timeout); tabs stay and Reconnect reopens it. */
+export function noteSessionClosed(sessionId: string, reason: string) {
+  const { session } = useWorkspace.getState();
+  if (session?.session_id !== sessionId) return;
+  useWorkspace.setState({ link: 'disconnected' });
+  useUi.getState().toast(reason === 'idle' ? `Disconnected from ${session.connection.name} after the idle timeout. Reconnect to continue.` : `Disconnected from ${session.connection.name}.`);
+}
 
 /** A network error means the session's connection dropped; offer to reconnect. */
 function noteLinkErrors(errors: (DbError | null)[]) {

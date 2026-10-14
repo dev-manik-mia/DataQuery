@@ -6,6 +6,7 @@ export { Chip, EnvironmentChip, PlannedChip, PriorityChip, environmentTone, type
 export { Dialog } from './Dialog';
 export { EngineMark } from './EngineMark';
 export { FieldShell, Input, SelectField, TextAreaField, TextField } from './Field';
+export { FileField } from './FileField';
 export { Icon } from './Icon';
 export { Menu, useContextMenu, type MenuEntry } from './Menu';
 export { Segmented, type SegmentOption } from './Segmented';

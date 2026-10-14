@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 
+import type { AuthMethod } from '@/bindings/AuthMethod';
 import type { ConnConfig } from '@/bindings/ConnConfig';
+import type { ConnOptions } from '@/bindings/ConnOptions';
 import type { ConnectionDraft } from '@/bindings/ConnectionDraft';
 import type { DbError } from '@/bindings/DbError';
 import type { Engine } from '@/bindings/Engine';
@@ -8,10 +10,12 @@ import type { Environment } from '@/bindings/Environment';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import type { PasswordChange } from '@/bindings/PasswordChange';
 import type { ServerInfo } from '@/bindings/ServerInfo';
+import type { SshTunnel } from '@/bindings/SshTunnel';
 import type { SslMode } from '@/bindings/SslMode';
-import { Alert, Button, EngineMark, ErrorAlert, FieldShell, PageHead, PlannedChip, Segmented, SelectField, TextField } from '@/components/ui';
+import type { TlsFiles } from '@/bindings/TlsFiles';
+import { Alert, Button, EngineMark, ErrorAlert, FieldShell, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, insecureReason, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -19,7 +23,23 @@ import { useConnections, useEngine } from '@/stores/connections';
 import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
+import {
+  AuthFields,
+  authSummary,
+  FormSection,
+  type HopSecret,
+  OptionFields,
+  type OptionDrafts,
+  optionDrafts,
+  optionsSummary,
+  SshFields,
+  sshSummary,
+  TlsFields,
+  tlsSummary,
+  validateOptions,
+} from './AdvancedSections';
 import styles from './Connections.module.css';
+import { TrustHostKey } from './TrustHostKey';
 
 const ENVIRONMENTS: Environment[] = ['Local', 'Development', 'Staging', 'Production'];
 
@@ -28,6 +48,12 @@ const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', '
 const keychainName = isMac ? 'macOS Keychain' : navigator.userAgent.includes('Windows') ? 'Windows Credential Manager' : 'the system keychain';
 
 interface FormState {
+  auth: AuthMethod;
+  tlsFiles: TlsFiles;
+  ssh: SshTunnel | null;
+  sshSecrets: HopSecret[];
+  readOnly: boolean;
+  options: OptionDrafts;
   name: string;
   folderId: string;
   environment: Environment;
@@ -44,7 +70,14 @@ interface FormState {
 function initialState(engine: Engine, defaultPort: number | null, existing?: { name: string; folder_id: string | null; environment: Environment; config: ConnConfig }, prefill?: ParsedUrl): FormState {
   const config = existing?.config ?? prefill?.config;
   const defaults = connectionDefaults(engine);
+  const hops = config?.ssh ? config.ssh.jumps.length + 1 : 0;
   return {
+    auth: config?.auth ?? { method: 'password' },
+    tlsFiles: config?.tls_files ?? { ca_file: null, client_cert_file: null, client_key_file: null },
+    ssh: config?.ssh ?? null,
+    sshSecrets: Array.from({ length: hops }, () => ({ value: '', clear: false })),
+    readOnly: config?.read_only ?? false,
+    options: optionDrafts(config?.options ?? DEFAULT_OPTIONS),
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
@@ -61,8 +94,20 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
 
 type Errors = Partial<Record<keyof FormState, string>>;
 
+type SectionId = 'auth' | 'tls' | 'ssh' | 'options';
+
+const DEFAULT_OPTIONS: ConnOptions = { keepalive_secs: 60, connect_retries: 0, idle_timeout_mins: 0, pool_size: 4 };
+
 function validate(s: FormState): Errors {
   const errors: Errors = {};
+  if (Object.keys(validateOptions(s.options)).length) errors.options = 'Check the connection options.';
+  if (s.ssh && [s.ssh.host, ...s.ssh.jumps].some((h) => !h.host || !h.username || h.port < 1 || h.port > 65535 || (h.auth.method === 'private_key' && !h.auth.path))) {
+    errors.ssh = 'Every SSH host needs a host, port, user and (for key auth) a key file.';
+  }
+  if (s.auth.method === 'aws_iam' && !s.auth.region) errors.auth = 'Enter the AWS region.';
+  if (s.auth.method !== 'password' && s.sslMode === 'disable') errors.auth = 'Cloud IAM authentication requires TLS.';
+  if (s.tlsFiles.client_cert_file !== null && s.tlsFiles.client_key_file === null) errors.tlsFiles = 'Choose the client key too.';
+  if (s.tlsFiles.client_key_file !== null && s.tlsFiles.client_cert_file === null) errors.tlsFiles = 'Choose the client certificate too.';
   if (!s.name.trim()) errors.name = 'Give the connection a name.';
   if (!s.host.trim()) errors.host = 'Host is required.';
   const port = Number(s.port);
@@ -85,6 +130,13 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState<'save' | 'connect' | null>(null);
   const [result, setResult] = useState<{ ok: true; info: ServerInfo } | { ok: false; error: DbError } | null>(null);
+  const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(() => ({
+    auth: Boolean(existing?.config.auth.method !== 'password' && existing),
+    tls: Boolean(existing && (existing.config.tls_files.ca_file || existing.config.tls_files.client_cert_file)),
+    ssh: Boolean(existing?.config.ssh),
+    options: false,
+  }));
+  const toggle = (k: SectionId) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
 
   const errors = useMemo(() => validate(state), [state]);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -97,6 +149,17 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
     if (existing?.has_password && !state.clearPassword) return { action: 'keep' };
     return { action: 'clear' };
   };
+
+  const hopCount = state.ssh ? state.ssh.jumps.length + 1 : 0;
+  // Secrets are stored per hop index; after adding or removing hops they must be entered again.
+  const savedSecrets = existing && existing.ssh_secrets.length === hopCount ? existing.ssh_secrets : [];
+  const hopChanges = (): PasswordChange[] =>
+    Array.from({ length: hopCount }, (_, i) => {
+      const secret = state.sshSecrets[i] ?? { value: '', clear: false };
+      if (secret.value) return { action: 'set', value: secret.value };
+      if (savedSecrets[i] && !secret.clear) return { action: 'keep' };
+      return { action: 'clear' };
+    });
 
   const draft = (): ConnectionDraft => ({
     id: existing?.id ?? null,
@@ -112,8 +175,19 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
       username: state.username.trim(),
       ssl_mode: state.sslMode,
       connect_timeout_secs: Number(state.timeout),
+      tls_files: state.tlsFiles,
+      ssh: state.ssh,
+      read_only: state.readOnly,
+      options: {
+        keepalive_secs: Number(state.options.keepalive_secs),
+        connect_retries: Number(state.options.connect_retries),
+        idle_timeout_mins: Number(state.options.idle_timeout_mins),
+        pool_size: Number(state.options.pool_size),
+      },
+      auth: state.auth,
     },
-    password: passwordChange(),
+    password: state.auth.method === 'password' ? passwordChange() : { action: 'clear' },
+    ssh_secrets: hopChanges(),
   });
 
   const invalid = Object.keys(errors).length > 0;
@@ -155,6 +229,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   };
 
   const err = (key: keyof FormState) => (touched ? errors[key] : undefined);
+  const insecure = insecureReason({ host: state.host.trim(), ssl_mode: state.sslMode, ssh: state.ssh });
   const passwordHint = existing?.has_password
     ? state.clearPassword
       ? 'The saved password will be removed when you save.'
@@ -214,6 +289,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           </div>
           <TextField label="Database" mono value={state.database} onChange={(e) => set('database', e.target.value)} />
           <TextField label="Username" mono value={state.username} error={err('username')} onChange={(e) => set('username', e.target.value)} />
+          {state.auth.method === 'password' && (
           <div className={styles.full} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <TextField
               label="Password"
@@ -231,6 +307,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
               </button>
             )}
           </div>
+          )}
           <SelectField
             label="SSL mode"
             mono
@@ -248,11 +325,37 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             }
           />
           <TextField label="Connect timeout" mono inputMode="numeric" suffix="seconds" value={state.timeout} error={err('timeout')} onChange={(e) => set('timeout', e.target.value.replace(/\D/g, ''))} />
-          <div className={styles.planned}>
-            <span className={styles.plannedLabel}>SSH tunnel</span>
-            <PlannedChip priority="P1" />
-          </div>
+          <FormSection title="Authentication" summary={authSummary(state.auth)} open={openSections.auth} onToggle={() => toggle('auth')}>
+            <AuthFields auth={state.auth} onChange={(a) => set('auth', a)} />
+            {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}
+          </FormSection>
+          <FormSection title="Advanced TLS" summary={tlsSummary(state.tlsFiles)} open={openSections.tls} onToggle={() => toggle('tls')}>
+            <TlsFields files={state.tlsFiles} onChange={(f) => set('tlsFiles', f)} />
+            {err('tlsFiles') && <span className={`dq-field__error ${styles.full}`}>{err('tlsFiles')}</span>}
+          </FormSection>
+          <FormSection title="SSH tunnel" summary={sshSummary(state.ssh)} open={openSections.ssh} onToggle={() => toggle('ssh')}>
+            <SshFields tunnel={state.ssh} secrets={state.sshSecrets} savedSecrets={savedSecrets} onChange={(t) => set('ssh', t)} onSecrets={(v) => set('sshSecrets', v)} />
+            {existing && existing.ssh_secrets.length > 0 && existing.ssh_secrets.length !== hopCount && (
+              <span className={`dq-field__hint ${styles.full}`}>The SSH hosts changed, so saved SSH secrets must be entered again.</span>
+            )}
+            {err('ssh') && <span className={`dq-field__error ${styles.full}`}>{err('ssh')}</span>}
+          </FormSection>
+          <FormSection title="Connection options" summary={optionsSummary(state.readOnly, state.options)} open={openSections.options} onToggle={() => toggle('options')}>
+            <OptionFields
+              readOnly={state.readOnly}
+              options={state.options}
+              errors={touched ? validateOptions(state.options) : {}}
+              onReadOnly={(v) => set('readOnly', v)}
+              onOption={(k, v) => set('options', { ...state.options, [k]: v })}
+            />
+          </FormSection>
         </div>
+
+        {insecure && (
+          <Alert tone="caution" title="This connection is not fully secure">
+            {insecure} Choose verify-full{state.ssh ? '' : ' or an SSH tunnel'} for networks you do not control.
+          </Alert>
+        )}
 
         {result?.ok && (
           <Alert tone="positive" title={`✓ Connected to ${result.info.version} in ${formatDuration(result.info.latency_ms)}.`}>
@@ -263,6 +366,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           </Alert>
         )}
         {result && !result.ok && <ErrorAlert error={result.error} title={`Could not connect to ${state.host}:${state.port}`} />}
+        {result && !result.ok && <TrustHostKey error={result.error} onTrusted={() => void test()} />}
 
         <div className={styles.formActions}>
           <Button busy={testing} onClick={() => void test()}>

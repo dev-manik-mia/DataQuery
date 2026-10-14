@@ -14,7 +14,8 @@ const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 /// Directories searched for the CLIs in addition to `PATH`: apps started from
 /// the Finder or a desktop launcher often get a minimal `PATH`.
 fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs: Vec<PathBuf> =
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"].map(PathBuf::from));
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
@@ -26,9 +27,9 @@ fn search_dirs() -> Vec<PathBuf> {
 
 fn find_cli(name: &str) -> Option<PathBuf> {
     let candidates: &[&str] = if cfg!(windows) { &[".cmd", ".exe", ""] } else { &[""] };
-    search_dirs().into_iter().find_map(|dir| {
-        candidates.iter().map(|ext| dir.join(format!("{name}{ext}"))).find(|p| p.is_file())
-    })
+    search_dirs()
+        .into_iter()
+        .find_map(|dir| candidates.iter().map(|ext| dir.join(format!("{name}{ext}"))).find(|p| p.is_file()))
 }
 
 async fn run(cli: &str, args: &[&str], install_hint: &str) -> DbResult<String> {

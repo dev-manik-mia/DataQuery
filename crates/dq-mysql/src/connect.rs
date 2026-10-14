@@ -53,8 +53,8 @@ fn ssl_opts(params: &ConnectParams, mode: SslMode) -> Option<SslOpts> {
         opts = opts.with_root_certs(vec![PathBuf::from(ca).into()]).with_disable_built_in_roots(true);
     }
     if let (Some(cert), Some(key)) = (&files.client_cert_file, &files.client_key_file) {
-        opts = opts
-            .with_client_identity(Some(ClientIdentity::new(PathBuf::from(cert).into(), PathBuf::from(key).into())));
+        opts =
+            opts.with_client_identity(Some(ClientIdentity::new(PathBuf::from(cert).into(), PathBuf::from(key).into())));
     }
     if params.endpoint.is_some() {
         // Through an SSH tunnel the socket is local; verify the database's own name.

@@ -93,7 +93,9 @@ impl TlsFiles {
 pub enum SshAuth {
     Password,
     /// OpenSSH or PEM private key file; an optional passphrase is kept in the keychain.
-    PrivateKey { path: String },
+    PrivateKey {
+        path: String,
+    },
     /// Keys offered by the running SSH agent (`SSH_AUTH_SOCK`).
     Agent,
 }
@@ -134,7 +136,8 @@ impl SshTunnel {
             if hop.port == 0 {
                 return Err(DbError::invalid("SSH port must be between 1 and 65535."));
             }
-            if hop.username.trim().is_empty() || hop.username.len() > 128 || hop.username.chars().any(char::is_control) {
+            if hop.username.trim().is_empty() || hop.username.len() > 128 || hop.username.chars().any(char::is_control)
+            {
                 return Err(DbError::invalid("Each SSH host needs a username of at most 128 characters."));
             }
             if let SshAuth::PrivateKey { path } = &hop.auth {
@@ -294,13 +297,17 @@ impl ConnConfig {
             ssh.validate()?;
         }
         if let AuthMethod::AwsIam { region, profile } = &self.auth {
-            let ok = |s: &str| !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+            let ok = |s: &str| {
+                !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            };
             if !ok(region) || profile.as_deref().is_some_and(|p| !ok(p)) {
                 return Err(DbError::invalid("Enter an AWS region such as eu-west-1 (and an optional profile name)."));
             }
         }
         if self.auth.is_cloud() && self.ssl_mode == SslMode::Disable {
-            return Err(DbError::invalid("Cloud IAM authentication requires TLS. Choose an SSL mode other than disable."));
+            return Err(DbError::invalid(
+                "Cloud IAM authentication requires TLS. Choose an SSL mode other than disable.",
+            ));
         }
         self.options.validate()
     }
@@ -315,7 +322,9 @@ impl ConnConfig {
             SslMode::Disable if self.ssh.is_some() => None,
             SslMode::Disable => Some("TLS is off: passwords and data cross the network unencrypted."),
             SslMode::Prefer => Some("TLS is optional: the connection may fall back to plain text."),
-            SslMode::Require => Some("The server certificate is not verified, so the server's identity is not checked."),
+            SslMode::Require => {
+                Some("The server certificate is not verified, so the server's identity is not checked.")
+            }
             SslMode::VerifyCa | SslMode::VerifyFull => None,
         }
     }

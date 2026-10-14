@@ -6,14 +6,14 @@
 use std::error::Error;
 use std::fmt::Write;
 
+use bytes::BytesMut;
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
 use dq_core::result::{ColumnMeta, Row as CellRow};
 use dq_core::value::{Cell, CellLimits, hex};
 use fallible_iterator::FallibleIterator;
 use postgres_protocol::types as wire;
 use tokio_postgres::Row;
-use bytes::BytesMut;
-use tokio_postgres::types::{FromSql, Format, IsNull, Kind, ToSql, Type, to_sql_checked};
+use tokio_postgres::types::{Format, FromSql, IsNull, Kind, ToSql, Type, to_sql_checked};
 
 type DecodeResult<T> = Result<T, Box<dyn Error + Sync + Send>>;
 

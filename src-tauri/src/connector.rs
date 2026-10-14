@@ -41,7 +41,11 @@ pub async fn saved_secrets(state: &AppState, connection: &SavedConnection) -> Db
     };
     let mut ssh = Vec::new();
     for (hop, stored) in connection.ssh_secrets.iter().enumerate() {
-        ssh.push(if *stored { keychain(state, SavedConnection::ssh_secret_key(&connection.id, hop)).await? } else { None });
+        ssh.push(if *stored {
+            keychain(state, SavedConnection::ssh_secret_key(&connection.id, hop)).await?
+        } else {
+            None
+        });
     }
     Ok(Secrets { password, ssh })
 }
@@ -90,11 +94,8 @@ pub async fn open(state: &AppState, config: &ConnConfig, secrets: &Secrets) -> D
                 ),
                 None => None,
             };
-            let params = ConnectParams {
-                config: config.clone(),
-                password,
-                endpoint: tunnel.as_ref().map(Tunnel::local_addr),
-            };
+            let params =
+                ConnectParams { config: config.clone(), password, endpoint: tunnel.as_ref().map(Tunnel::local_addr) };
             let session = adapter.connect(&params).await?;
             DbResult::Ok(Opened { session, tunnel })
         }

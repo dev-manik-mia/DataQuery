@@ -15,7 +15,8 @@ use crate::model::{
     SavedScript, ScriptDraft, Settings,
 };
 
-const MIGRATIONS: &[&str] = &[r"
+const MIGRATIONS: &[&str] = &[
+    r"
     CREATE TABLE folders (
         id       TEXT PRIMARY KEY,
         name     TEXT NOT NULL,
@@ -57,9 +58,11 @@ const MIGRATIONS: &[&str] = &[r"
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
-", r"
+",
+    r"
     ALTER TABLE connections ADD COLUMN ssh_secrets TEXT NOT NULL DEFAULT '[]';
-"];
+",
+];
 
 /// History keeps at most this many entries; older ones are pruned.
 pub const HISTORY_RETENTION: i64 = 20_000;

@@ -10,6 +10,7 @@ import type { ApplyReport } from '@/bindings/ApplyReport';
 import type { ColumnMapping } from '@/bindings/ColumnMapping';
 import type { Confirmation } from '@/bindings/Confirmation';
 import type { ConnectionDraft } from '@/bindings/ConnectionDraft';
+import type { ConnectionImportReport } from '@/bindings/ConnectionImportReport';
 import type { ConnectionList } from '@/bindings/ConnectionList';
 import type { CsvOptions } from '@/bindings/CsvOptions';
 import type { CsvPreview } from '@/bindings/CsvPreview';
@@ -28,6 +29,7 @@ import type { ObjectRef } from '@/bindings/ObjectRef';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import type { RowChange } from '@/bindings/RowChange';
 import type { RowCount } from '@/bindings/RowCount';
+import type { RowFilter } from '@/bindings/RowFilter';
 import type { RowsPage } from '@/bindings/RowsPage';
 import type { RunReport } from '@/bindings/RunReport';
 import type { SavedConnection } from '@/bindings/SavedConnection';
@@ -86,10 +88,13 @@ export const api = {
   renameFolder: (id: string, name: string) => call<void>('rename_folder', { id, name }),
   deleteFolder: (id: string) => call<void>('delete_folder', { id }),
   testConnection: (draft: ConnectionDraft) => call<ServerInfo>('test_connection', { draft }),
+  trustHostKey: (host: string, port: number, fingerprint: string) => call<void>('trust_host_key', { host, port, fingerprint }),
+  exportConnections: (path: string, ids: string[] | null) => call<number>('export_connections', { path, ids }),
+  importConnections: (path: string) => call<ConnectionImportReport>('import_connections', { path }),
 
   // sessions
   connect: (connectionId: string) => call<SessionInfo>('connect', { connectionId }),
-  reconnect: ({ sessionId }: Sid) => call<SessionInfo>('reconnect', { sessionId }),
+  reconnect: ({ sessionId }: Sid, connectionId: string) => call<SessionInfo>('reconnect', { sessionId, connectionId }),
   disconnect: ({ sessionId }: Sid) => call<void>('disconnect', { sessionId }),
 
   // explorer
@@ -113,8 +118,8 @@ export const api = {
   tableDdl: ({ sessionId }: Sid, object: ObjectRef) => call<string>('table_ddl', { sessionId, object: objectRef(object) }),
   tablePage: ({ sessionId }: Sid, request: TablePageRequest) =>
     call<TablePage>('table_page', { sessionId, request: { ...request, object: objectRef(request.object) } }),
-  rowCount: ({ sessionId }: Sid, object: ObjectRef, filter: string | null) =>
-    call<RowCount>('row_count', { sessionId, object: objectRef(object), filter }),
+  rowCount: ({ sessionId }: Sid, object: ObjectRef, rows: RowFilter) =>
+    call<RowCount>('row_count', { sessionId, object: objectRef(object), rows }),
   /** `fullRow` matches rows of a table without a key on every comparable column. */
   previewChanges: ({ sessionId }: Sid, object: ObjectRef, changes: RowChange[], fullRow: boolean) =>
     call<string>('preview_changes', { sessionId, object: objectRef(object), changes, fullRow }),

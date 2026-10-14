@@ -163,7 +163,8 @@ async fn explorer_lists_lazily() {
 async fn value_rendering_contract() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let r = s.execute("SELECT big, exact, ts, doc, raw, label, id FROM type_samples ORDER BY id", &[], OPTS).await.unwrap();
+    let r =
+        s.execute("SELECT big, exact, ts, doc, raw, label, id FROM type_samples ORDER BY id", &[], OPTS).await.unwrap();
     let row = &r.rows[0];
     assert_eq!(row[0], Cell::number("18446744073709551615"));
     assert_eq!(row[1], Cell::number("1234567890123456789012345678.0123456789"));
@@ -284,14 +285,19 @@ async fn table_page_filter_sort_and_count() {
     assert!(totals.windows(2).all(|w| w[0] >= w[1]));
     let count = ops::row_count(&*s, &req.object, &req.rows).await.unwrap();
     assert_eq!((count.count, count.exact), (400, true));
-    let bad = TablePageRequest { rows: RowFilter { filter: Some("1=1; DELETE FROM orders".into()), ..RowFilter::default() }, ..req.clone() };
+    let bad = TablePageRequest {
+        rows: RowFilter { filter: Some("1=1; DELETE FROM orders".into()), ..RowFilter::default() },
+        ..req.clone()
+    };
     assert!(ops::table_page(&*s, &bad).await.is_err());
     // Another database is reachable through qualified names.
     let other = ObjectRef { database: "billing".into(), ..table("invoices") };
-    let page =
-        ops::table_page(&*s, &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 })
-            .await
-            .unwrap();
+    let page = ops::table_page(
+        &*s,
+        &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 },
+    )
+    .await
+    .unwrap();
     assert_eq!(page.columns[0].name, "id");
 }
 
@@ -308,7 +314,9 @@ async fn edits_apply_atomically_to_the_right_rows() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let t = scratch(&*s, "it_edits", "(id BIGINT UNSIGNED PRIMARY KEY, amount DECIMAL(12,2), note TEXT)").await;
-    s.execute("INSERT INTO it_edits VALUES (18446744073709551615, 1.00, 'a'), (2, 2.00, 'b')", &[], OPTS).await.unwrap();
+    s.execute("INSERT INTO it_edits VALUES (18446744073709551615, 1.00, 'a'), (2, 2.00, 'b')", &[], OPTS)
+        .await
+        .unwrap();
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let changes = vec![
         RowChange::Update {
@@ -383,7 +391,11 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     let s = session(&cfg).await;
     let dir = tempfile::tempdir().unwrap();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: table("orders"), rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() }, sort: None };
+    let source = ExportSource::Table {
+        object: table("orders"),
+        rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() },
+        sort: None,
+    };
     let report = ops::export(&*s, &source, ExportFormat::Csv, &csv).await?;
     assert_eq!(report.rows, 10);
     let json = dir.path().join("q.json");
@@ -413,4 +425,63 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     assert_eq!(text(&r.rows[0][0]), "10");
     s.execute("DROP TABLE it_import", &[], OPTS).await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn parameters_are_bound_with_prepared_statements() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let params = [Some("18446744073709551615".to_owned()), None, Some("it's; DROP TABLE x".to_owned())];
+    let r = s.execute("SELECT CAST(? AS UNSIGNED), ? IS NULL, ?", &params, OPTS).await.unwrap();
+    assert_eq!(text(&r.rows[0][0]), "18446744073709551615");
+    assert_eq!(text(&r.rows[0][1]), "1");
+    assert_eq!(text(&r.rows[0][2]), "it's; DROP TABLE x");
+    // Binary-protocol dates keep the server's text form.
+    let r = s.execute("SELECT DATE('2026-10-14'), TIMESTAMP('2026-10-14 07:59:00.5')", &[], OPTS).await.unwrap();
+    let p = s.execute("SELECT DATE(?), TIMESTAMP(?)", &[Some("2026-10-14".into()), Some("2026-10-14 07:59:00.5".into())], OPTS)
+        .await
+        .unwrap();
+    assert_eq!(text(&p.rows[0][0]), "2026-10-14");
+    assert_eq!(text(&p.rows[0][1]), text(&r.rows[0][1]));
+    // A prepared result can be paged like a plain one.
+    let big = s.execute("SELECT n FROM seq WHERE n > ?", &[Some("0".into())], ExecOptions { row_limit: 10, timeout_secs: 30 })
+        .await
+        .unwrap();
+    assert!(big.has_more);
+    assert_eq!(s.fetch_more(10).await.unwrap().rows.len(), 10);
+    let err = s.execute("SELECT ?, ?", &[Some("1".into())], OPTS).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidInput);
+}
+
+#[tokio::test]
+async fn read_only_profiles_cannot_write() {
+    let mut cfg = require_db!();
+    cfg.read_only = true;
+    let s = session(&cfg).await;
+    assert!(s.info().read_only);
+    assert!(s.execute("SELECT 1", &[], OPTS).await.is_ok());
+    let err = s.execute("INSERT INTO no_pk VALUES (99, 'ro')", &[], OPTS).await.unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::Permission | ErrorKind::Server), "{err:?}");
+    assert_eq!(err.code.as_deref(), Some("1792"));
+}
+
+#[tokio::test]
+async fn row_filters_bind_matches_and_searches() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let object = table("orders");
+    let rows = RowFilter {
+        filter: None,
+        matches: vec![ColumnValue { column: "status".into(), value: Some("paid".into()) }],
+        searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+    };
+    let page = ops::table_page(&*s, &TablePageRequest { object: object.clone(), rows, sort: None, offset: 0, limit: 5 })
+        .await
+        .unwrap();
+    assert!(!page.rows.is_empty());
+    let none = RowFilter {
+        searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "_aid".into() }],
+        ..RowFilter::default()
+    };
+    assert_eq!(ops::row_count(&*s, &object, &none).await.unwrap().count, 0, "`_` is a literal");
 }

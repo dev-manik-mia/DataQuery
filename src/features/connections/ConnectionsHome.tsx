@@ -19,6 +19,7 @@ import {
   useContextMenu,
   type MenuEntry,
 } from '@/components/ui';
+import { exportConnections, importConnections } from '@/features/connections/transfer';
 import { formatCount, formatDuration, formatRelative, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
@@ -76,6 +77,7 @@ export function ConnectionsHome() {
     { label: 'Connect', onSelect: () => void open(c) },
     { label: 'Edit', onSelect: () => navigate({ name: 'connection-form', engine: c.config.engine, connectionId: c.id }) },
     { label: 'Duplicate', onSelect: () => void duplicate(c.id) },
+    { label: 'Export…', onSelect: () => void exportConnections([c.id]) },
     { label: c.favorite ? 'Remove from favorites' : 'Add to favorites', onSelect: () => void toggleFavorite(c.id) },
     ...(folders.length
       ? [
@@ -97,7 +99,7 @@ export function ConnectionsHome() {
   ];
 
   const moveTo = async (c: SavedConnection, folderId: string | null) => {
-    await useConnections.getState().save({ id: c.id, name: c.name, folder_id: folderId, environment: c.environment, favorite: c.favorite, config: c.config, password: { action: 'keep' } }).catch(useUi.getState().toastError);
+    await useConnections.getState().save({ id: c.id, name: c.name, folder_id: folderId, environment: c.environment, favorite: c.favorite, config: c.config, password: { action: 'keep' }, ssh_secrets: [] }).catch(useUi.getState().toastError);
   };
 
   return (
@@ -108,6 +110,10 @@ export function ConnectionsHome() {
           title="Connections"
           actions={
             <>
+              <Button onClick={() => void importConnections()}>Import…</Button>
+              <Button disabled={connections.length === 0} onClick={() => void exportConnections(null)}>
+                Export…
+              </Button>
               <Button onClick={() => setPrompt({ kind: 'new' })}>New folder</Button>
               <Button variant="primary" onClick={() => navigate({ name: 'engines' })}>
                 New connection

@@ -41,7 +41,12 @@ pub struct OpenSession {
 }
 
 impl OpenSession {
-    pub fn new(connection_id: String, session: Arc<dyn Session>, tunnel: Option<Tunnel>, idle_timeout_mins: u32) -> Self {
+    pub fn new(
+        connection_id: String,
+        session: Arc<dyn Session>,
+        tunnel: Option<Tunnel>,
+        idle_timeout_mins: u32,
+    ) -> Self {
         Self {
             connection_id,
             session,
@@ -135,7 +140,8 @@ impl AppState {
         let now = now_ms();
         let expired: Vec<(String, Arc<OpenSession>)> = {
             let mut sessions = self.sessions.write().await;
-            let ids: Vec<String> = sessions.iter().filter(|(_, s)| s.idle_expired(now)).map(|(id, _)| id.clone()).collect();
+            let ids: Vec<String> =
+                sessions.iter().filter(|(_, s)| s.idle_expired(now)).map(|(id, _)| id.clone()).collect();
             ids.into_iter().filter_map(|id| sessions.remove(&id).map(|s| (id, s))).collect()
         };
         for (_, open) in &expired {

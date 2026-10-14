@@ -258,7 +258,10 @@ async fn table_page_filter_sort_and_count() {
     assert!(totals.windows(2).all(|w| w[0] >= w[1]));
     let count = ops::row_count(&*s, &req.object, &req.rows).await.unwrap();
     assert_eq!((count.count, count.exact), (400, true));
-    let bad = TablePageRequest { rows: RowFilter { filter: Some("1=1; DELETE FROM public.orders".into()), ..RowFilter::default() }, ..req.clone() };
+    let bad = TablePageRequest {
+        rows: RowFilter { filter: Some("1=1; DELETE FROM public.orders".into()), ..RowFilter::default() },
+        ..req.clone()
+    };
     assert!(ops::table_page(&*s, &bad).await.is_err());
 }
 
@@ -266,8 +269,10 @@ async fn table_page_filter_sort_and_count() {
 async fn catalog_connections_are_read_only() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let err =
-        s.read_query("dataquery_test", "DELETE FROM public.no_pk", &[], dq_core::value::CellLimits::GRID).await.unwrap_err();
+    let err = s
+        .read_query("dataquery_test", "DELETE FROM public.no_pk", &[], dq_core::value::CellLimits::GRID)
+        .await
+        .unwrap_err();
     assert_eq!(err.code.as_deref(), Some("25006"));
 }
 
@@ -276,7 +281,9 @@ async fn edits_apply_atomically_to_the_right_rows() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let t = scratch(&*s, "it_edits", "(id int8 PRIMARY KEY, amount numeric(12,2), note text)").await;
-    s.execute("INSERT INTO public.it_edits VALUES (9007199254740993, 1.00, 'a'), (2, 2.00, 'b')", &[], OPTS).await.unwrap();
+    s.execute("INSERT INTO public.it_edits VALUES (9007199254740993, 1.00, 'a'), (2, 2.00, 'b')", &[], OPTS)
+        .await
+        .unwrap();
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let changes = vec![
         RowChange::Update {
@@ -337,7 +344,11 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     let s = session(&cfg).await;
     let dir = tempfile::tempdir().unwrap();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: table("public", "orders"), rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() }, sort: None };
+    let source = ExportSource::Table {
+        object: table("public", "orders"),
+        rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() },
+        sort: None,
+    };
     let report = ops::export(&*s, &source, ExportFormat::Csv, &csv).await?;
     assert_eq!(report.rows, 10);
     let json = dir.path().join("q.json");
@@ -366,4 +377,59 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     assert_eq!(text(&r.rows[0][0]), "10");
     s.execute("DROP TABLE public.it_import", &[], OPTS).await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn parameters_are_bound_as_text() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let params = [Some("9007199254740993".to_owned()), None, Some("it's; DROP TABLE x".to_owned())];
+    let r = s.execute("SELECT $1::int8 + 1, $2::text IS NULL, $3", &params, OPTS).await.unwrap();
+    assert_eq!(text(&r.rows[0][0]), "9007199254740994");
+    assert_eq!(text(&r.rows[0][1]), "true");
+    assert_eq!(text(&r.rows[0][2]), "it's; DROP TABLE x");
+    // Types are inferred by the server from the placeholder's context.
+    let r = s.execute("SELECT count(*) FROM public.orders WHERE id = $1", &[Some("1".into())], OPTS).await.unwrap();
+    assert_eq!(text(&r.rows[0][0]), "1");
+    let err = s.execute("SELECT $1, $2", &[Some("1".into())], OPTS).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::InvalidInput);
+}
+
+#[tokio::test]
+async fn read_only_profiles_cannot_write() {
+    let mut cfg = require_db!();
+    cfg.read_only = true;
+    let s = session(&cfg).await;
+    assert!(s.info().read_only);
+    assert!(s.execute("SELECT 1", &[], OPTS).await.is_ok());
+    let err = s.execute("CREATE TABLE public.it_read_only (a int)", &[], OPTS).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Permission, "{err:?}");
+    assert_eq!(err.code.as_deref(), Some("25006"));
+}
+
+#[tokio::test]
+async fn row_filters_bind_matches_and_searches() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let object = table("public", "orders");
+    let rows = RowFilter {
+        filter: None,
+        matches: vec![ColumnValue { column: "status".into(), value: Some("paid".into()) }],
+        searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+    };
+    let page = ops::table_page(
+        &*s,
+        &TablePageRequest { object: object.clone(), rows: rows.clone(), sort: None, offset: 0, limit: 5 },
+    )
+    .await
+    .unwrap();
+    assert!(!page.rows.is_empty());
+    assert!(page.rows.iter().all(|r| text(&r[2]) == "paid"));
+    let none = RowFilter {
+        searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "%".into() }],
+        ..RowFilter::default()
+    };
+    assert_eq!(ops::row_count(&*s, &object, &none).await.unwrap().count, 0, "`%` is a literal");
+    let null = RowFilter { matches: vec![ColumnValue { column: "discount".into(), value: None }], ..RowFilter::default() };
+    assert!(ops::row_count(&*s, &object, &null).await.unwrap().count > 0);
 }

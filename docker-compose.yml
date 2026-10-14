@@ -41,3 +41,8 @@ services:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s
       retries: 60
+
+  # SSH bastion for tunnel tests; it reaches the databases by service name.
+  ssh:
+    build: { context: docker, dockerfile: ssh.Dockerfile }
+    ports: ["52222:22"]

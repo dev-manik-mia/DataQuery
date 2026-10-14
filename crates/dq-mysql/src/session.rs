@@ -302,8 +302,7 @@ impl Session for MySession {
             .ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
         self.running.store(true, Ordering::SeqCst);
         let binary = q.binary;
-        let read =
-            self.read_rows(&mut q.conn, binary, Some(pending), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT)).await;
+        let read = self.read_rows(&mut q.conn, binary, Some(pending), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT)).await;
         self.running.store(false, Ordering::SeqCst);
         let (rows, pending) = read?;
         let has_more = pending.is_some();

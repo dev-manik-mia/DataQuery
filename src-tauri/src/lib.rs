@@ -10,8 +10,8 @@ mod state;
 use std::sync::Arc;
 
 use dq_store::{KeyringSecrets, Store};
-use tauri::{Emitter, Manager};
 use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+use tauri::{Emitter, Manager};
 
 use crate::state::AppState;
 
@@ -100,7 +100,8 @@ fn spawn_idle_reaper(app: tauri::AppHandle) {
             tick.tick().await;
             for session_id in app.state::<AppState>().close_idle().await {
                 tracing::info!(%session_id, "closed idle session");
-                let _ = app.emit(SESSION_CLOSED_EVENT, serde_json::json!({ "session_id": session_id, "reason": "idle" }));
+                let _ =
+                    app.emit(SESSION_CLOSED_EVENT, serde_json::json!({ "session_id": session_id, "reason": "idle" }));
             }
         }
     });

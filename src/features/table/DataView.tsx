@@ -84,7 +84,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
     setLoading(true);
     setError(null);
     api
-      .tablePage(sid, { object, filter, sort, offset, limit: pageSize })
+      .tablePage(sid, { object, filter, matches: [], searches: [], sort, offset, limit: pageSize })
       .then((p) => !stale && setPage(p))
       .catch((e) => !stale && setError(toAppError(e).info))
       .finally(() => !stale && setLoading(false));
@@ -98,7 +98,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
     let stale = false;
     setCount(null);
     api
-      .rowCount(sid, object, filter)
+      .rowCount(sid, object, { filter, matches: [], searches: [] })
       .then((c) => !stale && setCount(c))
       .catch(() => !stale && setCount(null));
     return () => {
@@ -251,7 +251,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
   const first = page && page.rows.length ? page.offset + 1 : 0;
   const last = page ? page.offset + page.rows.length : 0;
   const pages = count ? Math.max(1, Math.ceil(count.count / pageSize)) : null;
-  const exportSource = { type: 'table' as const, object, filter, sort };
+  const exportSource = { type: 'table' as const, object, filter, matches: [], searches: [], sort };
 
   return (
     <>

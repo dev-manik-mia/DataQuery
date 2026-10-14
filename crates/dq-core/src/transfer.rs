@@ -26,9 +26,7 @@ pub enum ExportFormat {
 #[ts(export)]
 pub enum ExportSource {
     /// Runs on a read-only connection, so an export can never change data.
-    Query {
-        sql: String,
-    },
+    Query { sql: String },
     Table {
         object: ObjectRef,
         #[serde(flatten)]
@@ -38,10 +36,7 @@ pub enum ExportSource {
     },
     /// Rows already loaded in the grid, e.g. a selection. Rejected when any
     /// cell was shortened for display, so an export never silently loses data.
-    Rows {
-        columns: Vec<ColumnMeta>,
-        rows: Vec<Row>,
-    },
+    Rows { columns: Vec<ColumnMeta>, rows: Vec<Row> },
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

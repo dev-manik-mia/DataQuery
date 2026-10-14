@@ -211,7 +211,8 @@ pub async fn import_connections(state: State<'_, AppState>, path: String) -> Cmd
     let path = absolute(&path)?;
     state
         .with_store(move |s| {
-            let io = |e: std::io::Error| DbError::new(ErrorKind::Storage, format!("Cannot read {}: {e}", path.display()));
+            let io =
+                |e: std::io::Error| DbError::new(ErrorKind::Storage, format!("Cannot read {}: {e}", path.display()));
             if std::fs::metadata(&path).map_err(io)?.len() > MAX_IMPORT_BYTES {
                 return Err(DbError::invalid("The file is too large to be a connection export."));
             }

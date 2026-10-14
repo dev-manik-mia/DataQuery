@@ -183,8 +183,8 @@ pub async fn open(
         let handle = tokio::time::timeout(timeout, connect_hop(&config, hop, secret, sessions.last(), known))
             .await
             .map_err(|_| {
-                DbError::new(ErrorKind::Timeout, format!("Timed out connecting to SSH host {}:{}.", hop.host, hop.port))
-            })??;
+            DbError::new(ErrorKind::Timeout, format!("Timed out connecting to SSH host {}:{}.", hop.host, hop.port))
+        })??;
         sessions.push(Arc::new(handle));
     }
     let last = sessions.last().cloned().ok_or_else(|| DbError::internal("tunnel without hops"))?;
@@ -220,8 +220,7 @@ async fn connect_hop(
     known: &Arc<KnownHosts>,
 ) -> DbResult<Handle<Client>> {
     let rejected = Arc::new(Mutex::new(None));
-    let handler =
-        Client { host: hop.host.clone(), port: hop.port, known: known.clone(), rejected: rejected.clone() };
+    let handler = Client { host: hop.host.clone(), port: hop.port, known: known.clone(), rejected: rejected.clone() };
     let connected = match via {
         None => client::connect(config.clone(), (hop.host.as_str(), hop.port), handler).await,
         Some(previous) => {
@@ -250,9 +249,7 @@ async fn authenticate(handle: &mut Handle<Client>, hop: &SshHop, secret: Option<
     let user = hop.username.clone();
     let result = match &hop.auth {
         SshAuth::Password => {
-            let password = secret.ok_or_else(|| {
-                auth_error(hop, "No SSH password is saved for this host.")
-            })?;
+            let password = secret.ok_or_else(|| auth_error(hop, "No SSH password is saved for this host."))?;
             handle.authenticate_password(user, password).await.map_err(|e| ssh_error(hop, &e))?
         }
         SshAuth::PrivateKey { path } => {
@@ -330,10 +327,9 @@ fn auth_error(hop: &SshHop, message: &str) -> DbError {
 
 fn ssh_error(hop: &SshHop, e: &russh::Error) -> DbError {
     let kind = match e {
-        russh::Error::IO(_)
-        | russh::Error::Disconnect
-        | russh::Error::HUP
-        | russh::Error::ChannelOpenFailure(_) => ErrorKind::Network,
+        russh::Error::IO(_) | russh::Error::Disconnect | russh::Error::HUP | russh::Error::ChannelOpenFailure(_) => {
+            ErrorKind::Network
+        }
         _ => ErrorKind::Server,
     };
     DbError::new(kind, format!("SSH {}:{}: {e}", hop.host, hop.port)).with_code("SSH")
@@ -351,9 +347,10 @@ mod tests {
     fn unknown_keys_are_trusted_only_by_matching_fingerprint() {
         let dir = tempfile::tempdir().unwrap();
         let known = KnownHosts::app_only(dir.path().join("known_hosts"));
-        let key =
-            russh::keys::parse_public_key_base64("AAAAC3NzaC1lZDI1NTE5AAAAIBIaTVo9Oi7QgCtZ9I1WE0+gyit5Hje4Qq6l0jiptYyz")
-                .unwrap();
+        let key = russh::keys::parse_public_key_base64(
+            "AAAAC3NzaC1lZDI1NTE5AAAAIBIaTVo9Oi7QgCtZ9I1WE0+gyit5Hje4Qq6l0jiptYyz",
+        )
+        .unwrap();
         let HostKeyCheck::Unknown { fingerprint: shown, .. } = known.check("db", 2222, &key) else {
             panic!("a new key must be unknown");
         };

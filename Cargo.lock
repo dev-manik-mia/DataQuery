@@ -1384,6 +1384,7 @@ name = "dq-ssh"
 version = "0.1.0"
 dependencies = [
  "dq-core",
+ "dq-postgres",
  "russh",
  "tempfile",
  "tokio",

@@ -5,9 +5,9 @@ import type { Priority } from '@/bindings/Priority';
 
 export type ChipTone = 'positive' | 'caution' | 'critical' | 'accent' | 'mute' | 'faint';
 
-export function Chip({ tone, dot = false, small = false, children }: { tone: ChipTone; dot?: boolean; small?: boolean; children: ReactNode }) {
+export function Chip({ tone, dot = false, small = false, title, children }: { tone: ChipTone; dot?: boolean; small?: boolean; title?: string; children: ReactNode }) {
   return (
-    <span className={`dq-chip dq-chip--${tone}${small ? ' dq-chip--sm' : ''}`}>
+    <span className={`dq-chip dq-chip--${tone}${small ? ' dq-chip--sm' : ''}`} title={title}>
       {dot && <span className="dq-chip__dot" aria-hidden />}
       {children}
     </span>

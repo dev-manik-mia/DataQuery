@@ -67,7 +67,11 @@ pub async fn connect(state: State<'_, AppState>, connection_id: String) -> CmdRe
 /// attached. Works after the session was closed (idle timeout, network loss).
 /// Unsaved results of the old session are lost.
 #[tauri::command]
-pub async fn reconnect(state: State<'_, AppState>, session_id: String, connection_id: String) -> CmdResult<SessionInfo> {
+pub async fn reconnect(
+    state: State<'_, AppState>,
+    session_id: String,
+    connection_id: String,
+) -> CmdResult<SessionInfo> {
     let existing = state.sessions.read().await.get(&session_id).map(|s| s.connection_id.clone());
     if existing.as_ref().is_some_and(|id| *id != connection_id) {
         return Err(dq_core::DbError::invalid("This session belongs to another connection."));

@@ -169,7 +169,10 @@ pub fn page_query(
 pub fn count_query(d: &dyn Dialect, structure: &TableStructure, rows: &RowFilter) -> DbResult<BoundQuery> {
     let mut p = Params { dialect: d, inline: false, values: Vec::new() };
     let where_ = where_clause(&mut p, structure, rows)?;
-    Ok(BoundQuery { sql: format!("SELECT count(*) FROM {}{where_}", d.quoted_name(&structure.object)), params: p.values })
+    Ok(BoundQuery {
+        sql: format!("SELECT count(*) FROM {}{where_}", d.quoted_name(&structure.object)),
+        params: p.values,
+    })
 }
 
 /// `SELECT … LIMIT 100;` template for "Generate SELECT".

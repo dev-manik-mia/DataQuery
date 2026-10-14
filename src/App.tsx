@@ -1,3 +1,4 @@
+import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 
 import { GlobalDialogs } from '@/components/shell/GlobalDialogs';
@@ -5,7 +6,7 @@ import styles from '@/components/shell/Shell.module.css';
 import { StatusBar, StatusIndicator } from '@/components/shell/StatusBar';
 import { Toasts } from '@/components/shell/Toasts';
 import { Crumbs, TitleBar, TitleDivider } from '@/components/shell/TitleBar';
-import { Button, EngineMark, EnvironmentChip, Icon, Menu } from '@/components/ui';
+import { Button, Chip, EngineMark, EnvironmentChip, Icon, Menu } from '@/components/ui';
 import { ConnectionForm } from '@/features/connections/ConnectionForm';
 import { ConnectionsHome } from '@/features/connections/ConnectionsHome';
 import { EnginePicker } from '@/features/connections/EnginePicker';
@@ -21,7 +22,7 @@ import { useConnections, useEngine } from '@/stores/connections';
 import { useLayout } from '@/stores/layout';
 import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
-import { useWorkspace } from '@/stores/workspace';
+import { noteSessionClosed, useWorkspace } from '@/stores/workspace';
 
 export const RUN_EVENT = 'dq:run';
 export type RunMode = 'statement' | 'script';
@@ -36,6 +37,8 @@ export function App() {
     void useSettings.getState().load();
     void useConnections.getState().load();
     void useLayout.getState().load();
+    const unlisten = listen<{ session_id: string; reason: string }>('session-closed', (e) => noteSessionClosed(e.payload.session_id, e.payload.reason));
+    return () => void unlisten.then((fn) => fn());
   }, []);
 
   useEffect(() => {
@@ -118,6 +121,21 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
                 {c.name} <Icon name="chevronDown" size={10} />
               </button>
               <EnvironmentChip environment={c.environment} />
+              {session.server.read_only && (
+                <Chip tone="mute" title={c.config.read_only ? 'Read-only connection profile' : 'The server is read-only (standby)'}>
+                  <Icon name="lock" size={11} /> Read-only
+                </Chip>
+              )}
+              {session.tunneled && (
+                <Chip tone="mute" title={`SSH tunnel via ${c.config.ssh?.host.host ?? ''}`}>
+                  SSH
+                </Chip>
+              )}
+              {session.insecure && (
+                <Chip tone="caution" title={session.insecure}>
+                  <Icon name="warning" size={11} /> Not secure
+                </Chip>
+              )}
               <StatusIndicator status={link} live={false} />
             </>
           }
@@ -188,7 +206,7 @@ function WorkspaceStatus() {
       status={link}
       left={
         <>
-          {link === 'failed' && (
+          {(link === 'failed' || link === 'disconnected') && (
             <Button size="sm" onClick={() => void useWorkspace.getState().reconnect()}>
               Reconnect
             </Button>
