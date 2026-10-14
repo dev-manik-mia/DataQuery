@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dq_core::DbResult;
-use dq_core::document::DocumentFeatures;
+use dq_core::document::{DocumentFeatures, DocumentStore};
 use dq_core::engine::Capabilities;
 use dq_core::result::ServerInfo;
 use dq_core::sql::SqlFlavor;
@@ -42,7 +42,7 @@ async fn open(state: &AppState, connection_id: &str, session_id: String) -> DbRe
         server: opened.session.info().clone(),
         capabilities: adapter.capabilities(),
         flavor: opened.session.dialect().flavor(),
-        documents: opened.session.documents().map(|d| d.features()),
+        documents: opened.session.documents().map(DocumentStore::features),
         tunneled: opened.tunnel.is_some(),
         insecure: connection.config.insecure_reason().map(str::to_owned),
         connection,

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
-use dq_core::document::{DocumentStore, FindRequest};
+use dq_core::document::FindRequest;
 use dq_core::engine::Engine;
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops::{self, ImportMapping};
@@ -66,6 +66,7 @@ async fn session(cfg: &ConnConfig) -> Arc<dyn Session> {
 struct Table {
     name: String,
     client: Arc<Client>,
+    config: ConnConfig,
 }
 
 impl Table {
@@ -101,7 +102,7 @@ impl Table {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        Self { name, client }
+        Self { name, client, config: cfg.clone() }
     }
 
     fn object(&self) -> ObjectRef {
@@ -119,11 +120,12 @@ impl Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        // The test's runtime is ending, so delete on a runtime of our own.
-        let (client, name) = (self.client.clone(), self.name.clone());
+        // The test's runtime is blocked here, so delete with a client and runtime of our own.
+        let (config, name) = (self.config.clone(), self.name.clone());
         let _ = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             runtime.block_on(async {
+                let client = Client::new(&params(&config)).unwrap();
                 let _ = client.call("DeleteTable", &json!({"TableName": name})).await;
             });
         })

@@ -276,8 +276,7 @@ fn template_where(d: &dyn Dialect, structure: &TableStructure, first: usize) -> 
 /// `UPDATE` template setting every editable non-key column, matched on the row identity.
 pub fn update_template(d: &dyn Dialect, structure: &TableStructure) -> String {
     if d.flavor() == SqlFlavor::Mongodb {
-        let names: Vec<&str> =
-            structure.columns.iter().filter(|c| c.name != "_id").map(|c| c.name.as_str()).collect();
+        let names: Vec<&str> = structure.columns.iter().filter(|c| c.name != "_id").map(|c| c.name.as_str()).collect();
         return format!(
             "{}.updateOne(\n  {{ _id: null }},\n  {{ $set: {{\n{}\n  }} }}\n)",
             d.display_name(&structure.object),
@@ -692,12 +691,17 @@ mod tests {
         use crate::sql::dialect::{MongoDialect, PartiqlDialect};
         let object = ObjectRef::new(NodeKind::Table, "shop", None, "orders");
         let columns = vec!["_id".to_owned(), "total".to_owned()];
-        assert_eq!(select_template(&MongoDialect, &object, &columns), "db.orders.find({}, { _id: 1, total: 1 }).limit(100)");
+        assert_eq!(
+            select_template(&MongoDialect, &object, &columns),
+            "db.orders.find({}, { _id: 1, total: 1 }).limit(100)"
+        );
         assert_eq!(select_template(&PartiqlDialect, &object, &[]), "SELECT *\nFROM orders;");
         let odd = TableStructure { object: ObjectRef::new(NodeKind::Table, "shop", None, "order items"), ..orders() };
         assert_eq!(delete_template(&MongoDialect, &odd), "db.getCollection(\"order items\").deleteOne({ _id: null })");
         let partiql = TableStructure { object: object.clone(), ..orders() };
-        assert!(insert_template(&PartiqlDialect, &partiql).starts_with("INSERT INTO orders\nVALUE {'id': ?, 'total': ?"));
+        assert!(
+            insert_template(&PartiqlDialect, &partiql).starts_with("INSERT INTO orders\nVALUE {'id': ?, 'total': ?")
+        );
         assert!(update_template(&MongoDialect, &partiql).contains("$set: {\n    id: null,\n    total: null"));
     }
 }

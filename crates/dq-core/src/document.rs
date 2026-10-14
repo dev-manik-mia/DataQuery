@@ -194,8 +194,12 @@ pub trait DocumentStore: Send + Sync {
     /// Inserts imported rows: each value is converted with its column's
     /// `data_type` (a type label sampled from the collection, or empty to
     /// infer). Returns how many documents were written.
-    async fn insert_rows(&self, object: &ObjectRef, columns: &[ColumnInfo], rows: Vec<Vec<Option<String>>>)
-    -> DbResult<u64>;
+    async fn insert_rows(
+        &self,
+        object: &ObjectRef,
+        columns: &[ColumnInfo],
+        rows: Vec<Vec<Option<String>>>,
+    ) -> DbResult<u64>;
 }
 
 /// Grid columns and rows from documents: one column per top-level field, in

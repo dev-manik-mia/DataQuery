@@ -72,10 +72,31 @@ pub(super) fn classify(src: &str, sig: &[Token]) -> (StatementKind, bool, Option
         arg.is_empty() || arg == "{}"
     };
     match method {
-        "find" | "findOne" | "countDocuments" | "estimatedDocumentCount" | "count" | "distinct" | "getIndexes"
-        | "indexes" | "stats" | "dataSize" | "storageSize" | "totalIndexSize" | "getCollectionNames"
-        | "getCollectionInfos" | "listCollections" | "getName" | "version" | "serverStatus" | "hostInfo"
-        | "isMaster" | "hello" | "currentOp" | "getUsers" | "getRoles" | "validate" => (StatementKind::Select, false, None),
+        "find"
+        | "findOne"
+        | "countDocuments"
+        | "estimatedDocumentCount"
+        | "count"
+        | "distinct"
+        | "getIndexes"
+        | "indexes"
+        | "stats"
+        | "dataSize"
+        | "storageSize"
+        | "totalIndexSize"
+        | "getCollectionNames"
+        | "getCollectionInfos"
+        | "listCollections"
+        | "getName"
+        | "version"
+        | "serverStatus"
+        | "hostInfo"
+        | "isMaster"
+        | "hello"
+        | "currentOp"
+        | "getUsers"
+        | "getRoles"
+        | "validate" => (StatementKind::Select, false, None),
         "aggregate" => {
             let writes = sig.iter().any(|t| matches!(t.text(src), "$out" | "$merge" | "\"$out\"" | "\"$merge\""));
             (if writes { StatementKind::Insert } else { StatementKind::Select }, writes, None)
@@ -151,8 +172,8 @@ mod tests {
         assert_eq!(split("db.a.deleteMany({ x: 1 })")[0].3, None);
         assert_eq!(split("db.a.updateMany({}, { $set: { y: 1 } })")[0].3, Some(D::UpdateAllDocuments));
         assert_eq!(split("db.getCollection('a b').drop()")[0].3, Some(D::Drop));
-        assert_eq!(split("db.a.aggregate([{ $match: {} }, { $out: 'b' }])")[0].2, true);
-        assert_eq!(split("db.a.aggregate([{ $match: {} }])")[0].2, false);
+        assert!(split("db.a.aggregate([{ $match: {} }, { $out: 'b' }])")[0].2);
+        assert!(!split("db.a.aggregate([{ $match: {} }])")[0].2);
         assert_eq!(split("db.a.find().explain('executionStats')")[0].1, K::Explain);
         assert!(split("db.runCommand({ ping: 1 })")[0].2);
         assert!(split("ObjectId()")[0].2);

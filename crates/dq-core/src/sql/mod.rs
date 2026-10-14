@@ -14,6 +14,6 @@ pub use analyze::{
     split_statements, transaction_effect,
 };
 pub use dialect::{
-    ClickhouseDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect, PostgresDialect,
-    SnowflakeDialect, SqlFlavor, SqlServerDialect,
+    ClickhouseDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect,
+    PostgresDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
 };

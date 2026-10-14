@@ -88,10 +88,18 @@ pub async fn documents_statement(
 #[serde(tag = "op", rename_all = "snake_case")]
 #[ts(export)]
 pub enum DocumentChange {
-    Insert { text: String },
-    Replace { key: String, text: String },
+    Insert {
+        text: String,
+    },
+    Replace {
+        key: String,
+        text: String,
+    },
     /// `label` names the document in the confirmation.
-    Delete { key: String, label: String },
+    Delete {
+        key: String,
+        label: String,
+    },
 }
 
 /// Applies one change. Returns the key of the written document (empty for a delete).
@@ -111,10 +119,9 @@ pub async fn documents_write(
     let open = state.session(&session_id).await?;
     let (connection, settings) = tokio::try_join!(state.connection(&open.connection_id), state.settings())?;
     let intent = match &change {
-        DocumentChange::Delete { label, .. } => Intent {
-            writes: true,
-            destructive: vec![format!("Deletes the document {label} from {}.", object.name)],
-        },
+        DocumentChange::Delete { label, .. } => {
+            Intent { writes: true, destructive: vec![format!("Deletes the document {label} from {}.", object.name)] }
+        }
         _ => Intent::write(),
     };
     if let Some(request) = safety::check(&connection, &settings, &intent, confirmation.as_ref())? {

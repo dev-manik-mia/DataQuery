@@ -138,7 +138,7 @@ function validate(s: FormState, fileBased: boolean, engine: Engine): Errors {
     errors.ssh = 'Every SSH host needs a host, port, user and (for key auth) a key file.';
   }
   if (s.auth.method === 'aws_iam' && !s.auth.region && engine !== 'dynamodb') errors.auth = 'Enter the AWS region.';
-  if (s.auth.method !== 'password' && s.sslMode === 'disable') errors.auth = 'Cloud IAM authentication requires TLS.';
+  if (s.auth.method !== 'password' && s.sslMode === 'disable' && engine !== 'dynamodb') errors.auth = 'Cloud IAM authentication requires TLS.';
   if (s.tlsFiles.client_cert_file !== null && s.tlsFiles.client_key_file === null) errors.tlsFiles = 'Choose the client key too.';
   if (s.tlsFiles.client_key_file !== null && s.tlsFiles.client_cert_file === null) errors.tlsFiles = 'Choose the client certificate too.';
   if (!s.name.trim()) errors.name = 'Give the connection a name.';

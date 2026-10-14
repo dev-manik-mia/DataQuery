@@ -10,8 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::config::ConnConfig;
-use crate::edit::BoundStatement;
 use crate::document::DocumentStore;
+use crate::edit::BoundStatement;
 use crate::engine::{Capabilities, Engine};
 use crate::error::{DbError, DbResult};
 use crate::explain::{ExplainDialect, ExplainResult};

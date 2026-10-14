@@ -259,7 +259,8 @@ export function DocumentsView({ object }: { object: ObjectRef }) {
                 <DocumentTree
                   documents={documents}
                   onCopy={(d) => void copyText(d.text).then(() => toast('Document copied'))}
-                  onEdit={writable ? (d) => setEditing({ document: d }) : undefined}
+                  // A projection shows partial documents: saving one would drop the hidden fields.
+                  onEdit={writable && !query.projection.trim() ? (d) => setEditing({ document: d }) : undefined}
                   onDelete={writable ? (d) => void remove(d) : undefined}
                 />
               )}

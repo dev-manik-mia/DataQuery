@@ -376,7 +376,8 @@ impl ConnConfig {
                 return Err(DbError::invalid("Enter an AWS region such as eu-west-1 (and an optional profile name)."));
             }
         }
-        if self.auth.is_cloud() && self.ssl_mode == SslMode::Disable {
+        // DynamoDB signs requests (SigV4) instead of sending a token, so DynamoDB Local over HTTP is fine.
+        if self.auth.is_cloud() && self.ssl_mode == SslMode::Disable && self.engine != Engine::Dynamodb {
             return Err(DbError::invalid(
                 "Cloud IAM authentication requires TLS. Choose an SSL mode other than disable.",
             ));

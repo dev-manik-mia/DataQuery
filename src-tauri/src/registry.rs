@@ -20,6 +20,7 @@ impl Registry {
             (Engine::Duckdb, Arc::new(dq_duckdb::DuckdbAdapter)),
             (Engine::Snowflake, Arc::new(dq_snowflake::SnowflakeAdapter)),
             (Engine::Mongodb, Arc::new(dq_mongodb::MongodbAdapter)),
+            (Engine::Dynamodb, Arc::new(dq_dynamodb::DynamodbAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];
