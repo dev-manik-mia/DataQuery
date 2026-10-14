@@ -5,7 +5,7 @@ Every feature row in sections 1–12 of [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATUR
 Rows already shipped before this list was written are marked done with *(existing)*.
 
 **Status (2026-10-14): every task in §1–§12 is done.** Notes under "Verification" say which ones could not be exercised against a live external service.
-Engines (§13) and milestones (§14) are out of scope here; they are tracked in [`feature_completed.md`](feature_completed.md).
+Milestones (§14) and the engines not listed below are tracked in [`feature_completed.md`](feature_completed.md).
 
 Rules that apply to every task (from §0): validate all input in Rust, values only as bound parameters,
 identifiers quoted by the engine `Dialect`, no secrets in logs/files/errors, bounded results, nothing on the UI thread,
@@ -124,6 +124,21 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 13. Engines: SQL Server, Oracle, CockroachDB
+
+- [x] T13.1 Core dialects: T-SQL (`[name]`, `N'…'`, `@P1`, `OFFSET … FETCH`, `IDENTITY(1,1)`, `0x…`) and Oracle (`"NAME"`, `:1`, `FETCH FIRST`, `INSERT ALL`, `HEXTORAW`) in `dq-core/sql/dialect.rs`; paging, templates, binary/boolean literals, insert batching and parameter limits are dialect methods, not per-engine branches.
+- [x] T13.2 Lexer and splitter: `GO` and `/` separator lines, T-SQL `BEGIN … END` blocks and routine bodies, PL/SQL units, Oracle q-quotes, `#temp` names, `@P1` and `:1` parameters (`:new` is not a parameter); transaction effects per engine (Oracle DDL commits, `SET TRANSACTION`, T-SQL `BEGIN TRAN`).
+- [x] T13.3 Schema-change SQL per engine: SQL Server `ADD`, `ALTER COLUMN`, `sp_rename`, default constraints; Oracle `ADD (…)`, `MODIFY (…)`, `CASCADE CONSTRAINTS`; DEFAULT before NOT NULL everywhere.
+- [x] T13.4 `Session::explain` hook (default: the engine's EXPLAIN statement); CockroachDB text-tree parser; SQL Server showplan XML reader; Oracle PLAN_TABLE tree and DBMS_XPLAN.
+- [x] T13.5 SQL Server adapter `dq-sqlserver`: connection (TLS modes, CA/client cert, keepalive, SSH endpoint), query worker that keeps results open between pages and cancels with TDS attention, statement timeout, catalog pool switching databases, explorer, structure, DDL, dependencies, schema model, edits/imports in one transaction (XACT_ABORT), monitoring and KILL.
+- [x] T13.6 Oracle adapter `dq-oracle`: Instant Client discovery with an actionable error, EZConnect (TCP/TCPS), NLS settings that round-trip values, bind by name, implicit-commit semantics with explicit transactions, server-side cancel and timeout that keep the session, explorer (schemas, groups), structure, DBMS_METADATA DDL, dependencies, schema model, monitoring, ALTER SYSTEM cancel/kill.
+- [x] T13.7 CockroachDB through the PostgreSQL adapter: flavor detection, `defaultdb`, hidden schemas, NULL-safe catalog columns, sizes when available, `rowid` key, `crdb_internal` monitoring and cancel.
+- [x] T13.8 App and UI: registry, transaction start per dialect, URL import (`sqlserver://`, `mssql://`, `oracle://`, `cockroachdb://`, `encrypt`/`trustServerCertificate`), editor dialects (MSSQL, PL/SQL), parameter labels, type suggestions, identity labels, service-name field, SSL labels per engine, schema-diff schemas, monitor titles, tested-platforms text.
+- [x] T13.9 Test databases: `sqlserver`, `oracle`, `cockroach` services with seeds in `docker/`; integration tests `crates/dq-sqlserver/tests`, `crates/dq-oracle/tests`, `crates/dq-postgres/tests/cockroach.rs`; `npm run test:oracle`.
+- [x] T13.10 One rustls crypto provider (ring) installed for the whole process (`dq_core::tls`), since the SQL Server driver links a second one.
+
+---
+
 ## Verification
 
 | Area | How it was verified |
@@ -145,4 +160,5 @@ Not exercised against a live external service (code paths are implemented and un
 ## Verification for every task
 
 `npm run check` (tsc, eslint, vitest, `cargo fmt --check`, `clippy -D warnings`, `cargo test`) and
-`npm run test:integration` against PostgreSQL 17, MySQL 8.4 and MariaDB 11.4 in Docker.
+`npm run test:integration` against PostgreSQL 17, CockroachDB 25.2, MySQL 8.4, MariaDB 11.4, SQL Server 2022
+and Oracle 23ai Free in Docker (Oracle through `npm run test:oracle`).

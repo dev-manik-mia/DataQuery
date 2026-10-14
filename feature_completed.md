@@ -1,12 +1,12 @@
 # DataQuery — Feature Status
 
 Status of every feature in [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) (the target scope).
-**Engines done:** PostgreSQL 12–17 ✅ · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter).
+**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅.
 
 Legend: ✅ Done · 🟡 Partial · ⬜ Not started · Pri = priority from the feature list.
 "Done" means it works end-to-end (UI → Tauri command → adapter) and, where it touches a database, is covered by integration tests against real servers.
 
-_Last updated: 2026-10-14 (all of §1–§12 complete; task list in [`tasks.md`](tasks.md))._
+_Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle and CockroachDB added; task list in [`tasks.md`](tasks.md))._
 
 ---
 
@@ -17,14 +17,17 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; task list in [`tasks.md`]
 | **M1** Foundation + PostgreSQL (MVP) | shell, connections, keychain, explorer, editor, run/cancel, bounded grid, settings, tests | ✅ Done |
 | **M2** Data management (P0) | table data view, safe inline edits, export/import, history, scripts, structure + DDL | ✅ Done |
 | **M3** Beta (P0) | MySQL ✅, MariaDB ✅, SQLite ⬜, production safeguards ✅, URL import ✅, signed updates ✅, Docker integration tests ✅, macOS bundle ✅ (Windows/Linux packaging untested) | 🟡 SQLite left |
-| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). P1/P2 **engines** (§13) not started |
+| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). Engines: SQL Server ✅, Oracle ✅, CockroachDB ✅; ClickHouse, Redis and the other P1/P2 engines ⬜ |
 
 ### Tests (all passing)
 
 | Suite | Count | Command |
 |---|---|---|
-| Rust unit tests (core, store, ssh, app) | 197 | `cargo test --workspace` |
+| Rust unit tests (core, adapters, store, ssh, app) | 217 | `cargo test --workspace` |
 | PostgreSQL 17 integration | 24 | `npm run db:up` then `npm run test:integration` |
+| CockroachDB 25.2 integration (PostgreSQL adapter) | 11 | 〃 (port 56257) |
+| SQL Server 2022 integration | 21 | 〃 (port 51433) |
+| Oracle 23ai Free integration | 15 | `npm run test:oracle` (runs in a Linux container; part of `test:integration`) |
 | MySQL 8.4 integration | 22 | 〃 (port 53306) |
 | MariaDB 11.4 integration | 22 | 〃 (port 53307, same suite) |
 | SSH tunnel integration (OpenSSH bastion → PostgreSQL) | 3 | 〃 (port 52222) |
@@ -214,6 +217,9 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; task list in [`tasks.md`]
 | MySQL 5.7–8.4 | P0 | ✅ (tested on 8.4) |
 | MariaDB 10.6–11 | P0 | ✅ (tested on 11.4) |
 | SQLite | P0 | ⬜ next |
+| SQL Server 2017–2022 | P1 | ✅ (tested on 2022) — `dq-sqlserver` (tiberius, rustls): database → schema (dbo) → tables/views, routines, sequences, indexes, triggers; T-SQL batches with `GO`, `@P1` parameters, cancel and timeout via TDS attention, results kept open between pages, SHOWPLAN/STATISTICS XML plans, DMV monitoring and `KILL`, schema changes (sp_rename, default constraints) |
+| Oracle 19c–23ai | P2 | ✅ (tested on 23ai Free) — `dq-oracle` (rust-oracle / ODPI-C, needs Oracle Instant Client): service → schema (user) → tables/views/materialized views, routines, sequences; PL/SQL blocks ended by `/`, `:1` parameters bound by name, server-side cancel, `EXPLAIN PLAN` and `DBMS_XPLAN` plans, `V$SESSION` monitoring, `DBMS_METADATA` DDL, implicit transactions committed per statement unless one is opened |
+| CockroachDB | P2 | ✅ (tested on 25.2) — PostgreSQL adapter with a CockroachDB flavor: text `EXPLAIN` tree, `crdb_internal` monitoring with `CANCEL QUERY`/`SESSION`, hidden `rowid` key used for editing keyless tables |
 | Everything else | P1/P2 | ⬜ |
 
 ---
@@ -227,3 +233,8 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; task list in [`tasks.md`]
 - Schema diff does not change primary keys or expression indexes; it lists them as warnings.
 - The update feed URL points at the repository in `Cargo.toml`; releases must be built with `npm run app:release` and the signing key.
 - Tested on macOS only; Windows and Linux compile from the same code but have not been run.
+- Oracle needs Oracle Instant Client installed (found via `DATAQUERY_ORACLE_CLIENT`, `~/Downloads/instantclient_*`, `/opt/oracle/instantclient_*` or the system library path). The Oracle tests run on Linux with the client copied from the test container; the macOS app with a real Instant Client was not tried.
+- Oracle and SQL Server have no read-only session mode: read-only profiles are enforced by DataQuery, which refuses writing statements, grid edits, imports and schema changes. Oracle and SQL Server TLS (TCPS, CA files, client certificates) were not tested against a TLS server.
+- SQL Server cancels a statement with an attention packet; the monitor can only end whole sessions (`KILL`). Only the first result set of a T-SQL batch is shown.
+- Oracle cancel uses `ALTER SYSTEM CANCEL SQL` when the account may run it, else a client break (which needs out-of-band network support to act immediately).
+- CockroachDB has no per-table size functions; sizes come from ranges and are approximate.
