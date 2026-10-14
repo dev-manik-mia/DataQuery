@@ -855,6 +855,7 @@ name = "dataquery"
 version = "0.1.0"
 dependencies = [
  "dq-core",
+ "dq-mysql",
  "dq-postgres",
  "dq-store",
  "serde",

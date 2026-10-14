@@ -1,7 +1,7 @@
 use dq_core::config::{ParsedUrl, parse_connection_url};
-use dq_core::{DbError, ErrorKind};
 use dq_core::engine::{EngineInfo, catalog};
 use dq_core::sql::{SqlFlavor, StatementInfo, split_statements};
+use dq_core::{DbError, ErrorKind};
 use dq_store::KeychainStatus;
 use serde::Serialize;
 use tauri::State;

@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use futures_util::{StreamExt, TryStreamExt};
 use dq_core::adapter::{BatchFn, Session, StatementIter, check_affected};
 use dq_core::config::ConnConfig;
 use dq_core::node::{Node, NodeKind, ObjectRef};
@@ -21,6 +20,7 @@ use dq_core::schema::TableStructure;
 use dq_core::sql::{Dialect, PostgresDialect, SqlFlavor, command_tag};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult};
+use futures_util::{StreamExt, TryStreamExt};
 use tokio::sync::{Mutex, mpsc};
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{CancelToken, Client, RowStream};

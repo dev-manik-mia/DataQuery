@@ -16,6 +16,7 @@ tauri-build = { version = "2.5", features = [] }
 [dependencies]
 dq-core.workspace = true
 dq-postgres.workspace = true
+dq-mysql.workspace = true
 dq-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true

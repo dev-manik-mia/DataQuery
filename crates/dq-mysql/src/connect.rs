@@ -9,7 +9,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, DriverError, Opts, OptsBuilder, PoolConstraints, PoolOpts, SslOpts};
 
 use crate::error::map_error;
-use crate::text;
+use crate::values::text;
 
 /// What a connection is used for. Catalog connections are read-only at the
 /// session level, so table views and exports can never write.
@@ -68,7 +68,7 @@ fn opts(
         .user(Some(config.username.clone()))
         .pass(password.map(str::to_owned))
         .db_name(Some(config.database.clone()).filter(|d| !d.is_empty()))
-        .tcp_keepalive(Some(60_000_u32))
+        .tcp_keepalive(Some(Duration::from_secs(60)))
         // Loopback servers are often in containers whose socket path is not ours.
         .prefer_socket(false)
         // Grid edits check affected rows; count matched rows, not only changed ones.
@@ -156,7 +156,8 @@ pub async fn open_query(config: &ConnConfig, password: Option<&str>) -> DbResult
         .await
         .map_err(err)?
         .ok_or_else(|| DbError::internal("the server returned no version"))?;
-    let tls: Option<mysql_async::Row> = conn.query_first("SHOW SESSION STATUS LIKE 'Ssl_version'").await.map_err(err)?;
+    let tls: Option<mysql_async::Row> =
+        conn.query_first("SHOW SESSION STATUS LIKE 'Ssl_version'").await.map_err(err)?;
     let tls_version = tls.and_then(|r| text(&r, 1)).filter(|v| !v.is_empty());
 
     let version = text(&row, 0).unwrap_or_default();

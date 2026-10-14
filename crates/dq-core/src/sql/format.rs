@@ -7,23 +7,129 @@ use super::lexer::{Token, TokenKind, tokenize};
 
 /// Clauses that start a new line at the current nesting level.
 const CLAUSES: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "UNION", "UNION ALL", "INTERSECT",
-    "EXCEPT", "VALUES", "SET", "RETURNING", "WINDOW", "INSERT INTO", "UPDATE", "DELETE FROM", "ON CONFLICT", "WITH",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "GROUP BY",
+    "ORDER BY",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "UNION",
+    "UNION ALL",
+    "INTERSECT",
+    "EXCEPT",
+    "VALUES",
+    "SET",
+    "RETURNING",
+    "WINDOW",
+    "INSERT INTO",
+    "UPDATE",
+    "DELETE FROM",
+    "ON CONFLICT",
+    "WITH",
 ];
 
 const JOINS: &[&str] = &[
-    "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN", "LEFT OUTER JOIN", "RIGHT OUTER JOIN",
-    "FULL OUTER JOIN", "NATURAL JOIN",
+    "JOIN",
+    "INNER JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "FULL JOIN",
+    "CROSS JOIN",
+    "LEFT OUTER JOIN",
+    "RIGHT OUTER JOIN",
+    "FULL OUTER JOIN",
+    "NATURAL JOIN",
 ];
 
 const KEYWORDS: &[&str] = &[
-    "ADD", "ALL", "ALTER", "AND", "ANY", "AS", "ASC", "BEGIN", "BETWEEN", "BY", "CASE", "CAST", "COLUMN", "COMMIT",
-    "CONFLICT", "CONSTRAINT", "CREATE", "CROSS", "DEFAULT", "DELETE", "DESC", "DISTINCT", "DO", "DROP", "ELSE", "END",
-    "EXCEPT", "EXISTS", "FALSE", "FETCH", "FOR", "FOREIGN", "FROM", "FULL", "GROUP", "HAVING", "ILIKE", "IN", "INDEX",
-    "INNER", "INSERT", "INTERSECT", "INTERVAL", "INTO", "IS", "JOIN", "KEY", "LATERAL", "LEFT", "LIKE", "LIMIT", "NATURAL",
-    "NOT", "NOTHING", "NULL", "NULLS", "OFFSET", "ON", "OR", "ORDER", "OUTER", "OVER", "PARTITION", "PRIMARY",
-    "RECURSIVE", "REFERENCES", "RETURNING", "RIGHT", "ROLLBACK", "SELECT", "SET", "TABLE", "THEN", "TO", "TRUE",
-    "TRUNCATE", "UNION", "UNIQUE", "UPDATE", "USING", "VALUES", "VIEW", "WHEN", "WHERE", "WINDOW", "WITH",
+    "ADD",
+    "ALL",
+    "ALTER",
+    "AND",
+    "ANY",
+    "AS",
+    "ASC",
+    "BEGIN",
+    "BETWEEN",
+    "BY",
+    "CASE",
+    "CAST",
+    "COLUMN",
+    "COMMIT",
+    "CONFLICT",
+    "CONSTRAINT",
+    "CREATE",
+    "CROSS",
+    "DEFAULT",
+    "DELETE",
+    "DESC",
+    "DISTINCT",
+    "DO",
+    "DROP",
+    "ELSE",
+    "END",
+    "EXCEPT",
+    "EXISTS",
+    "FALSE",
+    "FETCH",
+    "FOR",
+    "FOREIGN",
+    "FROM",
+    "FULL",
+    "GROUP",
+    "HAVING",
+    "ILIKE",
+    "IN",
+    "INDEX",
+    "INNER",
+    "INSERT",
+    "INTERSECT",
+    "INTERVAL",
+    "INTO",
+    "IS",
+    "JOIN",
+    "KEY",
+    "LATERAL",
+    "LEFT",
+    "LIKE",
+    "LIMIT",
+    "NATURAL",
+    "NOT",
+    "NOTHING",
+    "NULL",
+    "NULLS",
+    "OFFSET",
+    "ON",
+    "OR",
+    "ORDER",
+    "OUTER",
+    "OVER",
+    "PARTITION",
+    "PRIMARY",
+    "RECURSIVE",
+    "REFERENCES",
+    "RETURNING",
+    "RIGHT",
+    "ROLLBACK",
+    "SELECT",
+    "SET",
+    "TABLE",
+    "THEN",
+    "TO",
+    "TRUE",
+    "TRUNCATE",
+    "UNION",
+    "UNIQUE",
+    "UPDATE",
+    "USING",
+    "VALUES",
+    "VIEW",
+    "WHEN",
+    "WHERE",
+    "WINDOW",
+    "WITH",
 ];
 
 const INDENT: &str = "  ";
@@ -106,7 +212,11 @@ pub fn format_sql(src: &str, flavor: SqlFlavor) -> String {
         out.push_str(&rendered);
         line_start = false;
         // Clauses put their first item on the same line; long select lists stay readable.
-        i += if t.kind == TokenKind::Word && KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(text)) { consumed } else { 1 };
+        i += if t.kind == TokenKind::Word && KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(text)) {
+            consumed
+        } else {
+            1
+        };
     }
     let mut out = out.trim_end().to_owned();
     if !out.is_empty() && !out.ends_with(';') && src.trim_end().ends_with(';') {
@@ -125,7 +235,10 @@ fn keyword_phrase(src: &str, tokens: &[Token], i: usize) -> (String, usize) {
         let words: Option<Vec<String>> = (0..len).map(|k| word(i + k)).collect();
         if let Some(words) = words {
             let phrase = words.join(" ");
-            if CLAUSES.contains(&phrase.as_str()) || JOINS.contains(&phrase.as_str()) || matches!(phrase.as_str(), "IS NOT" | "NOT NULL" | "IS NULL") {
+            if CLAUSES.contains(&phrase.as_str())
+                || JOINS.contains(&phrase.as_str())
+                || matches!(phrase.as_str(), "IS NOT" | "NOT NULL" | "IS NULL")
+            {
                 return (phrase, len);
             }
         }
@@ -147,7 +260,12 @@ fn newline(out: &mut String, depth: usize) {
 }
 
 fn space_before(out: &mut String, line_start: bool, next: &str) {
-    if line_start || out.is_empty() || out.ends_with(['(', ' ', '\n']) || next.starts_with([',', ')', '.', ':']) || out.ends_with(['.', ':']) {
+    if line_start
+        || out.is_empty()
+        || out.ends_with(['(', ' ', '\n'])
+        || next.starts_with([',', ')', '.', ':'])
+        || out.ends_with(['.', ':'])
+    {
         return;
     }
     out.push(' ');
@@ -176,7 +294,10 @@ mod tests {
     fn preserves_literals_and_comments() {
         let src = "-- keep me\nselect 'select from where', \"Mixed Case\", $$ and or $$ from t";
         let out = format_sql(src, SqlFlavor::Postgres);
-        assert!(out.starts_with("-- keep me\nSELECT 'select from where', \"Mixed Case\", $$ and or $$\nFROM t"), "{out}");
+        assert!(
+            out.starts_with("-- keep me\nSELECT 'select from where', \"Mixed Case\", $$ and or $$\nFROM t"),
+            "{out}"
+        );
     }
 
     #[test]

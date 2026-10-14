@@ -2,10 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
 use dq_core::config::ConnConfig;
 use dq_core::result::{ServerInfo, TlsInfo};
 use dq_core::{DbError, DbResult, ErrorKind, engine::Engine};
+use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio_postgres::{AsyncMessage, Client, config::SslMode as PgSslMode};
 use tokio_postgres_rustls::MakeRustlsConnect;

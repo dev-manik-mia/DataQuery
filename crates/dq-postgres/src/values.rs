@@ -7,10 +7,10 @@ use std::error::Error;
 use std::fmt::Write;
 
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime};
-use fallible_iterator::FallibleIterator;
-use postgres_protocol::types as wire;
 use dq_core::result::{ColumnMeta, Row as CellRow};
 use dq_core::value::{Cell, CellLimits, hex};
+use fallible_iterator::FallibleIterator;
+use postgres_protocol::types as wire;
 use tokio_postgres::Row;
 use tokio_postgres::types::{FromSql, Kind, Type};
 
