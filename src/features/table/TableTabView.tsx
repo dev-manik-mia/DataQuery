@@ -27,7 +27,7 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
 
   const relation = isRelation(tab.object);
   // Document engines show collections in the Documents view (screen 13).
-  const documents = session.documents !== null && relation;
+  const documents = session.documents != null && relation;
 
   useEffect(() => {
     if (!relation || documents) return;

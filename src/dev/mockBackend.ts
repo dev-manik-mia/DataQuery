@@ -209,7 +209,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
       const mongoCaps = { ...caps, ddl: false, schemas: false, materialized_views: false, schema_diff: false };
       return { session_id: `s-${c.id}`, connection: c, capabilities: mongoCaps, flavor: 'mongodb', documents: MONGO_FEATURES, tunneled: false, insecure: null, server: { engine: 'mongodb', version: 'MongoDB 7.0.14', latency_ms: 18, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'analyst', database: 'analytics', read_only: false } };
     }
-    return { session_id: `s-${c.id}`, connection: c, capabilities: caps, flavor: 'postgres', tunneled: false, insecure: null, server: { engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: c.config.database, read_only: false } };
+    return { session_id: `s-${c.id}`, connection: c, capabilities: caps, flavor: 'postgres', documents: null, keys: null, tunneled: false, insecure: null, server: { engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: c.config.database, read_only: false } };
   },
   reconnect: (a) => handlers.connect!({ connectionId: String(a.sessionId).replace(/^s-/, '') }),
   disconnect: () => null,

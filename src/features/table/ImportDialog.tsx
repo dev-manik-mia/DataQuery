@@ -51,7 +51,7 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
   const [jobId, setJobId] = useState<string | null>(null);
   const progress = useTransferProgress(jobId);
 
-  const documents = session.documents !== null;
+  const documents = session.documents != null;
   // Documents take new fields: file headers the collection does not have yet are offered too.
   const targets = useMemo(() => {
     const existing = structure.columns.filter((c) => c.editable);
