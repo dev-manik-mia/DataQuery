@@ -1,12 +1,12 @@
 # DataQuery — Feature Status
 
 Status of every feature in [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) (the target scope).
-**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅ · ClickHouse ✅ · DuckDB ✅ · Snowflake ✅ (emulator-tested).
+**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅ · ClickHouse ✅ · DuckDB ✅ · Snowflake ✅ (emulator-tested) · MongoDB 5–8 ✅ · DynamoDB ✅ (DynamoDB Local-tested).
 
 Legend: ✅ Done · 🟡 Partial · ⬜ Not started · Pri = priority from the feature list.
 "Done" means it works end-to-end (UI → Tauri command → adapter) and, where it touches a database, is covered by integration tests against real servers.
 
-_Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, CockroachDB, ClickHouse, DuckDB and Snowflake added; task list in [`tasks.md`](tasks.md))._
+_Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, CockroachDB, ClickHouse, DuckDB, Snowflake, MongoDB and DynamoDB added; task list in [`tasks.md`](tasks.md))._
 
 ---
 
@@ -17,13 +17,13 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | **M1** Foundation + PostgreSQL (MVP) | shell, connections, keychain, explorer, editor, run/cancel, bounded grid, settings, tests | ✅ Done |
 | **M2** Data management (P0) | table data view, safe inline edits, export/import, history, scripts, structure + DDL | ✅ Done |
 | **M3** Beta (P0) | MySQL ✅, MariaDB ✅, SQLite ⬜, production safeguards ✅, URL import ✅, signed updates ✅, Docker integration tests ✅, macOS bundle ✅ (Windows/Linux packaging untested) | 🟡 SQLite left |
-| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). Engines: SQL Server ✅, Oracle ✅, CockroachDB ✅, ClickHouse ✅, DuckDB ✅, Snowflake ✅; Redis and the other P1/P2 engines ⬜ |
+| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). Engines: SQL Server ✅, Oracle ✅, CockroachDB ✅, ClickHouse ✅, DuckDB ✅, Snowflake ✅, MongoDB ✅, DynamoDB ✅; Redis and the other P1/P2 engines ⬜ |
 
 ### Tests (all passing)
 
 | Suite | Count | Command |
 |---|---|---|
-| Rust unit tests (core, adapters, store, ssh, app) | 229 | `cargo test --workspace` |
+| Rust unit tests (core, adapters, store, ssh, app) | 274 | `cargo test --workspace` |
 | PostgreSQL 17 integration | 24 | `npm run db:up` then `npm run test:integration` |
 | CockroachDB 25.2 integration (PostgreSQL adapter) | 11 | 〃 (port 56257) |
 | SQL Server 2022 integration | 21 | 〃 (port 51433) |
@@ -33,8 +33,10 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | ClickHouse 25.8 integration | 9 | 〃 (port 58123) |
 | DuckDB integration (temporary files, no server) | 9 | 〃 (always runs) |
 | Snowflake integration against the fakesnow emulator | 6 | 〃 (port 58000) |
+| MongoDB 8.0 integration (single-node replica set) | 11 | 〃 (port 57017) |
+| DynamoDB integration against DynamoDB Local | 9 | 〃 (port 58002) |
 | SSH tunnel integration (OpenSSH bastion → PostgreSQL) | 3 | 〃 (port 52222) |
-| Frontend unit tests (Vitest) | 17 | `npm test` |
+| Frontend unit tests (Vitest) | 20 | `npm test` |
 | `cargo fmt --check`, `clippy -D warnings` (pedantic), `tsc --noEmit`, `eslint` | clean | `npm run check` |
 
 ---
@@ -226,6 +228,8 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | ClickHouse | P1 | ✅ (tested on 25.8) — `dq-clickhouse` (HTTP/HTTPS via reqwest): database → tables and views, `{p1:Type}` parameters, server sessions keep `SET`/`USE`/temporary tables, `KILL QUERY` cancel and timeout, `readonly=2` read-only profiles, `system.processes` monitoring, `EXPLAIN json=1` plans, `MergeTree` table creation, imports |
 | DuckDB | P2 | ✅ (DuckDB 1.5, bundled) — `dq-duckdb`: local database file or `:memory:`, catalog → schema → tables/views, sequences, indexes; exact `HUGEINT`/`DECIMAL`, interrupt-based cancel and timeout, read-only file access, grid edits, imports, JSON plans |
 | Snowflake | P2 | ✅ (tested against the fakesnow emulator only) — `dq-snowflake` (own REST client, Arrow results): account/warehouse/role/schema settings, database → schema → tables/views, routines, sequences; Snowflake Scripting blocks, `?` parameters, abort-based cancel and timeout, `GET_DDL`, grid edits on a separate writer session, `EXPLAIN USING JSON` plans |
+| MongoDB 5–8 | P2 | ✅ (tested on 8.0) — `dq-mongodb` (official driver, rustls): database → collections/views with document counts; mongosh-style statements (`db.orders.find(…).sort(…)`, `aggregate`, `insertOne`, `updateMany`, `createIndex`, `runCommand`, `show`, `use`) turned into server commands without running JavaScript; exact BSON types (Int64, Decimal128, Date, ObjectId); Documents view (screen 13) with Filter/Project/Sort, Tree/Table/Shell, insert/edit/delete, Aggregation pipeline builder, Indexes, Validation; transactions (`BEGIN`/`COMMIT`/`ROLLBACK`), `killOp` cancel, explain trees, `currentOp` monitoring, imports and exports |
+| DynamoDB | P2 | ✅ (tested against DynamoDB Local) — `dq-dynamodb` (own SigV4 client): region → tables with item counts; PartiQL editor with `?` parameters and paging; Documents view with PartiQL filters and attribute lists, insert/edit/delete as DynamoDB JSON with conditional writes; primary key/GSI/LSI listing; transactions queued until `COMMIT` and sent as one `ExecuteTransaction`; access keys or an AWS CLI profile; imports (`BatchWriteItem`) and exports |
 | Everything else | P1/P2 | ⬜ |
 
 ---
@@ -247,4 +251,7 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 - ClickHouse has no transactions or row identity: grid editing is off, schema diff is unavailable, and imports are not atomic (rows already inserted stay when a later batch fails). Indexes, foreign keys and unique constraints cannot be created there.
 - Snowflake was tested only against the fakesnow emulator, not a real account. Key-pair, SSO and MFA sign-in are not supported (password only). Monitoring is off for Snowflake and DuckDB.
 - `EXPLAIN ANALYZE` is not available for ClickHouse, DuckDB and Snowflake; their plans show estimates only.
-- Bundling DuckDB grows the macOS app from about 20 MB to 58.6 MB.
+- Bundling DuckDB grows the macOS app from about 20 MB to 58.6 MB; MongoDB and DynamoDB bring it to 62.3 MB.
+- MongoDB: editor statements are mongosh syntax, not JavaScript (no variables, loops or functions; `bulkWrite` unsupported). `VerifyCa` behaves like `VerifyFull`. Monitoring "terminate" is a `killOp` like cancel (MongoDB cannot end a connection). Editing a document replaces it by `_id` (last write wins).
+- DynamoDB: tested only against DynamoDB Local (which does not check signatures; SigV4 is covered by the AWS test vector). Cancel and timeouts stop waiting but cannot stop a request on the server. Writes report 1 affected item; counts exist only without a filter (table estimate); no sort input. In a transaction, reads run immediately and writes run together at `COMMIT` (at most 100).
+- Document engines: query results and exports take their columns from the first page/batch; an export stops with a clear error instead of dropping a field that appears later. Imports are written in batches and are not atomic. Editing is off while a projection is applied (the documents shown are partial).
