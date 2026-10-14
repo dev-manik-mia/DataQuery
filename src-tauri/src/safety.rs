@@ -4,7 +4,7 @@
 
 use dq_core::config::Environment;
 use dq_core::sql::StatementInfo;
-use dq_core::{DbError, DbResult};
+use dq_core::{DbError, DbResult, ErrorKind};
 use dq_store::{SavedConnection, Settings};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -79,6 +79,10 @@ pub fn check(
     intent: &Intent,
     confirmation: Option<&Confirmation>,
 ) -> DbResult<Option<ConfirmationRequest>> {
+    if connection.config.read_only && intent.writes {
+        return Err(DbError::new(ErrorKind::Permission, format!("{} is a read-only connection.", connection.name))
+            .with_action(Some("Edit the connection and turn off Read-only to make changes.")));
+    }
     let Some(request) = required(connection, settings, intent) else {
         return Ok(None);
     };
@@ -115,10 +119,12 @@ mod tests {
                 username: "u".into(),
                 ssl_mode: SslMode::VerifyFull,
                 connect_timeout_secs: 10,
+                ..ConnConfig::default()
             },
             has_password: false,
             created_at: 0,
             last_used_at: None,
+            ssh_secrets: Vec::new(),
         }
     }
 
@@ -161,6 +167,16 @@ mod tests {
         assert!(check(&c, &s, &i, Some(&wrong)).is_err());
         let right = Confirmation { acknowledged: true, typed_name: Some("kestrel-prod".into()) };
         assert!(check(&c, &s, &i, Some(&right)).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_only_profiles_refuse_writes() {
+        let mut c = conn(Environment::Development);
+        c.config.read_only = true;
+        let s = Settings::default();
+        assert!(check(&c, &s, &intent("select 1"), None).unwrap().is_none());
+        let err = check(&c, &s, &intent("update t set a = 1 where id = 1"), None).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Permission);
     }
 
     #[test]

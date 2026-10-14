@@ -3,12 +3,13 @@
 
 use std::sync::{Arc, LazyLock};
 
-use dq_core::config::SslMode;
+use dq_core::config::{SslMode, TlsFiles};
 use dq_core::{DbError, DbResult, ErrorKind};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
@@ -25,25 +26,55 @@ static ROOTS: LazyLock<Arc<RootCertStore>> = LazyLock::new(|| {
     Arc::new(roots)
 });
 
-pub fn connector(mode: SslMode) -> DbResult<MakeRustlsConnect> {
-    let provider = PROVIDER.clone();
-    let tls_error = |e: rustls::Error| DbError::new(ErrorKind::Tls, format!("TLS setup failed: {e}"));
-    let webpki = || {
-        WebPkiServerVerifier::builder_with_provider(ROOTS.clone(), provider.clone())
-            .build()
-            .map_err(|e| DbError::new(ErrorKind::Tls, format!("TLS setup failed: {e}")))
+fn tls_error(e: impl std::fmt::Display) -> DbError {
+    DbError::new(ErrorKind::Tls, format!("TLS setup failed: {e}"))
+}
+
+fn file_error(path: &str, e: impl std::fmt::Display) -> DbError {
+    DbError::new(ErrorKind::Tls, format!("Cannot read {path}: {e}"))
+        .with_action(Some("Check that the certificate files exist and are PEM encoded."))
+}
+
+/// Trusted roots: the CA file when one is configured, else the platform store.
+fn roots(files: &TlsFiles) -> DbResult<Arc<RootCertStore>> {
+    let Some(path) = &files.ca_file else {
+        return Ok(ROOTS.clone());
     };
+    let mut store = RootCertStore::empty();
+    for cert in CertificateDer::pem_file_iter(path).map_err(|e| file_error(path, e))? {
+        store.add(cert.map_err(|e| file_error(path, e))?).map_err(|e| file_error(path, e))?;
+    }
+    if store.is_empty() {
+        return Err(file_error(path, "no certificates found"));
+    }
+    Ok(Arc::new(store))
+}
+
+pub fn connector(mode: SslMode, files: &TlsFiles) -> DbResult<MakeRustlsConnect> {
+    let provider = PROVIDER.clone();
+    let webpki =
+        || WebPkiServerVerifier::builder_with_provider(roots(files)?, provider.clone()).build().map_err(tls_error);
     let verifier: Arc<dyn ServerCertVerifier> = match mode {
         SslMode::VerifyFull => webpki()?,
         SslMode::VerifyCa => Arc::new(SkipHostname(webpki()?)),
         SslMode::Disable | SslMode::Prefer | SslMode::Require => Arc::new(NoVerification(provider.clone())),
     };
-    let config = ClientConfig::builder_with_provider(provider)
+    let builder = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(tls_error)?
         .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
+        .with_custom_certificate_verifier(verifier);
+    let config = match (&files.client_cert_file, &files.client_key_file) {
+        (Some(cert), Some(key)) => {
+            let chain = CertificateDer::pem_file_iter(cert)
+                .map_err(|e| file_error(cert, e))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| file_error(cert, e))?;
+            let key = PrivateKeyDer::from_pem_file(key).map_err(|e| file_error(key, e))?;
+            builder.with_client_auth_cert(chain, key).map_err(tls_error)?
+        }
+        _ => builder.with_no_client_auth(),
+    };
     Ok(MakeRustlsConnect::new(config))
 }
 

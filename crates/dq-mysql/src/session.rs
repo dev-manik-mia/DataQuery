@@ -9,9 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use dq_core::adapter::{BatchFn, Session, StatementIter, check_affected};
-use dq_core::config::ConnConfig;
-use dq_core::edit::BoundStatement;
+use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::TableStructure;
@@ -19,7 +17,7 @@ use dq_core::sql::{Dialect, MysqlDialect, SqlFlavor, command_tag, split_statemen
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult};
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Params, Pool, QueryResult, Row, TextProtocol, TxOpts, Value};
+use mysql_async::{BinaryProtocol, Column, Conn, Pool, QueryResult, Row, TextProtocol, TxOpts, Value};
 use tokio::sync::Mutex;
 
 use crate::catalog;
@@ -32,9 +30,8 @@ const MAX_WARNINGS: u32 = 50;
 
 pub struct MySession {
     /// Connection settings with `prefer` TLS settled by the first connection.
-    config: ConnConfig,
-    /// Kept in memory only to open catalog and edit connections.
-    password: Option<String>,
+    /// Kept in memory only, to open catalog and edit connections.
+    params: ConnectParams,
     info: ServerInfo,
     flavor: Flavor,
     query: Mutex<QueryConnection>,
@@ -49,6 +46,8 @@ struct QueryConnection {
     /// A row read ahead from a result that is still open on `conn`. The read
     /// position itself lives in the driver's connection state.
     pending: Option<Row>,
+    /// The open result came from a prepared (parameterised) statement.
+    binary: bool,
     timeout_secs: Option<u32>,
 }
 
@@ -56,21 +55,34 @@ struct QueryConnection {
 ///
 /// `QueryResult::next` reads one row at a time and leaves the result open, so a
 /// later call can continue where this one stopped. (`QueryResult::stream`
-/// would discard the unread rows when dropped.)
-async fn next_row(conn: &mut Conn) -> mysql_async::Result<Option<Row>> {
-    QueryResult::<'_, '_, TextProtocol>::new(conn).next().await
+/// would discard the unread rows when dropped.) Parameterised statements use
+/// the binary protocol, plain ones the text protocol.
+async fn next_row(conn: &mut Conn, binary: bool) -> mysql_async::Result<Option<Row>> {
+    if binary {
+        QueryResult::<'_, '_, BinaryProtocol>::new(conn).next().await
+    } else {
+        QueryResult::<'_, '_, TextProtocol>::new(conn).next().await
+    }
+}
+
+fn bind(values: &[Option<String>]) -> mysql_async::Params {
+    if values.is_empty() {
+        return mysql_async::Params::Empty;
+    }
+    mysql_async::Params::Positional(
+        values.iter().map(|p| p.as_ref().map_or(Value::NULL, |v| Value::Bytes(v.as_bytes().to_vec()))).collect(),
+    )
 }
 
 impl MySession {
-    pub(crate) async fn open(config: &ConnConfig, password: Option<&str>) -> DbResult<Self> {
-        let opened = connect::open_query(config, password).await?;
-        let config = connect::resolved(config, &opened.info);
+    pub(crate) async fn open(params: &ConnectParams) -> DbResult<Self> {
+        let opened = connect::open_query(params).await?;
+        let params = connect::resolved(params, &opened.info);
         Ok(Self {
-            catalog: connect::catalog_pool(&config, password, opened.flavor),
+            catalog: connect::catalog_pool(&params, opened.flavor),
             query_thread: opened.conn.id(),
-            query: Mutex::new(QueryConnection { conn: opened.conn, pending: None, timeout_secs: None }),
-            config,
-            password: password.map(str::to_owned),
+            query: Mutex::new(QueryConnection { conn: opened.conn, pending: None, binary: false, timeout_secs: None }),
+            params,
             info: opened.info,
             flavor: opened.flavor,
             running: AtomicBool::new(false),
@@ -78,7 +90,7 @@ impl MySession {
     }
 
     fn err(&self, e: &mysql_async::Error) -> DbError {
-        map_error(e, self.password.as_deref())
+        map_error(e, self.params.password())
     }
 
     async fn catalog(&self) -> DbResult<Conn> {
@@ -99,7 +111,7 @@ impl MySession {
     async fn close_cursor(&self, q: &mut QueryConnection) {
         if q.pending.take().is_some() {
             let _ = self.kill_query().await;
-            while let Ok(Some(_)) = next_row(&mut q.conn).await {}
+            while let Ok(Some(_)) = next_row(&mut q.conn, q.binary).await {}
         }
     }
 
@@ -115,6 +127,7 @@ impl MySession {
     async fn read_rows(
         &self,
         conn: &mut Conn,
+        binary: bool,
         pending: Option<Row>,
         limit: u32,
     ) -> DbResult<(Vec<CellRow>, Option<Row>)> {
@@ -122,12 +135,36 @@ impl MySession {
         let mut rows = Vec::with_capacity(limit.min(1024) as usize);
         rows.extend(pending.as_ref().map(decode));
         while rows.len() < limit as usize {
-            match next_row(conn).await.map_err(|e| self.err(&e))? {
+            match next_row(conn, binary).await.map_err(|e| self.err(&e))? {
                 Some(row) => rows.push(decode(&row)),
                 None => return Ok((rows, None)),
             }
         }
-        Ok((rows, next_row(conn).await.map_err(|e| self.err(&e))?))
+        Ok((rows, next_row(conn, binary).await.map_err(|e| self.err(&e))?))
+    }
+
+    /// Starts `sql` on `conn`: prepared with bound parameters when there are
+    /// any, as plain text otherwise. Returns the result's columns and affected rows.
+    async fn start(
+        &self,
+        conn: &mut Conn,
+        sql: &str,
+        params: Params<'_>,
+    ) -> DbResult<(Option<std::sync::Arc<[Column]>>, u64)> {
+        if params.is_empty() {
+            let result = conn.query_iter(sql).await.map_err(|e| self.err(&e))?;
+            return Ok((result.columns(), result.affected_rows()));
+        }
+        let statement = conn.prep(sql).await.map_err(|e| self.err(&e))?;
+        if usize::from(statement.num_params()) != params.len() {
+            return Err(DbError::invalid(format!(
+                "The statement has {} parameter(s) but {} value(s) were given.",
+                statement.num_params(),
+                params.len()
+            )));
+        }
+        let result = conn.exec_iter(statement, bind(params)).await.map_err(|e| self.err(&e))?;
+        Ok((result.columns(), result.affected_rows()))
     }
 
     /// `SHOW WARNINGS` after a statement that produced some, as notices.
@@ -148,14 +185,20 @@ impl MySession {
             .collect()
     }
 
-    async fn run(&self, q: &mut QueryConnection, sql: &str, options: ExecOptions) -> DbResult<StatementResult> {
+    async fn run(
+        &self,
+        q: &mut QueryConnection,
+        sql: &str,
+        params: Params<'_>,
+        options: ExecOptions,
+    ) -> DbResult<StatementResult> {
         let started = Instant::now();
-        let result = q.conn.query_iter(sql).await.map_err(|e| self.err(&e))?;
-        let columns = result.columns().map(|c| column_meta(&c)).unwrap_or_default();
-        let affected = result.affected_rows();
+        q.binary = !params.is_empty();
+        let (columns, affected) = self.start(&mut q.conn, sql, params).await?;
+        let columns = columns.map(|c| column_meta(&c)).unwrap_or_default();
         let command = command_tag(sql, SqlFlavor::Mysql);
         if columns.is_empty() {
-            result.drop_result().await.map_err(|e| self.err(&e))?;
+            while next_row(&mut q.conn, q.binary).await.map_err(|e| self.err(&e))?.is_some() {}
             return Ok(StatementResult {
                 columns,
                 rows: Vec::new(),
@@ -166,7 +209,7 @@ impl MySession {
                 notices: self.warnings(&mut q.conn).await,
             });
         }
-        let (rows, pending) = self.read_rows(&mut q.conn, None, options.row_limit).await?;
+        let (rows, pending) = self.read_rows(&mut q.conn, q.binary, None, options.row_limit).await?;
         let has_more = pending.is_some();
         let notices = if has_more {
             q.pending = pending;
@@ -185,27 +228,32 @@ impl MySession {
         })
     }
 
-    /// Runs a read-only query on a pooled catalog connection.
-    async fn read_all(&self, sql: &str, limits: CellLimits) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
+    /// Runs a read-only query on a pooled catalog connection and streams its rows in batches.
+    async fn read_batches(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         let mut conn = self.catalog().await?;
-        let mut result = conn.query_iter(sql).await.map_err(|e| self.err(&e))?;
-        let columns = result.columns().unwrap_or_default();
-        let rows: Vec<Row> = result.collect().await.map_err(|e| self.err(&e))?;
-        Ok((column_meta(&columns), rows.iter().map(|r| decode_row(r, &columns, limits)).collect()))
+        let (columns, _) = self.start(&mut conn, sql, params).await?;
+        let columns = columns.unwrap_or_default();
+        let meta = column_meta(&columns);
+        let binary = !params.is_empty();
+        let mut total = 0u64;
+        let mut batch = Vec::with_capacity(STREAM_BATCH);
+        while let Some(row) = next_row(&mut conn, binary).await.map_err(|e| self.err(&e))? {
+            batch.push(decode_row(&row, &columns, limits));
+            if batch.len() == STREAM_BATCH {
+                total += batch.len() as u64;
+                on_batch(&meta, std::mem::take(&mut batch))?;
+            }
+        }
+        total += batch.len() as u64;
+        on_batch(&meta, batch)?;
+        Ok(total)
     }
-}
-
-fn params(statement: &BoundStatement) -> Params {
-    if statement.params.is_empty() {
-        return Params::Empty;
-    }
-    Params::Positional(
-        statement
-            .params
-            .iter()
-            .map(|p| p.as_ref().map_or(Value::NULL, |v| Value::Bytes(v.as_bytes().to_vec())))
-            .collect(),
-    )
 }
 
 #[async_trait]
@@ -230,7 +278,7 @@ impl Session for MySession {
         catalog::search(&mut self.catalog().await?, query, limit).await
     }
 
-    async fn execute(&self, sql: &str, options: ExecOptions) -> DbResult<StatementResult> {
+    async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
         // The driver always enables multi-statement mode; never let one call run two.
         if split_statements(sql, SqlFlavor::Mysql).len() > 1 {
             return Err(DbError::invalid("Run one statement at a time."));
@@ -240,7 +288,7 @@ impl Session for MySession {
         self.close_cursor(&mut q).await;
         self.set_timeout(&mut q, options.timeout_secs).await?;
         self.running.store(true, Ordering::SeqCst);
-        let result = self.run(&mut q, sql, options).await;
+        let result = self.run(&mut q, sql, params, options).await;
         self.running.store(false, Ordering::SeqCst);
         result
     }
@@ -253,7 +301,9 @@ impl Session for MySession {
             .take()
             .ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
         self.running.store(true, Ordering::SeqCst);
-        let read = self.read_rows(&mut q.conn, Some(pending), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT)).await;
+        let binary = q.binary;
+        let read =
+            self.read_rows(&mut q.conn, binary, Some(pending), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT)).await;
         self.running.store(false, Ordering::SeqCst);
         let (rows, pending) = read?;
         let has_more = pending.is_some();
@@ -282,29 +332,30 @@ impl Session for MySession {
         &self,
         _database: &str,
         sql: &str,
+        params: Params<'_>,
         limits: CellLimits,
     ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
-        self.read_all(sql, limits).await
+        let mut columns = Vec::new();
+        let mut rows = Vec::new();
+        self.read_batches(sql, params, limits, &mut |meta, batch| {
+            if columns.is_empty() {
+                columns = meta.to_vec();
+            }
+            rows.extend(batch);
+            Ok(())
+        })
+        .await?;
+        Ok((columns, rows))
     }
 
-    async fn stream_query(&self, _database: &str, sql: &str, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
-        let mut conn = self.catalog().await?;
-        let result = conn.query_iter(sql).await.map_err(|e| self.err(&e))?;
-        let columns = result.columns().unwrap_or_default();
-        let meta = column_meta(&columns);
-        drop(result);
-        let mut total = 0u64;
-        let mut batch = Vec::with_capacity(STREAM_BATCH);
-        while let Some(row) = next_row(&mut conn).await.map_err(|e| self.err(&e))? {
-            batch.push(decode_row(&row, &columns, CellLimits::FULL));
-            if batch.len() == STREAM_BATCH {
-                total += batch.len() as u64;
-                on_batch(&meta, std::mem::take(&mut batch))?;
-            }
-        }
-        total += batch.len() as u64;
-        on_batch(&meta, batch)?;
-        Ok(total)
+    async fn stream_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
+        self.read_batches(sql, params, CellLimits::FULL, on_batch).await
     }
 
     async fn row_estimate(&self, object: &ObjectRef) -> DbResult<Option<i64>> {
@@ -312,12 +363,12 @@ impl Session for MySession {
     }
 
     async fn run_in_transaction(&self, _database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
-        let mut conn = connect::open(&self.config, self.password.as_deref(), Role::Write, Vec::new()).await?;
+        let mut conn = connect::open(&self.params, Role::Write, Vec::new()).await?;
         let mut tx = conn.start_transaction(TxOpts::default()).await.map_err(|e| self.err(&e))?;
         let mut counts = Vec::new();
         for statement in statements {
             let statement = statement?;
-            tx.exec_drop(statement.sql.as_str(), params(&statement)).await.map_err(|e| self.err(&e))?;
+            tx.exec_drop(statement.sql.as_str(), bind(&statement.params)).await.map_err(|e| self.err(&e))?;
             let affected = tx.affected_rows();
             check_affected(&statement, affected)?;
             counts.push(affected);

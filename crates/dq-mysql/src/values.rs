@@ -140,7 +140,25 @@ pub fn decode(c: &Column, value: &Value, limits: CellLimits) -> Cell {
         Value::UInt(u) => Cell::number(u.to_string()),
         Value::Float(f) => Cell::number(f.to_string()),
         Value::Double(d) => Cell::number(d.to_string()),
-        other => Cell::text(other.as_sql(true).trim_matches('\'').to_owned(), limits),
+        // Binary protocol (parameterised statements) sends dates and times as structs.
+        Value::Date(..) | Value::Time(..) => {
+            let date_only = matches!(c.column_type(), MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE);
+            Cell::Temporal { value: temporal_text(value, date_only), zoned: false }
+        }
+    }
+}
+
+/// Server-style text for binary-protocol `DATE`/`DATETIME`/`TIME` values.
+fn temporal_text(value: &Value, date_only: bool) -> String {
+    let fraction = |us: u32| if us == 0 { String::new() } else { format!(".{us:06}") };
+    match *value {
+        Value::Date(y, m, d, ..) if date_only => format!("{y:04}-{m:02}-{d:02}"),
+        Value::Date(y, m, d, h, i, s, us) => format!("{y:04}-{m:02}-{d:02} {h:02}:{i:02}:{s:02}{}", fraction(us)),
+        Value::Time(negative, days, h, i, s, us) => {
+            let hours = days * 24 + u32::from(h);
+            format!("{}{hours:02}:{i:02}:{s:02}{}", if negative { "-" } else { "" }, fraction(us))
+        }
+        _ => String::new(),
     }
 }
 

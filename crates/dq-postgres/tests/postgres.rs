@@ -7,14 +7,14 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dq_core::adapter::{DatabaseAdapter, Session};
+use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
 use dq_core::edit::{ColumnValue, RowChange};
 use dq_core::engine::Engine;
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops;
 use dq_core::result::ExecOptions;
-use dq_core::table::{SortSpec, TablePageRequest};
+use dq_core::table::{RowFilter, SortSpec, TablePageRequest};
 use dq_core::transfer::{CsvOptions, ExportFormat, ExportSource};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
@@ -34,7 +34,12 @@ fn config() -> Option<ConnConfig> {
         username: "dataquery".into(),
         ssl_mode: SslMode::Disable,
         connect_timeout_secs: 5,
+        ..ConnConfig::default()
     })
+}
+
+fn with_password(cfg: &ConnConfig, password: &str) -> ConnectParams {
+    ConnectParams::new(cfg.clone(), Some(password.to_owned()))
 }
 
 macro_rules! require_db {
@@ -50,7 +55,7 @@ macro_rules! require_db {
 }
 
 async fn session(cfg: &ConnConfig) -> Arc<dyn Session> {
-    PostgresAdapter.connect(cfg, Some(PASSWORD)).await.expect("connect")
+    PostgresAdapter.connect(&with_password(cfg, PASSWORD)).await.expect("connect")
 }
 
 fn table(schema: &str, name: &str) -> ObjectRef {
@@ -64,8 +69,8 @@ fn table(schema: &str, name: &str) -> ObjectRef {
 
 /// Creates a scratch table unique to the calling test.
 async fn scratch(s: &dyn Session, name: &str, ddl: &str) -> ObjectRef {
-    s.execute(&format!("DROP TABLE IF EXISTS public.{name}"), OPTS).await.unwrap();
-    s.execute(&format!("CREATE TABLE public.{name} {ddl}"), OPTS).await.unwrap();
+    s.execute(&format!("DROP TABLE IF EXISTS public.{name}"), &[], OPTS).await.unwrap();
+    s.execute(&format!("CREATE TABLE public.{name} {ddl}"), &[], OPTS).await.unwrap();
     table("public", name)
 }
 
@@ -76,7 +81,7 @@ fn text(cell: &Cell) -> String {
 #[tokio::test]
 async fn test_reports_server_details() {
     let cfg = require_db!();
-    let info = PostgresAdapter.test(&cfg, Some(PASSWORD)).await.unwrap();
+    let info = PostgresAdapter.test(&with_password(&cfg, PASSWORD)).await.unwrap();
     assert!(info.version.starts_with("PostgreSQL "), "{}", info.version);
     assert_eq!(info.database, "dataquery_test");
     assert!(info.tls.is_none());
@@ -86,7 +91,7 @@ async fn test_reports_server_details() {
 async fn invalid_credentials_are_actionable_and_redacted() {
     let cfg = require_db!();
     let secret = "wrong-Secret-123";
-    let err = PostgresAdapter.test(&cfg, Some(secret)).await.unwrap_err();
+    let err = PostgresAdapter.test(&with_password(&cfg, secret)).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Auth);
     assert_eq!(err.code.as_deref(), Some("28P01"));
     assert!(err.action.as_deref().unwrap_or_default().contains("username and password"));
@@ -98,7 +103,7 @@ async fn invalid_credentials_are_actionable_and_redacted() {
 async fn network_failure_is_classified() {
     let mut cfg = require_db!();
     cfg.port = 1;
-    let err = PostgresAdapter.test(&cfg, Some(PASSWORD)).await.unwrap_err();
+    let err = PostgresAdapter.test(&with_password(&cfg, PASSWORD)).await.unwrap_err();
     assert!(matches!(err.kind, ErrorKind::Network | ErrorKind::Timeout), "{err:?}");
 }
 
@@ -106,7 +111,7 @@ async fn network_failure_is_classified() {
 async fn tls_is_required_when_asked() {
     let mut cfg = require_db!();
     cfg.ssl_mode = SslMode::VerifyFull;
-    let err = PostgresAdapter.test(&cfg, Some(PASSWORD)).await.unwrap_err();
+    let err = PostgresAdapter.test(&with_password(&cfg, PASSWORD)).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Tls, "{err:?}");
 }
 
@@ -133,7 +138,7 @@ async fn value_rendering_contract() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let r = s
-        .execute("SELECT big, exact, ts, doc, raw, label, tags, uid, addr, span, (big + 0)::int8 FROM public.type_samples ORDER BY id", OPTS)
+        .execute("SELECT big, exact, ts, doc, raw, label, tags, uid, addr, span, (big + 0)::int8 FROM public.type_samples ORDER BY id", &[], OPTS)
         .await
         .unwrap();
     let row = &r.rows[0];
@@ -161,7 +166,7 @@ async fn value_rendering_contract() {
 async fn results_are_bounded_and_resumable() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let r = s.execute("SELECT g FROM generate_series(1, 1000000) g", OPTS).await.unwrap();
+    let r = s.execute("SELECT g FROM generate_series(1, 1000000) g", &[], OPTS).await.unwrap();
     assert_eq!(r.rows.len(), 500);
     assert!(r.has_more);
     let page = s.fetch_more(500).await.unwrap();
@@ -169,7 +174,7 @@ async fn results_are_bounded_and_resumable() {
     assert!(page.has_more);
     // A new statement closes the open cursor promptly.
     let started = Instant::now();
-    let r = s.execute("SELECT 1", OPTS).await.unwrap();
+    let r = s.execute("SELECT 1", &[], OPTS).await.unwrap();
     assert_eq!(text(&r.rows[0][0]), "1");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(s.fetch_more(10).await.is_err());
@@ -180,23 +185,23 @@ async fn cancel_and_timeout() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let runner = s.clone();
-    let handle = tokio::spawn(async move { runner.execute("SELECT pg_sleep(20)", OPTS).await });
+    let handle = tokio::spawn(async move { runner.execute("SELECT pg_sleep(20)", &[], OPTS).await });
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(s.cancel().await.unwrap());
     let err = handle.await.unwrap().unwrap_err();
     assert_eq!(err.kind, ErrorKind::Cancelled);
     assert!(!s.cancel().await.unwrap(), "nothing left to cancel");
 
-    let err = s.execute("SELECT pg_sleep(3)", ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
+    let err = s.execute("SELECT pg_sleep(3)", &[], ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Timeout);
-    assert!(s.execute("SELECT 1", OPTS).await.is_ok());
+    assert!(s.execute("SELECT 1", &[], OPTS).await.is_ok());
 }
 
 #[tokio::test]
 async fn errors_carry_position_and_hint() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let err = s.execute("SELECT id, totl FROM public.orders", OPTS).await.unwrap_err();
+    let err = s.execute("SELECT id, totl FROM public.orders", &[], OPTS).await.unwrap_err();
     assert_eq!(err.code.as_deref(), Some("42703"));
     assert_eq!(err.position, Some(12));
     assert!(err.hint.unwrap_or_default().contains("total"));
@@ -206,12 +211,12 @@ async fn errors_carry_position_and_hint() {
 async fn notices_and_affected_rows() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let r = s.execute("DO $$ BEGIN RAISE NOTICE 'hello'; END $$", OPTS).await.unwrap();
+    let r = s.execute("DO $$ BEGIN RAISE NOTICE 'hello'; END $$", &[], OPTS).await.unwrap();
     assert_eq!(r.notices, vec!["NOTICE: hello"]);
     let t = scratch(&*s, "it_affected", "(id int PRIMARY KEY)").await;
-    let r = s.execute("INSERT INTO public.it_affected SELECT generate_series(1, 3)", OPTS).await.unwrap();
+    let r = s.execute("INSERT INTO public.it_affected SELECT generate_series(1, 3)", &[], OPTS).await.unwrap();
     assert_eq!((r.command.as_str(), r.affected), ("INSERT", Some(3)));
-    s.execute(&format!("DROP TABLE {}", s.dialect().quoted_name(&t)), OPTS).await.unwrap();
+    s.execute(&format!("DROP TABLE {}", s.dialect().quoted_name(&t)), &[], OPTS).await.unwrap();
 }
 
 #[tokio::test]
@@ -241,7 +246,7 @@ async fn table_page_filter_sort_and_count() {
     let s = session(&cfg).await;
     let req = TablePageRequest {
         object: table("public", "orders"),
-        filter: Some("status = 'paid'".into()),
+        rows: RowFilter { filter: Some("status = 'paid'".into()), ..RowFilter::default() },
         sort: Some(SortSpec { column: "total".into(), descending: true }),
         offset: 0,
         limit: 100,
@@ -251,9 +256,9 @@ async fn table_page_filter_sort_and_count() {
     assert!(page.has_more);
     let totals: Vec<f64> = page.rows.iter().map(|r| text(&r[3]).parse().unwrap()).collect();
     assert!(totals.windows(2).all(|w| w[0] >= w[1]));
-    let count = ops::row_count(&*s, &req.object, req.filter.as_deref()).await.unwrap();
+    let count = ops::row_count(&*s, &req.object, &req.rows).await.unwrap();
     assert_eq!((count.count, count.exact), (400, true));
-    let bad = TablePageRequest { filter: Some("1=1; DELETE FROM public.orders".into()), ..req.clone() };
+    let bad = TablePageRequest { rows: RowFilter { filter: Some("1=1; DELETE FROM public.orders".into()), ..RowFilter::default() }, ..req.clone() };
     assert!(ops::table_page(&*s, &bad).await.is_err());
 }
 
@@ -262,7 +267,7 @@ async fn catalog_connections_are_read_only() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let err =
-        s.read_query("dataquery_test", "DELETE FROM public.no_pk", dq_core::value::CellLimits::GRID).await.unwrap_err();
+        s.read_query("dataquery_test", "DELETE FROM public.no_pk", &[], dq_core::value::CellLimits::GRID).await.unwrap_err();
     assert_eq!(err.code.as_deref(), Some("25006"));
 }
 
@@ -271,7 +276,7 @@ async fn edits_apply_atomically_to_the_right_rows() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let t = scratch(&*s, "it_edits", "(id int8 PRIMARY KEY, amount numeric(12,2), note text)").await;
-    s.execute("INSERT INTO public.it_edits VALUES (9007199254740993, 1.00, 'a'), (2, 2.00, 'b')", OPTS).await.unwrap();
+    s.execute("INSERT INTO public.it_edits VALUES (9007199254740993, 1.00, 'a'), (2, 2.00, 'b')", &[], OPTS).await.unwrap();
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let changes = vec![
         RowChange::Update {
@@ -285,7 +290,7 @@ async fn edits_apply_atomically_to_the_right_rows() {
     assert!(preview.contains("UPDATE \"public\".\"it_edits\" SET \"amount\" = '84.50'"));
     let report = ops::apply_changes(&*s, &t, &changes, false).await.unwrap();
     assert_eq!((report.updated, report.inserted, report.deleted), (1, 1, 1));
-    let r = s.execute("SELECT id, amount, note FROM public.it_edits ORDER BY id", OPTS).await.unwrap();
+    let r = s.execute("SELECT id, amount, note FROM public.it_edits ORDER BY id", &[], OPTS).await.unwrap();
     let rows: Vec<Vec<String>> = r.rows.iter().map(|r| r.iter().map(text).collect()).collect();
     assert_eq!(rows, [["3", "NULL", "NULL"], ["9007199254740993", "84.50", ""]]);
 
@@ -296,9 +301,9 @@ async fn edits_apply_atomically_to_the_right_rows() {
     ];
     let err = ops::apply_changes(&*s, &t, &failing, false).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Constraint);
-    let r = s.execute("SELECT note FROM public.it_edits WHERE id = 3", OPTS).await.unwrap();
+    let r = s.execute("SELECT note FROM public.it_edits WHERE id = 3", &[], OPTS).await.unwrap();
     assert_eq!(r.rows[0][0], Cell::Null);
-    s.execute("DROP TABLE public.it_edits", OPTS).await.unwrap();
+    s.execute("DROP TABLE public.it_edits", &[], OPTS).await.unwrap();
 }
 
 #[tokio::test]
@@ -306,7 +311,7 @@ async fn tables_without_a_key_edit_only_after_opt_in() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let t = scratch(&*s, "it_no_key", "(a int, b text, doc json)").await;
-    s.execute("INSERT INTO public.it_no_key VALUES (1, NULL, '{}'), (2, 'x', '{}'), (2, 'x', '{}')", OPTS)
+    s.execute("INSERT INTO public.it_no_key VALUES (1, NULL, '{}'), (2, 'x', '{}'), (2, 'x', '{}')", &[], OPTS)
         .await
         .unwrap();
     let st = ops::structure(&*s, &t).await.unwrap();
@@ -321,9 +326,9 @@ async fn tables_without_a_key_edit_only_after_opt_in() {
     // Duplicate rows match twice, so the change is refused and rolled back.
     let dup = vec![RowChange::Delete { key: vec![cv("a", Some("2")), cv("b", Some("x"))] }];
     assert_eq!(ops::apply_changes(&*s, &t, &dup, true).await.unwrap_err().kind, ErrorKind::Constraint);
-    let r = s.execute("SELECT count(*) FROM public.it_no_key WHERE b IS NOT NULL", OPTS).await.unwrap();
+    let r = s.execute("SELECT count(*) FROM public.it_no_key WHERE b IS NOT NULL", &[], OPTS).await.unwrap();
     assert_eq!(text(&r.rows[0][0]), "3");
-    s.execute("DROP TABLE public.it_no_key", OPTS).await.unwrap();
+    s.execute("DROP TABLE public.it_no_key", &[], OPTS).await.unwrap();
 }
 
 #[tokio::test]
@@ -332,7 +337,7 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     let s = session(&cfg).await;
     let dir = tempfile::tempdir().unwrap();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: table("public", "orders"), filter: Some("id <= 10".into()), sort: None };
+    let source = ExportSource::Table { object: table("public", "orders"), rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() }, sort: None };
     let report = ops::export(&*s, &source, ExportFormat::Csv, &csv).await?;
     assert_eq!(report.rows, 10);
     let json = dir.path().join("q.json");
@@ -357,8 +362,8 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     std::fs::write(&bad, "id,x,status,total\n100,,ok,1\n101,,ok,not-a-number\n").unwrap();
     let err = ops::import_csv(&*s, &t, &bad, &options, &mapping).await.unwrap_err();
     assert!(err.message.starts_with("Rows from 1:") || err.code.is_some(), "{err:?}");
-    let r = s.execute("SELECT count(*) FROM public.it_import", OPTS).await?;
+    let r = s.execute("SELECT count(*) FROM public.it_import", &[], OPTS).await?;
     assert_eq!(text(&r.rows[0][0]), "10");
-    s.execute("DROP TABLE public.it_import", OPTS).await?;
+    s.execute("DROP TABLE public.it_import", &[], OPTS).await?;
     Ok(())
 }

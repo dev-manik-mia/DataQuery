@@ -43,6 +43,9 @@ pub trait Dialect: Send + Sync {
     /// The type supports `=` against a text parameter, so it can help identify a row.
     fn comparable(&self, data_type: &str) -> bool;
 
+    /// Case-insensitive `LIKE` of a column's text form against a pattern parameter.
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String;
+
     /// The container that qualifies an object name: the schema (`PostgreSQL`)
     /// or the database (`MySQL`).
     fn container<'a>(&self, object: &'a ObjectRef) -> Option<&'a str> {
@@ -102,6 +105,10 @@ impl Dialect for PostgresDialect {
         let base = data_type.split(['(', '[']).next().unwrap_or(data_type).trim();
         !NO_EQUALITY.contains(&base)
     }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("{quoted_column}::text ILIKE {placeholder}")
+    }
 }
 
 impl Dialect for MysqlDialect {
@@ -135,6 +142,11 @@ impl Dialect for MysqlDialect {
     fn comparable(&self, data_type: &str) -> bool {
         // JSON compares as a document, never equal to a text parameter.
         !data_type.eq_ignore_ascii_case("json")
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        // Case-insensitive under the default (`_ci`) connection collations.
+        format!("CAST({quoted_column} AS CHAR) LIKE {placeholder}")
     }
 }
 

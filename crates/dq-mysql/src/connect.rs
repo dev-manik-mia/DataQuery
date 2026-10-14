@@ -1,12 +1,14 @@
 //! Opens MySQL / MariaDB connections and reads server details.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use dq_core::adapter::ConnectParams;
 use dq_core::config::{ConnConfig, SslMode};
 use dq_core::result::{ServerInfo, TlsInfo};
 use dq_core::{DbError, DbResult, ErrorKind};
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, DriverError, Opts, OptsBuilder, PoolConstraints, PoolOpts, SslOpts};
+use mysql_async::{ClientIdentity, Conn, DriverError, Opts, OptsBuilder, PoolConstraints, PoolOpts, SslOpts};
 
 use crate::error::map_error;
 use crate::values::text;
@@ -42,9 +44,22 @@ impl Flavor {
     }
 }
 
-/// TLS options for an SSL mode, or `None` for a plain connection.
-fn ssl_opts(mode: SslMode) -> Option<SslOpts> {
-    let opts = SslOpts::default();
+/// TLS options for an SSL mode, or `None` for a plain connection. CA and
+/// client certificate files come from the connection's advanced TLS settings.
+fn ssl_opts(params: &ConnectParams, mode: SslMode) -> Option<SslOpts> {
+    let files = &params.config.tls_files;
+    let mut opts = SslOpts::default();
+    if let Some(ca) = &files.ca_file {
+        opts = opts.with_root_certs(vec![PathBuf::from(ca).into()]).with_disable_built_in_roots(true);
+    }
+    if let (Some(cert), Some(key)) = (&files.client_cert_file, &files.client_key_file) {
+        opts = opts
+            .with_client_identity(Some(ClientIdentity::new(PathBuf::from(cert).into(), PathBuf::from(key).into())));
+    }
+    if params.endpoint.is_some() {
+        // Through an SSH tunnel the socket is local; verify the database's own name.
+        opts = opts.with_danger_tls_hostname_override(Some(params.config.host.clone()));
+    }
     match mode {
         SslMode::Disable => None,
         SslMode::Prefer | SslMode::Require => {
@@ -55,20 +70,17 @@ fn ssl_opts(mode: SslMode) -> Option<SslOpts> {
     }
 }
 
-fn opts(
-    config: &ConnConfig,
-    password: Option<&str>,
-    role: Role,
-    tls: Option<SslOpts>,
-    setup: Vec<String>,
-) -> OptsBuilder {
+fn opts(params: &ConnectParams, role: Role, tls: Option<SslOpts>, setup: Vec<String>) -> OptsBuilder {
+    let config = &params.config;
+    let (host, port) = params.socket_target();
+    let keepalive = config.options.keepalive_secs;
     OptsBuilder::default()
-        .ip_or_hostname(config.host.clone())
-        .tcp_port(config.port)
+        .ip_or_hostname(host)
+        .tcp_port(port)
         .user(Some(config.username.clone()))
-        .pass(password.map(str::to_owned))
+        .pass(params.password.clone())
         .db_name(Some(config.database.clone()).filter(|d| !d.is_empty()))
-        .tcp_keepalive(Some(Duration::from_secs(60)))
+        .tcp_keepalive((keepalive > 0).then(|| Duration::from_secs(u64::from(keepalive))))
         // Loopback servers are often in containers whose socket path is not ours.
         .prefer_socket(false)
         // Grid edits check affected rows; count matched rows, not only changed ones.
@@ -78,9 +90,14 @@ fn opts(
 }
 
 /// Opens one connection, honouring the connect timeout and `prefer` fallback.
-pub async fn open(config: &ConnConfig, password: Option<&str>, role: Role, setup: Vec<String>) -> DbResult<Conn> {
-    let attempt = |tls| connect(opts(config, password, role, tls, setup.clone()).into(), config, password);
-    match attempt(ssl_opts(config.ssl_mode)).await {
+/// Query connections of read-only profiles only allow read-only transactions.
+pub async fn open(params: &ConnectParams, role: Role, mut setup: Vec<String>) -> DbResult<Conn> {
+    let config = &params.config;
+    if config.read_only && role != Role::Catalog {
+        setup.insert(0, READ_ONLY.to_owned());
+    }
+    let attempt = |tls| connect(opts(params, role, tls, setup.clone()).into(), config, params.password());
+    match attempt(ssl_opts(params, config.ssl_mode)).await {
         // `prefer` falls back to plain text only when the server has no TLS at all.
         Err(Fallback::NoTls) if config.ssl_mode == SslMode::Prefer => attempt(None).await.map_err(Fallback::into_error),
         result => result.map_err(Fallback::into_error),
@@ -116,28 +133,31 @@ async fn connect(opts: Opts, config: &ConnConfig, password: Option<&str>) -> Res
     }
 }
 
+const READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
+
 /// Session settings for read-only catalog connections.
 pub fn catalog_setup(flavor: Flavor) -> Vec<String> {
-    vec!["SET SESSION TRANSACTION READ ONLY".to_owned(), flavor.timeout_statement(60)]
+    vec![READ_ONLY.to_owned(), flavor.timeout_statement(60)]
 }
 
 /// A small pool of read-only connections for the explorer, table pages and exports.
-/// `config` must be [`resolved`].
-pub fn catalog_pool(config: &ConnConfig, password: Option<&str>, flavor: Flavor) -> mysql_async::Pool {
-    let pool = PoolOpts::default().with_constraints(PoolConstraints::new(0, 4).expect("valid pool constraints"));
-    let opts = opts(config, password, Role::Catalog, ssl_opts(config.ssl_mode), catalog_setup(flavor)).pool_opts(pool);
-    mysql_async::Pool::new(opts)
+/// `params` must be [`resolved`].
+pub fn catalog_pool(params: &ConnectParams, flavor: Flavor) -> mysql_async::Pool {
+    let max = params.config.options.pool_size.max(1) as usize;
+    let pool = PoolOpts::default().with_constraints(PoolConstraints::new(0, max).expect("valid pool constraints"));
+    let tls = ssl_opts(params, params.config.ssl_mode);
+    mysql_async::Pool::new(opts(params, Role::Catalog, tls, catalog_setup(flavor)).pool_opts(pool))
 }
 
 /// Settles `prefer` to what the first connection negotiated, so later
 /// connections neither retry nor silently downgrade.
-pub fn resolved(config: &ConnConfig, info: &ServerInfo) -> ConnConfig {
-    let ssl_mode = match config.ssl_mode {
+pub fn resolved(params: &ConnectParams, info: &ServerInfo) -> ConnectParams {
+    let ssl_mode = match params.config.ssl_mode {
         SslMode::Prefer if info.tls.is_some() => SslMode::Require,
         SslMode::Prefer => SslMode::Disable,
         mode => mode,
     };
-    ConnConfig { ssl_mode, ..config.clone() }
+    ConnectParams { config: ConnConfig { ssl_mode, ..params.config.clone() }, ..params.clone() }
 }
 
 pub struct Opened {
@@ -147,10 +167,11 @@ pub struct Opened {
 }
 
 /// Opens the query connection and reads what the UI shows about the server.
-pub async fn open_query(config: &ConnConfig, password: Option<&str>) -> DbResult<Opened> {
+pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
     let started = Instant::now();
-    let mut conn = open(config, password, Role::Query, Vec::new()).await?;
-    let err = |e: mysql_async::Error| map_error(&e, password);
+    let config = &params.config;
+    let mut conn = open(params, Role::Query, Vec::new()).await?;
+    let err = |e: mysql_async::Error| map_error(&e, params.password());
     let row: mysql_async::Row = conn
         .query_first("SELECT VERSION(), CURRENT_USER(), DATABASE(), @@global.read_only")
         .await
@@ -178,7 +199,7 @@ pub async fn open_query(config: &ConnConfig, password: Option<&str>) -> DbResult
         }),
         user: text(&row, 1).unwrap_or_default(),
         database: text(&row, 2).unwrap_or_default(),
-        read_only: text(&row, 3).is_some_and(|v| v == "1"),
+        read_only: config.read_only || text(&row, 3).is_some_and(|v| v == "1"),
     };
     Ok(Opened { conn, info, flavor })
 }

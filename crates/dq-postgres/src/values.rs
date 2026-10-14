@@ -12,9 +12,37 @@ use dq_core::value::{Cell, CellLimits, hex};
 use fallible_iterator::FallibleIterator;
 use postgres_protocol::types as wire;
 use tokio_postgres::Row;
-use tokio_postgres::types::{FromSql, Kind, Type};
+use bytes::BytesMut;
+use tokio_postgres::types::{FromSql, Format, IsNull, Kind, ToSql, Type, to_sql_checked};
 
 type DecodeResult<T> = Result<T, Box<dyn Error + Sync + Send>>;
+
+/// A parameter sent in text format, so the server parses it with the input
+/// function of the type it inferred for the placeholder. `None` is NULL.
+#[derive(Debug)]
+pub struct TextParam<'a>(pub Option<&'a str>);
+
+impl ToSql for TextParam<'_> {
+    fn to_sql(&self, _: &Type, out: &mut BytesMut) -> DecodeResult<IsNull> {
+        Ok(match self.0 {
+            None => IsNull::Yes,
+            Some(v) => {
+                out.extend_from_slice(v.as_bytes());
+                IsNull::No
+            }
+        })
+    }
+
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+
+    fn encode_format(&self, _: &Type) -> Format {
+        Format::Text
+    }
+
+    to_sql_checked!();
+}
 
 /// Accepts any value and keeps the raw bytes, so decoding happens here.
 struct Raw<'a>(Option<&'a [u8]>);

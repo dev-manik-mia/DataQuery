@@ -1,6 +1,8 @@
 //! DataQuery desktop application: Tauri setup and command registration.
 
+mod cloud_auth;
 mod commands;
+mod connector;
 mod registry;
 mod safety;
 mod state;
@@ -8,7 +10,7 @@ mod state;
 use std::sync::Arc;
 
 use dq_store::{KeyringSecrets, Store};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
 
 use crate::state::AppState;
@@ -27,8 +29,10 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let store = Store::open(&data_dir.join("dataquery.db")).map_err(|e| e.message)?;
-            app.manage(AppState::new(store, Arc::new(KeyringSecrets)));
+            let known_hosts = dq_ssh::KnownHosts::new(data_dir.join("known_hosts"));
+            app.manage(AppState::new(store, Arc::new(KeyringSecrets), known_hosts));
             app.set_menu(menu(app.handle())?)?;
+            spawn_idle_reaper(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -53,6 +57,9 @@ pub fn run() {
             commands::connections::rename_folder,
             commands::connections::delete_folder,
             commands::connections::test_connection,
+            commands::connections::trust_host_key,
+            commands::connections::export_connections,
+            commands::connections::import_connections,
             commands::session::connect,
             commands::session::reconnect,
             commands::session::disconnect,
@@ -80,6 +87,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataQuery");
+}
+
+/// Event sent to every window when a session is closed by the backend.
+pub const SESSION_CLOSED_EVENT: &str = "session-closed";
+
+/// Closes sessions that passed their idle timeout and tells the windows.
+fn spawn_idle_reaper(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tick.tick().await;
+            for session_id in app.state::<AppState>().close_idle().await {
+                tracing::info!(%session_id, "closed idle session");
+                let _ = app.emit(SESSION_CLOSED_EVENT, serde_json::json!({ "session_id": session_id, "reason": "idle" }));
+            }
+        }
+    });
 }
 
 /// Standard menus without "Close Window": ⌘W and ⌘T belong to editor tabs.

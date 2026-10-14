@@ -57,6 +57,8 @@ const MIGRATIONS: &[&str] = &[r"
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+", r"
+    ALTER TABLE connections ADD COLUMN ssh_secrets TEXT NOT NULL DEFAULT '[]';
 "];
 
 /// History keeps at most this many entries; older ones are pruned.
@@ -187,11 +189,12 @@ impl Store {
             has_password: r.get(6)?,
             created_at: r.get(7)?,
             last_used_at: r.get(8)?,
+            ssh_secrets: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
         })
     }
 
     const CONNECTION_COLUMNS: &str =
-        "id, name, folder_id, environment, favorite, config, has_password, created_at, last_used_at";
+        "id, name, folder_id, environment, favorite, config, has_password, created_at, last_used_at, ssh_secrets";
 
     pub fn connections(&self) -> DbResult<Vec<SavedConnection>> {
         self.with(|db| {
@@ -213,18 +216,25 @@ impl Store {
         .ok_or_else(|| DbError::not_found("This connection no longer exists."))
     }
 
-    /// Inserts or updates connection metadata. The password is handled by the caller.
-    pub fn save_connection(&self, draft: &ConnectionDraft, has_password: bool) -> DbResult<SavedConnection> {
+    /// Inserts or updates connection metadata. Secrets are handled by the
+    /// caller; only whether each one exists is recorded here.
+    pub fn save_connection(
+        &self,
+        draft: &ConnectionDraft,
+        has_password: bool,
+        ssh_secrets: &[bool],
+    ) -> DbResult<SavedConnection> {
         draft.config.validate()?;
         let name = require_name(&draft.name, "Connection")?;
         let config = serde_json::to_string(&draft.config).map_err(json_error)?;
+        let ssh = serde_json::to_string(ssh_secrets).map_err(json_error)?;
         let id = draft.id.clone().unwrap_or_else(new_id);
         self.with(|db| {
             db.execute(
-                "INSERT INTO connections (id, name, folder_id, environment, favorite, config, has_password, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
-                 ON CONFLICT (id) DO UPDATE SET name = ?2, folder_id = ?3, environment = ?4, favorite = ?5, config = ?6, has_password = ?7",
-                params![id, name, draft.folder_id, environment_str(draft.environment), draft.favorite, config, has_password, now_ms()],
+                "INSERT INTO connections (id, name, folder_id, environment, favorite, config, has_password, created_at, ssh_secrets) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+                 ON CONFLICT (id) DO UPDATE SET name = ?2, folder_id = ?3, environment = ?4, favorite = ?5, config = ?6, has_password = ?7, ssh_secrets = ?9",
+                params![id, name, draft.folder_id, environment_str(draft.environment), draft.favorite, config, has_password, now_ms(), ssh],
             )
         })?;
         self.connection(&id)
@@ -425,8 +435,10 @@ mod tests {
                 username: "app".into(),
                 ssl_mode: SslMode::VerifyFull,
                 connect_timeout_secs: 10,
+                ..ConnConfig::default()
             },
             password: PasswordChange::Set { value: "hunter2-secret".into() },
+            ssh_secrets: Vec::new(),
         }
     }
 
@@ -438,14 +450,14 @@ mod tests {
         let folder = store.create_folder("Kestrel").unwrap();
         let mut d = draft("kestrel-prod");
         d.folder_id = Some(folder.id.clone());
-        let saved = store.save_connection(&d, true).unwrap();
+        let saved = store.save_connection(&d, true, &[]).unwrap();
         assert!(saved.has_password);
         assert_eq!(saved.environment, Environment::Production);
         assert_eq!(store.connections().unwrap().len(), 1);
 
         d.id = Some(saved.id.clone());
         d.name = "renamed".into();
-        store.save_connection(&d, false).unwrap();
+        store.save_connection(&d, false, &[]).unwrap();
         let reloaded = store.connection(&saved.id).unwrap();
         assert_eq!((reloaded.name.as_str(), reloaded.has_password), ("renamed", false));
 

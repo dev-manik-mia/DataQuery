@@ -1,0 +1,19 @@
+[package]
+name = "dq-ssh"
+description = "SSH tunnels (with jump hosts and host-key verification) for DataQuery connections."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dq-core.workspace = true
+russh = { version = "0.64", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -4,6 +4,7 @@
 //! Paging, grid edits, export and import are written once in [`crate::ops`]
 //! on top of these primitives.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -24,15 +25,55 @@ pub type BatchFn<'a> = dyn FnMut(&[ColumnMeta], Vec<Row>) -> DbResult<()> + Send
 /// Statements executed inside one transaction, produced lazily.
 pub type StatementIter<'a> = dyn Iterator<Item = DbResult<BoundStatement>> + Send + 'a;
 
+/// Text parameters for a statement. `None` is SQL NULL. The server converts
+/// each one with the input function of the type it infers for the placeholder.
+pub type Params<'a> = &'a [Option<String>];
+
+/// Everything an adapter needs to open connections. Secrets stay in memory.
+#[derive(Clone)]
+pub struct ConnectParams {
+    pub config: ConnConfig,
+    /// Password, or a short-lived cloud IAM token used as the password.
+    pub password: Option<String>,
+    /// Local end of an SSH tunnel. Sockets connect here while TLS still
+    /// verifies `config.host`.
+    pub endpoint: Option<SocketAddr>,
+}
+
+impl ConnectParams {
+    pub fn new(config: ConnConfig, password: Option<String>) -> Self {
+        Self { config, password, endpoint: None }
+    }
+
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    /// Host and port to open sockets to.
+    pub fn socket_target(&self) -> (String, u16) {
+        self.endpoint.map_or_else(|| (self.config.host.clone(), self.config.port), |a| (a.ip().to_string(), a.port()))
+    }
+}
+
+impl std::fmt::Debug for ConnectParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectParams")
+            .field("config", &self.config)
+            .field("password", &self.password.as_ref().map(|_| crate::redact::MASK))
+            .field("endpoint", &self.endpoint)
+            .finish()
+    }
+}
+
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync {
     fn engine(&self) -> Engine;
     fn capabilities(&self) -> Capabilities;
 
     /// Connects, reads server details and disconnects.
-    async fn test(&self, config: &ConnConfig, password: Option<&str>) -> DbResult<ServerInfo>;
+    async fn test(&self, params: &ConnectParams) -> DbResult<ServerInfo>;
 
-    async fn connect(&self, config: &ConnConfig, password: Option<&str>) -> DbResult<Arc<dyn Session>>;
+    async fn connect(&self, params: &ConnectParams) -> DbResult<Arc<dyn Session>>;
 }
 
 /// An open connection. Methods take `&self`; implementations serialise access
@@ -51,8 +92,9 @@ pub trait Session: Send + Sync {
 
     /// Runs one user statement on the query connection and returns at most
     /// `row_limit` rows. Remaining rows stay on the server until
-    /// [`Session::fetch_more`] or the next `execute`.
-    async fn execute(&self, sql: &str, options: ExecOptions) -> DbResult<StatementResult>;
+    /// [`Session::fetch_more`] or the next `execute`. `params` bind the
+    /// statement's placeholders (`$1` / `?`) as text.
+    async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult>;
 
     async fn fetch_more(&self, limit: u32) -> DbResult<RowsPage>;
 
@@ -66,10 +108,22 @@ pub trait Session: Send + Sync {
 
     /// Runs a read-only query on a catalog connection for `database` and
     /// returns every row (callers bound the query with `LIMIT`).
-    async fn read_query(&self, database: &str, sql: &str, limits: CellLimits) -> DbResult<(Vec<ColumnMeta>, Vec<Row>)>;
+    async fn read_query(
+        &self,
+        database: &str,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+    ) -> DbResult<(Vec<ColumnMeta>, Vec<Row>)>;
 
     /// Streams a read-only query in batches, for exports.
-    async fn stream_query(&self, database: &str, sql: &str, on_batch: &mut BatchFn<'_>) -> DbResult<u64>;
+    async fn stream_query(
+        &self,
+        database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64>;
 
     /// Cheap row estimate from the catalog, if the engine keeps one.
     async fn row_estimate(&self, object: &ObjectRef) -> DbResult<Option<i64>>;

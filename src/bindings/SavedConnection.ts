@@ -6,4 +6,8 @@ export type SavedConnection = { id: string, name: string, folder_id: string | nu
 /**
  * A password for this connection is stored in the keychain.
  */
-has_password: boolean, created_at: number, last_used_at: number | null, };
+has_password: boolean, created_at: number, last_used_at: number | null, 
+/**
+ * Per SSH hop (jump hosts first): a password or key passphrase is in the keychain.
+ */
+ssh_secrets: Array<boolean>, };

@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use dq_core::adapter::ConnectParams;
 use dq_core::config::ConnConfig;
 use dq_core::result::{ServerInfo, TlsInfo};
 use dq_core::{DbError, DbResult, ErrorKind, engine::Engine};
@@ -26,20 +27,18 @@ pub struct Connection {
     pub notices: mpsc::UnboundedReceiver<String>,
 }
 
-pub async fn open(
-    config: &ConnConfig,
-    password: Option<&str>,
-    database: &str,
-    role: Role,
-    tls: &MakeRustlsConnect,
-) -> DbResult<Connection> {
+pub async fn open(params: &ConnectParams, database: &str, role: Role, tls: &MakeRustlsConnect) -> DbResult<Connection> {
+    let config = &params.config;
+    let password = params.password();
     let mut pg = tokio_postgres::Config::new();
+    // With an SSH tunnel the socket goes to the tunnel while TLS still checks `host`.
     pg.host(&config.host)
-        .port(config.port)
+        .port(params.endpoint.map_or(config.port, |a| a.port()))
         .user(&config.username)
         .dbname(if database.is_empty() { "postgres" } else { database })
         .connect_timeout(Duration::from_secs(u64::from(config.connect_timeout_secs)))
-        .keepalives(true)
+        .keepalives(config.options.keepalive_secs > 0)
+        .keepalives_idle(Duration::from_secs(u64::from(config.options.keepalive_secs.max(1))))
         .application_name(match role {
             Role::Query => "DataQuery",
             Role::Catalog => "DataQuery (catalog)",
@@ -50,8 +49,14 @@ pub async fn open(
             dq_core::config::SslMode::Prefer => PgSslMode::Prefer,
             _ => PgSslMode::Require,
         });
+    if let Some(endpoint) = params.endpoint {
+        pg.hostaddr(endpoint.ip());
+    }
     if role == Role::Catalog {
         pg.options("-c default_transaction_read_only=on -c statement_timeout=60000");
+    } else if config.read_only {
+        // Read-only profiles: every transaction on this session is read-only.
+        pg.options("-c default_transaction_read_only=on");
     }
     if let Some(password) = password {
         pg.password(password);
@@ -107,6 +112,6 @@ pub async fn server_info(client: &Client, config: &ConnConfig, started: Instant)
         }),
         user: row.get(1),
         database: row.get(2),
-        read_only: row.get(3),
+        read_only: row.get::<_, bool>(3) || config.read_only,
     })
 }

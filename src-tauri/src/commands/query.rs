@@ -67,7 +67,7 @@ pub async fn run_sql(
     for (index, statement) in statements.iter().enumerate() {
         let text = statement.text(&sql);
         let ran = Instant::now();
-        let result = open.session.execute(text, options).await;
+        let result = open.session.execute(text, &[], options).await;
         if settings.keep_history {
             let entry = NewHistoryEntry {
                 connection_id: Some(connection.id.clone()),

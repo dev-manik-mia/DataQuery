@@ -12,8 +12,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dq_core::DbResult;
-use dq_core::adapter::{DatabaseAdapter, Session};
-use dq_core::config::ConnConfig;
+use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::engine::{Capabilities, Engine};
 use dq_core::result::ServerInfo;
 
@@ -39,6 +38,14 @@ impl PostgresAdapter {
     };
 }
 
+impl PostgresAdapter {
+    async fn open(params: &ConnectParams) -> DbResult<PgSession> {
+        let config = &params.config;
+        config.validate()?;
+        PgSession::open(params, tls::connector(config.ssl_mode, &config.tls_files)?).await
+    }
+}
+
 #[async_trait]
 impl DatabaseAdapter for PostgresAdapter {
     fn engine(&self) -> Engine {
@@ -49,16 +56,14 @@ impl DatabaseAdapter for PostgresAdapter {
         Self::CAPABILITIES
     }
 
-    async fn test(&self, config: &ConnConfig, password: Option<&str>) -> DbResult<ServerInfo> {
-        config.validate()?;
-        let session = PgSession::open(config, password, tls::connector(config.ssl_mode)?).await?;
+    async fn test(&self, params: &ConnectParams) -> DbResult<ServerInfo> {
+        let session = Self::open(params).await?;
         let info = session.info().clone();
         session.close().await;
         Ok(info)
     }
 
-    async fn connect(&self, config: &ConnConfig, password: Option<&str>) -> DbResult<Arc<dyn Session>> {
-        config.validate()?;
-        Ok(Arc::new(PgSession::open(config, password, tls::connector(config.ssl_mode)?).await?))
+    async fn connect(&self, params: &ConnectParams) -> DbResult<Arc<dyn Session>> {
+        Ok(Arc::new(Self::open(params).await?))
     }
 }

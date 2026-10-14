@@ -6,7 +6,7 @@ use crate::edit::{BoundStatement, ColumnValue, RowChange};
 use crate::error::{DbError, DbResult};
 use crate::node::ObjectRef;
 use crate::schema::{ColumnInfo, TableStructure};
-use crate::table::SortSpec;
+use crate::table::{RowFilter, SortSpec};
 
 use super::dialect::Dialect;
 use super::lexer::{TokenKind, tokenize};
@@ -78,8 +78,44 @@ pub fn select_list(d: &dyn Dialect, columns: &[ColumnInfo]) -> String {
         .join(", ")
 }
 
-fn where_clause(filter: Option<&str>) -> String {
-    filter.map(|f| format!(" WHERE ({f})")).unwrap_or_default()
+/// A query with its text parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundQuery {
+    pub sql: String,
+    pub params: Vec<Option<String>>,
+}
+
+/// Escapes `%`, `_` and `\` for a `LIKE` pattern that uses `\` as the escape.
+pub fn like_contains(text: &str) -> String {
+    format!("%{}%", text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
+}
+
+/// `WHERE` clause for a [`RowFilter`]: the user's expression plus parameterised
+/// matches and searches.
+fn where_clause(p: &mut Params<'_>, structure: &TableStructure, rows: &RowFilter) -> DbResult<String> {
+    let d = p.dialect;
+    let mut parts = Vec::new();
+    if let Some(filter) = validate_filter(d, rows.filter.as_deref())? {
+        parts.push(format!("({filter})"));
+    }
+    for m in &rows.matches {
+        let col = column(structure, &m.column)?;
+        let name = d.quote_ident(&col.name);
+        parts.push(match m.value.as_deref() {
+            None => format!("{name} IS NULL"),
+            Some(v) => format!("{name} = {}", p.push(col, Some(v))),
+        });
+    }
+    for search in rows.searches.iter().filter(|s| !s.contains.is_empty()) {
+        let col = column(structure, &search.column)?;
+        if search.contains.len() > 1000 {
+            return Err(DbError::invalid("A column search is limited to 1000 characters."));
+        }
+        let text = ColumnInfo { data_type: "text".into(), ..col.clone() };
+        let placeholder = p.push(&text, Some(&like_contains(&search.contains)));
+        parts.push(d.search_predicate(&d.quote_ident(&col.name), &placeholder));
+    }
+    Ok(if parts.is_empty() { String::new() } else { format!(" WHERE {}", parts.join(" AND ")) })
 }
 
 fn order_clause(d: &dyn Dialect, structure: &TableStructure, sort: Option<&SortSpec>) -> DbResult<String> {
@@ -102,34 +138,38 @@ fn order_clause(d: &dyn Dialect, structure: &TableStructure, sort: Option<&SortS
 pub fn table_select(
     d: &dyn Dialect,
     structure: &TableStructure,
-    filter: Option<&str>,
+    rows: &RowFilter,
     sort: Option<&SortSpec>,
-) -> DbResult<String> {
-    let filter = validate_filter(d, filter)?;
-    Ok(format!(
-        "SELECT {} FROM {}{}{}",
+) -> DbResult<BoundQuery> {
+    let mut p = Params { dialect: d, inline: false, values: Vec::new() };
+    let where_ = where_clause(&mut p, structure, rows)?;
+    let sql = format!(
+        "SELECT {} FROM {}{where_}{}",
         select_list(d, &structure.columns),
         d.quoted_name(&structure.object),
-        where_clause(filter.as_deref()),
         order_clause(d, structure, sort)?
-    ))
+    );
+    Ok(BoundQuery { sql, params: p.values })
 }
 
 /// Page query; fetches one extra row to know whether another page exists.
 pub fn page_query(
     d: &dyn Dialect,
     structure: &TableStructure,
-    filter: Option<&str>,
+    rows: &RowFilter,
     sort: Option<&SortSpec>,
     offset: u64,
     limit: u32,
-) -> DbResult<String> {
-    Ok(format!("{} LIMIT {} OFFSET {offset}", table_select(d, structure, filter, sort)?, u64::from(limit) + 1))
+) -> DbResult<BoundQuery> {
+    let mut q = table_select(d, structure, rows, sort)?;
+    q.sql = format!("{} LIMIT {} OFFSET {offset}", q.sql, u64::from(limit) + 1);
+    Ok(q)
 }
 
-pub fn count_query(d: &dyn Dialect, object: &ObjectRef, filter: Option<&str>) -> DbResult<String> {
-    let filter = validate_filter(d, filter)?;
-    Ok(format!("SELECT count(*) FROM {}{}", d.quoted_name(object), where_clause(filter.as_deref())))
+pub fn count_query(d: &dyn Dialect, structure: &TableStructure, rows: &RowFilter) -> DbResult<BoundQuery> {
+    let mut p = Params { dialect: d, inline: false, values: Vec::new() };
+    let where_ = where_clause(&mut p, structure, rows)?;
+    Ok(BoundQuery { sql: format!("SELECT count(*) FROM {}{where_}", d.quoted_name(&structure.object)), params: p.values })
 }
 
 /// `SELECT … LIMIT 100;` template for "Generate SELECT".
@@ -379,30 +419,52 @@ mod tests {
     #[test]
     fn page_query_quotes_and_casts() {
         let s = orders();
+        let rows = RowFilter { filter: Some("total > 5".into()), ..RowFilter::default() };
         let q = page_query(
             &PostgresDialect,
             &s,
-            Some("total > 5"),
+            &rows,
             Some(&SortSpec { column: "total".into(), descending: true }),
             100,
             50,
         )
         .unwrap();
         assert_eq!(
-            q,
+            q.sql,
             r#"SELECT "id", "total", "geo"::text AS "geo", "raw" FROM "public"."orders" WHERE (total > 5) ORDER BY "total" DESC LIMIT 51 OFFSET 100"#
         );
+        assert!(q.params.is_empty());
         assert!(
             page_query(
                 &PostgresDialect,
                 &s,
-                None,
+                &RowFilter::default(),
                 Some(&SortSpec { column: "nope\"".into(), descending: false }),
                 0,
                 1
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn matches_and_searches_are_parameters() {
+        let s = orders();
+        let rows = RowFilter {
+            filter: None,
+            matches: vec![cv("id", Some("7")), cv("total", None)],
+            searches: vec![crate::table::ColumnSearch { column: "geo".into(), contains: "50%_x".into() }],
+        };
+        let q = count_query(&PostgresDialect, &s, &rows).unwrap();
+        assert_eq!(
+            q.sql,
+            r#"SELECT count(*) FROM "public"."orders" WHERE "id" = $1::text::bigint AND "total" IS NULL AND "geo"::text ILIKE $2::text::text"#
+        );
+        assert_eq!(q.params, vec![Some("7".into()), Some(r"%50\%\_x%".into())]);
+        let my = table_select(&MysqlDialect, &s, &rows, None).unwrap();
+        assert!(my.sql.contains("WHERE `id` = ? AND `total` IS NULL AND CAST(`geo` AS CHAR) LIKE ?"), "{}", my.sql);
+        let unknown = RowFilter { matches: vec![cv("nope", Some("1"))], ..RowFilter::default() };
+        assert!(count_query(&PostgresDialect, &s, &unknown).is_err());
     }
 
     #[test]

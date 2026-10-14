@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 dq-core.workspace = true
 async-trait.workspace = true
+bytes = "1"
 chrono.workspace = true
 fallible-iterator = "0.2"
 futures-util.workspace = true

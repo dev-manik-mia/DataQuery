@@ -5,15 +5,13 @@
 //! database, opened lazily) so the explorer keeps working while a query runs.
 //! Writes from the grid and imports use a short-lived connection per transaction.
 
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use dq_core::adapter::{BatchFn, Session, StatementIter, check_affected};
-use dq_core::config::ConnConfig;
+use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::TableStructure;
@@ -29,20 +27,32 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 use crate::catalog;
 use crate::connect::{self, Role};
 use crate::error::map_error;
-use crate::values::{column_meta, decode_row};
+use crate::values::{TextParam, column_meta, decode_row};
 
 const STREAM_BATCH: usize = 1_000;
 
+fn text_params(params: Params<'_>) -> impl ExactSizeIterator<Item = TextParam<'_>> {
+    params.iter().map(|p| TextParam(p.as_deref()))
+}
+
+fn check_param_count(expected: usize, given: usize) -> DbResult<()> {
+    if expected == given {
+        return Ok(());
+    }
+    Err(DbError::invalid(format!("The statement has {expected} parameter(s) but {given} value(s) were given."))
+        .with_action(Some("Fill in a value for every $n placeholder.")))
+}
+
 pub struct PgSession {
-    config: ConnConfig,
-    /// Kept in memory only to open catalog and edit connections.
-    password: Option<String>,
+    /// Kept in memory only, to open catalog and edit connections.
+    params: ConnectParams,
     info: ServerInfo,
     tls: MakeRustlsConnect,
     query: Mutex<QueryConnection>,
     cancel_token: CancelToken,
     running: AtomicBool,
-    catalogs: Mutex<HashMap<String, Arc<Client>>>,
+    /// Read-only catalog connections by database, most recently used last.
+    catalogs: Mutex<Vec<(String, Arc<Client>)>>,
 }
 
 struct QueryConnection {
@@ -59,9 +69,10 @@ struct Cursor {
 }
 
 impl PgSession {
-    pub(crate) async fn open(config: &ConnConfig, password: Option<&str>, tls: MakeRustlsConnect) -> DbResult<Self> {
+    pub(crate) async fn open(params: &ConnectParams, tls: MakeRustlsConnect) -> DbResult<Self> {
         let started = Instant::now();
-        let conn = connect::open(config, password, &config.database, Role::Query, &tls).await?;
+        let config = &params.config;
+        let conn = connect::open(params, &config.database, Role::Query, &tls).await?;
         let info = connect::server_info(&conn.client, config, started).await?;
         Ok(Self {
             cancel_token: conn.client.cancel_token(),
@@ -71,30 +82,38 @@ impl PgSession {
                 cursor: None,
                 timeout_secs: None,
             }),
-            config: config.clone(),
-            password: password.map(str::to_owned),
+            params: params.clone(),
             info,
             tls,
             running: AtomicBool::new(false),
-            catalogs: Mutex::new(HashMap::new()),
+            catalogs: Mutex::new(Vec::new()),
         })
     }
 
     fn err(&self, e: &tokio_postgres::Error) -> DbError {
-        map_error(e, self.password.as_deref())
+        map_error(e, self.params.password())
     }
 
     /// Read-only catalog connection for `database`, opened on first use and
-    /// reopened if the server closed it.
+    /// reopened if the server closed it. At most `pool_size` stay open; the
+    /// least recently used one is closed first.
     async fn catalog(&self, database: &str) -> DbResult<Arc<Client>> {
         let database = if database.is_empty() { &self.info.database } else { database };
         let mut catalogs = self.catalogs.lock().await;
-        if let Some(client) = catalogs.get(database).filter(|c| !c.is_closed()) {
-            return Ok(client.clone());
+        if let Some(i) = catalogs.iter().position(|(db, c)| db == database && !c.is_closed()) {
+            let entry = catalogs.remove(i);
+            let client = entry.1.clone();
+            catalogs.push(entry);
+            return Ok(client);
         }
-        let conn = connect::open(&self.config, self.password.as_deref(), database, Role::Catalog, &self.tls).await?;
+        catalogs.retain(|(db, c)| db != database && !c.is_closed());
+        let conn = connect::open(&self.params, database, Role::Catalog, &self.tls).await?;
         let client = Arc::new(conn.client);
-        catalogs.insert(database.to_owned(), client.clone());
+        let max = self.params.config.options.pool_size.max(1) as usize;
+        while catalogs.len() >= max {
+            catalogs.remove(0);
+        }
+        catalogs.push((database.to_owned(), client.clone()));
         Ok(client)
     }
 
@@ -134,16 +153,18 @@ impl PgSession {
         Ok((rows, cursor.pending.is_some()))
     }
 
-    async fn run(&self, q: &mut QueryConnection, sql: &str, options: ExecOptions) -> DbResult<StatementResult> {
+    async fn run(
+        &self,
+        q: &mut QueryConnection,
+        sql: &str,
+        params: Params<'_>,
+        options: ExecOptions,
+    ) -> DbResult<StatementResult> {
         let started = Instant::now();
         let statement = q.client.prepare(sql).await.map_err(|e| self.err(&e))?;
-        if !statement.params().is_empty() {
-            return Err(DbError::unsupported(
-                "Parameterized queries ($1, $2, …) are planned for a later release (P1).",
-            ));
-        }
+        check_param_count(statement.params().len(), params.len())?;
         let columns = column_meta(statement.columns());
-        let stream = q.client.query_raw(&statement, std::iter::empty::<&str>()).await.map_err(|e| self.err(&e))?;
+        let stream = q.client.query_raw(&statement, text_params(params)).await.map_err(|e| self.err(&e))?;
         let mut cursor = Cursor { stream: Box::pin(stream), pending: None };
         let (rows, has_more) = self.read_rows(&mut cursor, options.row_limit).await?;
         let affected = if has_more { None } else { cursor.stream.rows_affected() };
@@ -188,14 +209,14 @@ impl Session for PgSession {
         catalog::search(&*self.catalog("").await?, &self.info.database, query, limit).await
     }
 
-    async fn execute(&self, sql: &str, options: ExecOptions) -> DbResult<StatementResult> {
+    async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
         let options = options.clamped();
         let mut q = self.query.lock().await;
         self.close_cursor(&mut q).await;
         while q.notices.try_recv().is_ok() {}
         self.set_timeout(&mut q, options.timeout_secs).await?;
         self.running.store(true, Ordering::SeqCst);
-        let result = self.run(&mut q, sql, options).await;
+        let result = self.run(&mut q, sql, params, options).await;
         self.running.store(false, Ordering::SeqCst);
         let mut notices = Vec::new();
         while let Ok(n) = q.notices.try_recv() {
@@ -239,19 +260,34 @@ impl Session for PgSession {
         &self,
         database: &str,
         sql: &str,
+        params: Params<'_>,
         limits: CellLimits,
     ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let client = self.catalog(database).await?;
         let statement = client.prepare(sql).await.map_err(|e| self.err(&e))?;
-        let rows = client.query(&statement, &[]).await.map_err(|e| self.err(&e))?;
+        check_param_count(statement.params().len(), params.len())?;
+        let rows: Vec<_> = client
+            .query_raw(&statement, text_params(params))
+            .await
+            .map_err(|e| self.err(&e))?
+            .try_collect()
+            .await
+            .map_err(|e| self.err(&e))?;
         Ok((column_meta(statement.columns()), rows.iter().map(|r| decode_row(r, limits)).collect()))
     }
 
-    async fn stream_query(&self, database: &str, sql: &str, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         let client = self.catalog(database).await?;
         let statement = client.prepare(sql).await.map_err(|e| self.err(&e))?;
+        check_param_count(statement.params().len(), params.len())?;
         let columns = column_meta(statement.columns());
-        let stream = client.query_raw(&statement, std::iter::empty::<&str>()).await.map_err(|e| self.err(&e))?;
+        let stream = client.query_raw(&statement, text_params(params)).await.map_err(|e| self.err(&e))?;
         let mut stream = std::pin::pin!(stream);
         let mut total = 0u64;
         let mut batch = Vec::with_capacity(STREAM_BATCH);
@@ -273,7 +309,7 @@ impl Session for PgSession {
 
     async fn run_in_transaction(&self, database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
         let database = if database.is_empty() { self.info.database.clone() } else { database.to_owned() };
-        let mut conn = connect::open(&self.config, self.password.as_deref(), &database, Role::Write, &self.tls).await?;
+        let mut conn = connect::open(&self.params, &database, Role::Write, &self.tls).await?;
         let tx = conn.client.transaction().await.map_err(|e| self.err(&e))?;
         let mut counts = Vec::new();
         for statement in statements {

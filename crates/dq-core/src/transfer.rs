@@ -10,7 +10,7 @@ use ts_rs::TS;
 use crate::error::{DbError, DbResult, ErrorKind};
 use crate::node::ObjectRef;
 use crate::result::{ColumnMeta, Row};
-use crate::table::SortSpec;
+use crate::table::{RowFilter, SortSpec};
 use crate::value::Cell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -31,7 +31,9 @@ pub enum ExportSource {
     },
     Table {
         object: ObjectRef,
-        filter: Option<String>,
+        #[serde(flatten)]
+        #[ts(flatten)]
+        rows: RowFilter,
         sort: Option<SortSpec>,
     },
     /// Rows already loaded in the grid, e.g. a selection. Rejected when any

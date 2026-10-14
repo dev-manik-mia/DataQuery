@@ -6,4 +6,8 @@ import type { PasswordChange } from "./PasswordChange";
 /**
  * Create or update request from the connection form.
  */
-export type ConnectionDraft = { id: string | null, name: string, folder_id: string | null, environment: Environment, favorite: boolean, config: ConnConfig, password: PasswordChange, };
+export type ConnectionDraft = { id: string | null, name: string, folder_id: string | null, environment: Environment, favorite: boolean, config: ConnConfig, password: PasswordChange, 
+/**
+ * One change per SSH hop, in connection order. Missing entries keep the saved secret.
+ */
+ssh_secrets: Array<PasswordChange>, };

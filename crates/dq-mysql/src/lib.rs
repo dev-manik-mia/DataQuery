@@ -13,8 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dq_core::DbResult;
-use dq_core::adapter::{DatabaseAdapter, Session};
-use dq_core::config::ConnConfig;
+use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::engine::{Capabilities, Engine};
 use dq_core::result::ServerInfo;
 
@@ -56,16 +55,16 @@ impl DatabaseAdapter for MysqlAdapter {
         Self::CAPABILITIES
     }
 
-    async fn test(&self, config: &ConnConfig, password: Option<&str>) -> DbResult<ServerInfo> {
-        config.validate()?;
-        let session = MySession::open(config, password).await?;
+    async fn test(&self, params: &ConnectParams) -> DbResult<ServerInfo> {
+        params.config.validate()?;
+        let session = MySession::open(params).await?;
         let info = session.info().clone();
         session.close().await;
         Ok(info)
     }
 
-    async fn connect(&self, config: &ConnConfig, password: Option<&str>) -> DbResult<Arc<dyn Session>> {
-        config.validate()?;
-        Ok(Arc::new(MySession::open(config, password).await?))
+    async fn connect(&self, params: &ConnectParams) -> DbResult<Arc<dyn Session>> {
+        params.config.validate()?;
+        Ok(Arc::new(MySession::open(params).await?))
     }
 }

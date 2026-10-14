@@ -2,7 +2,7 @@ use dq_core::edit::{ApplyReport, RowChange};
 use dq_core::node::ObjectRef;
 use dq_core::ops;
 use dq_core::schema::TableStructure;
-use dq_core::table::{RowCount, TablePage, TablePageRequest};
+use dq_core::table::{RowCount, RowFilter, TablePage, TablePageRequest};
 use tauri::State;
 
 use super::{CmdResult, Guarded};
@@ -38,9 +38,9 @@ pub async fn row_count(
     state: State<'_, AppState>,
     session_id: String,
     object: ObjectRef,
-    filter: Option<String>,
+    rows: RowFilter,
 ) -> CmdResult<RowCount> {
-    ops::row_count(&*state.session(&session_id).await?.session, &object, filter.as_deref()).await
+    ops::row_count(&*state.session(&session_id).await?.session, &object, &rows).await
 }
 
 #[tauri::command]

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::edit::ColumnValue;
 use crate::node::ObjectRef;
 use crate::result::{ColumnMeta, Row};
 
@@ -13,12 +14,34 @@ pub struct SortSpec {
     pub descending: bool,
 }
 
+/// Case-insensitive "contains" search on one column, sent as a parameter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ColumnSearch {
+    pub column: String,
+    pub contains: String,
+}
+
+/// Which rows of a table to read. Everything except `filter` travels as parameters.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct RowFilter {
+    /// A boolean SQL expression typed by the user, without the `WHERE` keyword.
+    pub filter: Option<String>,
+    /// Exact matches, e.g. from foreign-key navigation. `None` matches NULL.
+    pub matches: Vec<ColumnValue>,
+    /// Per-column searches from the grid header.
+    pub searches: Vec<ColumnSearch>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct TablePageRequest {
     pub object: ObjectRef,
-    /// A boolean SQL expression typed by the user, without the `WHERE` keyword.
-    pub filter: Option<String>,
+    #[serde(flatten)]
+    #[ts(flatten)]
+    pub rows: RowFilter,
     pub sort: Option<SortSpec>,
     #[ts(type = "number")]
     pub offset: u64,

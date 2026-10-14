@@ -9,7 +9,7 @@ use crate::error::{DbError, DbResult};
 use crate::node::{NodeKind, ObjectRef};
 use crate::schema::TableStructure;
 use crate::sql::builder;
-use crate::table::{RowCount, TablePage, TablePageRequest};
+use crate::table::{RowCount, RowFilter, TablePage, TablePageRequest};
 use crate::transfer::{self, CsvOptions, ExportFormat, ExportReport, ExportSource};
 use crate::value::CellLimits;
 
@@ -45,31 +45,27 @@ pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResu
     }
     let limit = req.limit.clamp(1, MAX_PAGE_SIZE);
     let structure = session.structure(&req.object).await?;
-    let sql = builder::page_query(
-        session.dialect(),
-        &structure,
-        req.filter.as_deref(),
-        req.sort.as_ref(),
-        req.offset,
-        limit,
-    )?;
+    let q = builder::page_query(session.dialect(), &structure, &req.rows, req.sort.as_ref(), req.offset, limit)?;
     let started = Instant::now();
-    let (columns, mut rows) = session.read_query(&req.object.database, &sql, CellLimits::GRID).await?;
+    let (columns, mut rows) = session.read_query(&req.object.database, &q.sql, &q.params, CellLimits::GRID).await?;
     let has_more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     Ok(TablePage { columns, rows, offset: req.offset, has_more, duration_ms: elapsed_ms(started) })
 }
 
-pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: Option<&str>) -> DbResult<RowCount> {
-    let filter = builder::validate_filter(session.dialect(), filter)?;
-    if filter.is_none()
+pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFilter) -> DbResult<RowCount> {
+    let unfiltered = builder::validate_filter(session.dialect(), filter.filter.as_deref())?.is_none()
+        && filter.matches.is_empty()
+        && filter.searches.iter().all(|s| s.contains.is_empty());
+    if unfiltered
         && let Some(estimate) = session.row_estimate(object).await?
         && estimate > EXACT_COUNT_THRESHOLD
     {
         return Ok(RowCount { count: estimate, exact: false });
     }
-    let sql = builder::count_query(session.dialect(), object, filter.as_deref())?;
-    let (_, rows) = session.read_query(&object.database, &sql, CellLimits::GRID).await?;
+    let structure = session.structure(object).await?;
+    let q = builder::count_query(session.dialect(), &structure, filter)?;
+    let (_, rows) = session.read_query(&object.database, &q.sql, &q.params, CellLimits::GRID).await?;
     let count = rows
         .first()
         .and_then(|r| r.first())
@@ -117,7 +113,7 @@ pub async fn export(
     format: ExportFormat,
     path: &Path,
 ) -> DbResult<ExportReport> {
-    let (database, sql) = match source {
+    let (database, sql, params) = match source {
         ExportSource::Rows { columns, rows } => return export_rows(columns, rows, format, path),
         ExportSource::Query { sql } => {
             let statements = crate::sql::split_statements(sql, session.dialect().flavor());
@@ -127,21 +123,19 @@ pub async fn export(
             if statement.writes {
                 return Err(DbError::invalid("Only read-only statements can be exported."));
             }
-            (session.info().database.clone(), statement.text(sql).to_owned())
+            (session.info().database.clone(), statement.text(sql).to_owned(), Vec::new())
         }
-        ExportSource::Table { object, filter, sort } => {
+        ExportSource::Table { object, rows, sort } => {
             let structure = session.structure(object).await?;
-            (
-                object.database.clone(),
-                builder::table_select(session.dialect(), &structure, filter.as_deref(), sort.as_ref())?,
-            )
+            let q = builder::table_select(session.dialect(), &structure, rows, sort.as_ref())?;
+            (object.database.clone(), q.sql, q.params)
         }
     };
     let started = Instant::now();
     let mut sink = transfer::file_sink(path, format)?;
     let mut started_sink = false;
     let rows = session
-        .stream_query(&database, &sql, &mut |columns, batch| {
+        .stream_query(&database, &sql, &params, &mut |columns, batch| {
             if !started_sink {
                 sink.begin(columns)?;
                 started_sink = true;
