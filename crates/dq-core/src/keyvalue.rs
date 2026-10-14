@@ -239,14 +239,29 @@ pub struct StreamEntry {
 #[ts(export)]
 pub enum KeyValue {
     /// `truncated` when longer than [`MAX_STRING_BYTES`]; then it cannot be edited here.
-    String { value: RString, truncated: bool },
-    Hash { entries: Vec<FieldValue> },
-    List { items: Vec<ListItem> },
-    Set { members: Vec<RString> },
-    Zset { members: Vec<ScoredMember> },
-    Stream { entries: Vec<StreamEntry> },
+    String {
+        value: RString,
+        truncated: bool,
+    },
+    Hash {
+        entries: Vec<FieldValue>,
+    },
+    List {
+        items: Vec<ListItem>,
+    },
+    Set {
+        members: Vec<RString>,
+    },
+    Zset {
+        members: Vec<ScoredMember>,
+    },
+    Stream {
+        entries: Vec<StreamEntry>,
+    },
     /// Module types: the server's text form when one is available.
-    Other { text: Option<String> },
+    Other {
+        text: Option<String>,
+    },
 }
 
 /// Which page of a value to read. `cursor` continues from [`ValuePage::next`].
@@ -281,9 +296,16 @@ pub struct ValuePage {
 #[serde(tag = "op", rename_all = "snake_case")]
 #[ts(export)]
 pub enum KeyEdit {
-    SetString { value: RString },
-    HashSet { field: RString, value: RString },
-    HashDelete { field: RString },
+    SetString {
+        value: RString,
+    },
+    HashSet {
+        field: RString,
+        value: RString,
+    },
+    HashDelete {
+        field: RString,
+    },
     /// `LSET`; fails when the item at `index` is no longer `expected`.
     ListSet {
         #[ts(type = "number")]
@@ -291,27 +313,45 @@ pub enum KeyEdit {
         expected: RString,
         value: RString,
     },
-    ListPush { value: RString, head: bool },
+    ListPush {
+        value: RString,
+        head: bool,
+    },
     /// Removes the item at `index` if it is still `expected`.
     ListRemove {
         #[ts(type = "number")]
         index: i64,
         expected: RString,
     },
-    SetAdd { member: RString },
-    SetRemove { member: RString },
-    ZsetAdd { member: RString, score: String },
-    ZsetRemove { member: RString },
+    SetAdd {
+        member: RString,
+    },
+    SetRemove {
+        member: RString,
+    },
+    ZsetAdd {
+        member: RString,
+        score: String,
+    },
+    ZsetRemove {
+        member: RString,
+    },
     /// `XADD key * field value …`.
-    StreamAdd { fields: Vec<(RString, RString)> },
-    StreamDelete { id: String },
+    StreamAdd {
+        fields: Vec<(RString, RString)>,
+    },
+    StreamDelete {
+        id: String,
+    },
     /// `PEXPIRE`, or `PERSIST` when `None`.
     Expire {
         #[ts(type = "number | null")]
         ttl_ms: Option<i64>,
     },
     /// `RENAMENX`: refuses to overwrite an existing key.
-    Rename { new_key: RString },
+    Rename {
+        new_key: RString,
+    },
     /// `UNLINK`.
     Delete,
 }

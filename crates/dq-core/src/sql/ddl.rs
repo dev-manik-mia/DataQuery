@@ -496,7 +496,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 }
                 SqlFlavor::Sqlserver => vec![sp_rename(table.clone(), new_name, "")],
                 // Refused above.
-                SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb | SqlFlavor::Partiql | SqlFlavor::Redis => {
+                SqlFlavor::Mysql
+                | SqlFlavor::Clickhouse
+                | SqlFlavor::Mongodb
+                | SqlFlavor::Partiql
+                | SqlFlavor::Redis => {
                     let target = ObjectRef { name: new_name.clone(), ..t.clone() };
                     vec![format!("RENAME TABLE {table} TO {}", d.quoted_name(&target))]
                 }

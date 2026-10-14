@@ -50,7 +50,10 @@ pub async fn keys_write(
     let open = state.session(&session_id).await?;
     let (connection, settings) = tokio::try_join!(state.connection(&open.connection_id), state.settings())?;
     let intent = if write.edit.is_delete() {
-        Intent { writes: true, destructive: vec![format!("Deletes the key {} from database {}.", write.key.key.text, write.key.database)] }
+        Intent {
+            writes: true,
+            destructive: vec![format!("Deletes the key {} from database {}.", write.key.key.text, write.key.database)],
+        }
     } else {
         Intent::write()
     };
@@ -76,7 +79,11 @@ pub async fn keys_console(
     let flavor = open.session.dialect().flavor();
     let statements = split_statements(&line, flavor);
     let [statement] = statements.as_slice() else {
-        return Err(DbError::invalid(if statements.is_empty() { "Type a command." } else { "Run one command at a time." }));
+        return Err(DbError::invalid(if statements.is_empty() {
+            "Type a command."
+        } else {
+            "Run one command at a time."
+        }));
     };
     let (connection, settings) = tokio::try_join!(state.connection(&open.connection_id), state.settings())?;
     if let Some(request) =

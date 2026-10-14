@@ -29,7 +29,8 @@ const ENGINES: EngineInfo[] = [
   engine('clickhouse', 'ClickHouse', 'Ch', 95, 'analytical', 'SQL', 8123, '8123 · SQL', 'P1', true),
   engine('duckdb', 'DuckDB', 'Dk', 85, 'analytical', 'SQL', null, 'local file · SQL', 'P2', true),
   engine('snowflake', 'Snowflake', 'Sf', 210, 'analytical', 'SQL', 443, 'HTTPS · SQL', 'P2', true),
-  engine('redis', 'Redis', 'Rd', 25, 'key_value', 'Commands', 6379, '6379 · commands · v6–7', 'P1'),
+  engine('redis', 'Redis', 'Rd', 25, 'key_value', 'Commands', 6379, '6379 · commands · v6–7', 'P1', true),
+  engine('valkey', 'Valkey', 'Vk', 175, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),
   engine('mongodb', 'MongoDB', 'Mg', 145, 'document', 'MQL', 27017, '27017 · MQL · v5–8', 'P2', true),
   engine('dynamodb', 'DynamoDB', 'Dy', 330, 'document', 'PartiQL', 443, 'AWS · PartiQL', 'P2', true),
   engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2'),
@@ -46,7 +47,15 @@ const CONNECTIONS = [
   conn('c3', 'kestrel-prod', 'Production', 'db.kestrel.internal', 'app', 'f1', true, now - 3 * 86_400_000),
   conn('c4', 'local-postgres', 'Local', 'localhost', 'postgres', null, false, null),
   { ...conn('c5', 'events-mongo', 'Development', 'events.dev.kestrel.internal', 'analytics', 'f1', false, now - 2 * 86_400_000), config: { ...conn('c5', '', 'Development', 'events.dev.kestrel.internal', 'analytics', null, false, null).config, engine: 'mongodb', port: 27017 } } as SavedConnection,
+  { ...conn('c6', 'cache-redis', 'Staging', 'cache.stg.kestrel.internal', '0', 'f1', false, now - 3_600_000), config: { ...conn('c6', '', 'Staging', 'cache.stg.kestrel.internal', '0', null, false, null).config, engine: 'redis', port: 6379 } } as SavedConnection,
 ];
+
+const rs = (text: string) => ({ text, binary: false });
+const REDIS_KEYS = [
+  ['user:1040', 'hash', 7_200_000], ['user:1041', 'hash', null], ['user:1042', 'hash', 8_040_000], ['user:1042:roles', 'set', null],
+  ['user:1042:scores', 'zset', null], ['user:1043', 'hash', 21_600_000], ['session:7f3a91', 'string', 1_740_000], ['session:7f3b02', 'string', 720_000],
+  ['events:checkout', 'stream', null], ['queue:emails', 'list', null], ['feature:new_checkout', 'string', null],
+].map(([k, t, ttl]) => ({ key: rs(k as string), key_type: t as string, type_name: t as string, ttl_ms: ttl as number | null }));
 
 const MONGO_FEATURES = {
   language: 'MQL',
@@ -167,6 +176,10 @@ const handlers: Record<string, (a: Args) => unknown> = {
   list_connections: () => ({ connections: CONNECTIONS, folders: [{ id: 'f1', name: 'Kestrel' }] }),
   connect: (a) => {
     const c = CONNECTIONS.find((x) => x.id === a.connectionId)!;
+    if (c.config.engine === 'redis') {
+      const redisCaps = { ...caps, ddl: false, schemas: false, materialized_views: false, explain: false, schema_diff: false };
+      return { session_id: `s-${c.id}`, connection: c, capabilities: redisCaps, flavor: 'redis', documents: null, keys: { databases: 16, memory_usage: true }, tunneled: false, insecure: null, server: { engine: 'redis', version: 'Redis 7.4.1', latency_ms: 3, tls: null, user: 'default', database: '0', read_only: false } };
+    }
     if (c.config.engine === 'mongodb') {
       const mongoCaps = { ...caps, ddl: false, schemas: false, materialized_views: false, schema_diff: false };
       return { session_id: `s-${c.id}`, connection: c, capabilities: mongoCaps, flavor: 'mongodb', documents: MONGO_FEATURES, tunneled: false, insecure: null, server: { engine: 'mongodb', version: 'MongoDB 7.0.14', latency_ms: 18, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'analyst', database: 'analytics', read_only: false } };
@@ -177,6 +190,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
   disconnect: () => null,
   list_children: (a) => {
     const p = a.parent as Node | null;
+    if (String(a.sessionId) === 's-c6') return Array.from({ length: 16 }, (_, i) => obj('database', String(i), null, String(i), { current: i === 0, expandable: false }));
     if (String(a.sessionId) === 's-c5') {
       if (!p) return ['analytics', 'events', 'admin', 'config', 'local'].map((d, i) => obj('database', d, null, d, { current: i === 0 }));
       return [obj('table', p.name, null, 'orders', { row_estimate: 3118, expandable: false }), obj('table', p.name, null, 'customers', { row_estimate: 1204, expandable: false }), obj('view', p.name, null, 'paid_orders', { expandable: false })];
@@ -296,6 +310,40 @@ const handlers: Record<string, (a: Args) => unknown> = {
   }),
   list_scripts: () => [{ id: 'sc1', name: 'paid-orders', sql: "SELECT * FROM public.orders WHERE status = 'paid';", connection_id: 'c1', created_at: now, updated_at: now, folder: 'Reports', tags: ['billing'], pinned: true }],
   test_connection: () => ({ engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: 'app_dev', read_only: false }),
+  keys_scan: (a) => {
+    const r = a.request as { cursor: string | null };
+    return r.cursor ? { keys: [], cursor: null, duration_ms: 2 } : { keys: REDIS_KEYS, cursor: '1840', duration_ms: 4 };
+  },
+  keys_count: () => 48302,
+  keys_value: (a) => {
+    const name = (a.request as { key: { key: { text: string } } }).key.key.text;
+    const entry = REDIS_KEYS.find((k) => k.key.text === name) ?? REDIS_KEYS[2]!;
+    const details = { key: entry.key, key_type: entry.key_type, type_name: entry.type_name, ttl_ms: entry.ttl_ms, memory_bytes: 312, encoding: 'listpack', length: 6 };
+    const fv = (f: string, v: string) => ({ field: rs(f), value: rs(v) });
+    const value =
+      entry.key_type === 'hash'
+        ? { type: 'hash', entries: [fv('email', 'li.wei@mosaic.dev'), fv('plan', 'pro'), fv('seats', '12'), fv('last_login', '2026-10-14T09:12:44Z'), fv('region', 'eu-west-1'), fv('flags', 'beta,new_checkout')] }
+        : entry.key_type === 'zset'
+          ? { type: 'zset', members: [{ member: rs('math'), score: '98.5' }, { member: rs('art'), score: '71' }] }
+          : entry.key_type === 'stream'
+            ? { type: 'stream', entries: [{ id: '1728897164000-0', fields: [fv('order', '48213'), fv('total', '129.00')] }] }
+            : entry.key_type === 'list'
+              ? { type: 'list', items: [{ index: 0, value: rs('welcome:ana@kestrel.io') }, { index: 1, value: rs('reset:li.wei@mosaic.dev') }] }
+              : entry.key_type === 'set'
+                ? { type: 'set', members: [rs('admin'), rs('billing')] }
+                : { type: 'string', value: rs('{"user":1042,"csrf":"9f2c"}'), truncated: false };
+    return { details, value, next: null, duration_ms: 3 };
+  },
+  keys_write: (a) =>
+    (a.write as { edit: { op: string } }).edit.op === 'delete' && !a.confirmation
+      ? { status: 'needs_confirmation', request: { title: 'Run a destructive statement?', reasons: ['Deletes the key from database 0.'], require_typed_name: null, destructive: true, connection_name: 'cache-redis', environment: 'Staging' } }
+      : { status: 'done', value: null },
+  keys_console: (a) => {
+    const line = String(a.line);
+    if (/^flush/i.test(line) && !a.confirmation) return { status: 'needs_confirmation', request: { title: 'Run a destructive statement?', reasons: ['FLUSHALL and FLUSHDB delete every key.'], require_typed_name: null, destructive: true, connection_name: 'cache-redis', environment: 'Staging' } };
+    const text = /^hget/i.test(line) ? '"pro"' : /^ttl/i.test(line) ? '(integer) 1784' : /^bad/i.test(line) ? "(error) ERR unknown command 'bad'" : 'OK';
+    return { status: 'done', value: { text, database: 0, error: text.startsWith('(error)'), duration_ms: 1 } };
+  },
   documents_find: (a) => {
     const r = a.request as { cursor: string | null; limit: number };
     const skip = Number(r.cursor ?? 0);

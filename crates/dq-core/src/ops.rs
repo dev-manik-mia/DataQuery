@@ -229,7 +229,8 @@ async fn export_keys(
 ) -> DbResult<ExportReport> {
     let started = Instant::now();
     let table = ObjectRef::new(NodeKind::Table, "", None, "redis_keys");
-    let target = SqlTarget { dialect: crate::sql::dialect::dialect_for(crate::sql::SqlFlavor::Postgres), table: &table };
+    let target =
+        SqlTarget { dialect: crate::sql::dialect::dialect_for(crate::sql::SqlFlavor::Postgres), table: &table };
     let mut sink = transfer::file_sink(path, format, options, Some(target))?;
     let mut started_sink = false;
     let mut total = 0u64;
