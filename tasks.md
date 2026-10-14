@@ -139,6 +139,19 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 14. Engines: ClickHouse, DuckDB, Snowflake
+
+- [x] T14.1 Core dialects: ClickHouse (backticks, `{p1:Type}` parameters cast from `Nullable(String)`, `MergeTree` tables, `Nullable(…)` columns, `MODIFY COLUMN`), DuckDB (PostgreSQL-like, `?` parameters, `db.schema.table`), Snowflake (`"NAME"`, `?`/`:1` parameters, `$$` strings, `//` comments, `SET DATA TYPE`); new `Dialect` methods `qualifies_database`, `identity_clause`, `aborts_transaction_on_error`.
+- [x] T14.2 Lexer and analyzer: ClickHouse `#` comments and backslash escapes, Snowflake Scripting blocks (`DECLARE`/`BEGIN … END`; a lone `BEGIN` is a transaction), Snowflake DDL ends a transaction, named parameters.
+- [x] T14.3 Config: `ConnConfig.properties` (warehouse, role, schema, account), file-based engines (`Engine::is_file_based`: absolute path or `:memory:`, no host/SSH), URL import for `clickhouse://` (`secure=`), `snowflake://user@account/DB/SCHEMA?warehouse=&role=` and `duckdb:///path`.
+- [x] T14.4 ClickHouse adapter `dq-clickhouse`: HTTP(S) with a server session (`SET`, `USE`, temporary tables kept), `readonly=2` for read-only profiles and catalog reads, `KILL QUERY … SYNC` cancel and timeout, affected rows from `X-ClickHouse-Summary`, explorer, structure, DDL, dependencies, schema model, imports, `system.processes` monitoring, `EXPLAIN json=1` plans.
+- [x] T14.5 DuckDB adapter `dq-duckdb` (bundled, with json and parquet): query worker thread, `InterruptHandle` cancel and timeout, exact `HUGEINT`/`DECIMAL`, zoned timestamps in UTC, read-only file access, catalog via `duckdb_*()` functions, edits in one transaction, JSON plans.
+- [x] T14.6 Snowflake adapter `dq-snowflake`: REST client (login, query, async polling, session renewal, abort, chunked Arrow/JSON results, logout), account host rule, INFORMATION_SCHEMA + `SHOW … KEYS` catalog, `GET_DDL`, grid edits and imports on a separate writer session, read-only guard, `EXPLAIN USING JSON`.
+- [x] T14.7 App and UI: registry, editor dialects, parameter labels, type suggestions, identity labels, Database file field with "New…" for DuckDB (host, auth, TLS and SSH hidden), Snowflake Account/Warehouse/Role/Schema fields, monitor process source, URL hints, tested-platforms text.
+- [x] T14.8 Test databases: `clickhouse` (25.8, :58123) and `fakesnow` (Snowflake emulator, :58000) services; DuckDB tests use temporary files. Integration tests in `crates/dq-clickhouse/tests`, `crates/dq-duckdb/tests`, `crates/dq-snowflake/tests`.
+
+---
+
 ## Verification
 
 | Area | How it was verified |
