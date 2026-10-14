@@ -161,8 +161,11 @@ pub fn prepare(
     request: &AiRequest,
 ) -> DbResult<Prepared> {
     let dialect = match flavor {
+        SqlFlavor::Postgres if version.starts_with("CockroachDB") => "CockroachDB (PostgreSQL-compatible)",
         SqlFlavor::Postgres => "PostgreSQL",
         SqlFlavor::Mysql => "MySQL/MariaDB",
+        SqlFlavor::Sqlserver => "SQL Server T-SQL",
+        SqlFlavor::Oracle => "Oracle SQL",
     };
     let (hint, task, mut sent) = match request {
         AiRequest::Sql { question } => {
