@@ -304,12 +304,15 @@ impl<'a> Scanner<'a> {
         loop {
             match self.bump() {
                 None | Some('\n') => return Err(self.error_at(start, "This regular expression is not closed.")),
-                Some('\\') => {
-                    pattern.push('\\');
-                    if let Some(c) = self.bump() {
+                // `\/` is only needed to write `/` between the slashes.
+                Some('\\') => match self.bump() {
+                    Some('/') => pattern.push('/'),
+                    Some(c) => {
+                        pattern.push('\\');
                         pattern.push(c);
                     }
-                }
+                    None => pattern.push('\\'),
+                },
                 Some('[') => {
                     class = true;
                     pattern.push('[');
@@ -670,7 +673,7 @@ fn write_value(out: &mut String, value: &Bson, indent: Option<usize>) {
             }
         }
         Bson::RegularExpression(r) => {
-            let _ = write!(out, "/{}/{}", r.pattern.replace('/', "\\/").replace('\n', "\\n"), r.options);
+            let _ = write!(out, "/{}/{}", regex_body(&r.pattern), r.options);
         }
         Bson::Timestamp(t) => {
             let _ = write!(out, "Timestamp({{ t: {}, i: {} }})", t.time, t.increment);
@@ -697,6 +700,28 @@ fn write_value(out: &mut String, value: &Bson, indent: Option<usize>) {
             }
         }
     }
+}
+
+/// A regex pattern between slashes: a bare `/` (not escaped, not in a class) gets a backslash.
+fn regex_body(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let (mut escaped, mut class) = (false, false);
+    for c in pattern.chars() {
+        match c {
+            '/' if !escaped && !class => out.push_str("\\/"),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+        if !escaped {
+            match c {
+                '[' => class = true,
+                ']' => class = false,
+                _ => {}
+            }
+        }
+        escaped = c == '\\' && !escaped;
+    }
+    out
 }
 
 fn write_document(out: &mut String, doc: &Document, indent: Option<usize>) {
@@ -778,7 +803,7 @@ mod tests {
         assert_eq!(d.get("n"), Some(&Bson::Int64(42)));
         assert_eq!(d.get("quoted key"), Some(&Bson::Double(-1500.0)));
         match d.get("r") {
-            Some(Bson::RegularExpression(r)) => assert_eq!((r.pattern.as_str(), r.options.as_str()), ("a\\/b[/]c", "i")),
+            Some(Bson::RegularExpression(r)) => assert_eq!((r.pattern.as_str(), r.options.as_str()), ("a/b[/]c", "i")),
             other => panic!("{other:?}"),
         }
         assert_eq!(parse(&pretty(&v)).unwrap(), v);

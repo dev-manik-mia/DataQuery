@@ -165,7 +165,7 @@ export function DocumentsView({ object }: { object: ObjectRef }) {
     }
   };
 
-  const documents = page?.documents ?? [];
+  const documents = useMemo(() => page?.documents ?? [], [page]);
   const first = pageIndex * pageSize;
   const grid = useMemo(() => (layout === 'table' ? documentsGrid(documents) : null), [layout, documents]);
   const tabs = [
