@@ -275,7 +275,7 @@ function RecentQueries() {
 
   useEffect(() => {
     api
-      .listHistory({ search: null, connection_id: null, before_id: null, limit: 6 })
+      .listHistory({ search: null, connection_id: null, status: null, from_ms: null, to_ms: null, before_id: null, limit: 6 })
       .then((page) => setEntries(page.entries))
       .catch(() => setEntries([]));
   }, []);

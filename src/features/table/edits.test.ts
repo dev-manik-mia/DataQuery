@@ -10,6 +10,7 @@ const col = (name: string, extra: Partial<ColumnInfo> = {}): ColumnInfo => ({
   data_type: 'text',
   nullable: true,
   default: null,
+  identity: false,
   primary_key: false,
   generated: false,
   editable: true,

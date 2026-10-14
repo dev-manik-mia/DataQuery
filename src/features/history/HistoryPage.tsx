@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { HistoryEntry } from '@/bindings/HistoryEntry';
 import type { SavedScript } from '@/bindings/SavedScript';
-import { Button, Chip, EmptyState, ErrorAlert, Eyebrow, Input, PromptDialog, Segmented, type ChipTone } from '@/components/ui';
+import { Button, Checkbox, Chip, EmptyState, ErrorAlert, Eyebrow, Icon, Input, PromptDialog, Segmented, type ChipTone } from '@/components/ui';
 import { SqlViewer } from '@/features/editor/SqlViewer';
 import { copyText } from '@/lib/clipboard';
 import { flavorOf } from '@/lib/engines';
@@ -13,8 +13,19 @@ import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
 import styles from './History.module.css';
+import { SnippetHelp, SnippetsPanel } from './Snippets';
 
-type Mode = 'history' | 'scripts';
+type Mode = 'history' | 'scripts' | 'snippets';
+type Range = 'all' | 'today' | 'week' | 'month';
+
+const DAY = 86_400_000;
+
+function rangeStart(range: Range): number | null {
+  const now = Date.now();
+  if (range === 'all') return null;
+  if (range === 'today') return new Date(new Date().toDateString()).getTime();
+  return now - (range === 'week' ? 7 : 30) * DAY;
+}
 const PAGE = 100;
 const statusTone: Record<HistoryEntry['status'], ChipTone> = { ok: 'positive', error: 'critical', cancelled: 'caution' };
 
@@ -44,13 +55,27 @@ export function HistoryPage() {
   const [scripts, setScripts] = useState<SavedScript[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [connectionId, setConnectionId] = useState('');
+  const [status, setStatus] = useState<HistoryEntry['status'] | ''>('');
+  const [range, setRange] = useState<Range>('all');
+  const [folder, setFolder] = useState('');
+  const [tag, setTag] = useState('');
+  const connections = useConnections((s) => s.connections);
   const { ask, toast, toastError } = useUi();
 
   const load = useCallback(
     async (before: number | null) => {
       setLoading(true);
       try {
-        const page = await api.listHistory({ search: search || null, connection_id: null, before_id: before, limit: PAGE });
+        const page = await api.listHistory({
+          search: search || null,
+          connection_id: connectionId || null,
+          status: status || null,
+          from_ms: rangeStart(range),
+          to_ms: null,
+          before_id: before,
+          limit: PAGE,
+        });
         setEntries((prev) => (before ? [...prev, ...page.entries] : page.entries));
         setTotal(page.total);
       } catch (e) {
@@ -59,7 +84,7 @@ export function HistoryPage() {
         setLoading(false);
       }
     },
-    [search, toastError],
+    [search, connectionId, status, range, toastError],
   );
 
   useEffect(() => {
@@ -72,8 +97,15 @@ export function HistoryPage() {
 
   const filteredScripts = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return scripts.filter((s) => !q || s.name.toLowerCase().includes(q) || s.sql.toLowerCase().includes(q));
-  }, [scripts, search]);
+    return scripts.filter(
+      (s) =>
+        (!q || s.name.toLowerCase().includes(q) || s.sql.toLowerCase().includes(q) || s.tags.some((t) => t.toLowerCase().includes(q))) &&
+        (!folder || (folder === '\u0000' ? !s.folder : s.folder === folder)) &&
+        (!tag || s.tags.includes(tag)),
+    );
+  }, [scripts, search, folder, tag]);
+  const folders = useMemo(() => [...new Set(scripts.flatMap((s) => (s.folder ? [s.folder] : [])))].sort(), [scripts]);
+  const tags = useMemo(() => [...new Set(scripts.flatMap((s) => s.tags))].sort(), [scripts]);
 
   const entry = mode === 'history' ? entries.find((e) => `h${e.id}` === selected) : undefined;
   const script = mode === 'scripts' ? filteredScripts.find((s) => `s${s.id}` === selected) : undefined;
@@ -93,6 +125,7 @@ export function HistoryPage() {
               options={[
                 { value: 'history', label: 'History' },
                 { value: 'scripts', label: 'Saved scripts', count: formatCount(scripts.length) },
+                { value: 'snippets', label: 'Snippets' },
               ]}
             />
             <span className={styles.meta}>
@@ -102,8 +135,16 @@ export function HistoryPage() {
                   size="xs"
                   variant="plain"
                   onClick={async () => {
-                    if (await ask({ title: 'Clear query history?', body: 'All history entries on this computer are deleted. Saved scripts are kept.', confirmLabel: 'Clear history', danger: true })) {
-                      await api.clearHistory().catch(toastError);
+                    const name = connections.find((c) => c.id === connectionId)?.name;
+                    if (
+                      await ask({
+                        title: name ? `Clear history of ${name}?` : 'Clear query history?',
+                        body: name ? `History entries of ${name} on this computer are deleted.` : 'All history entries on this computer are deleted. Saved scripts are kept.',
+                        confirmLabel: 'Clear history',
+                        danger: true,
+                      })
+                    ) {
+                      await api.clearHistory(connectionId || null).catch(toastError);
                       setSelected(null);
                       void load(null);
                     }
@@ -114,7 +155,54 @@ export function HistoryPage() {
               )}
             </span>
           </div>
-          <Input label="Search" small={false} mono placeholder={mode === 'history' ? 'Search SQL or connection' : 'Search scripts'} value={search} onChange={(e) => setSearch(e.target.value)} />
+          {mode !== 'snippets' && (
+            <Input label="Search" small={false} mono placeholder={mode === 'history' ? 'Search SQL or connection' : 'Search scripts and tags'} value={search} onChange={(e) => setSearch(e.target.value)} />
+          )}
+          {mode === 'history' && (
+            <div className={styles.filters}>
+              <select className="dq-input dq-input--sm" aria-label="Connection" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
+                <option value="">All connections</option>
+                {connections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <select className="dq-input dq-input--sm" aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value as HistoryEntry['status'] | '')}>
+                <option value="">Any status</option>
+                <option value="ok">OK</option>
+                <option value="error">Error</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <select className="dq-input dq-input--sm" aria-label="Date" value={range} onChange={(e) => setRange(e.target.value as Range)}>
+                <option value="all">Any time</option>
+                <option value="today">Today</option>
+                <option value="week">Last 7 days</option>
+                <option value="month">Last 30 days</option>
+              </select>
+            </div>
+          )}
+          {mode === 'scripts' && (folders.length > 0 || tags.length > 0) && (
+            <div className={styles.filters}>
+              <select className="dq-input dq-input--sm" aria-label="Folder" value={folder} onChange={(e) => setFolder(e.target.value)}>
+                <option value="">All folders</option>
+                <option value={'\u0000'}>No folder</option>
+                {folders.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+              <select className="dq-input dq-input--sm" aria-label="Tag" value={tag} onChange={(e) => setTag(e.target.value)}>
+                <option value="">Any tag</option>
+                {tags.map((t) => (
+                  <option key={t} value={t}>
+                    #{t}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
         <div className={styles.list} role="listbox" aria-label="Entries">
           {mode === 'history' &&
@@ -143,13 +231,21 @@ export function HistoryPage() {
             filteredScripts.map((s) => (
               <button key={s.id} type="button" role="option" aria-selected={selected === `s${s.id}`} className={styles.entry} onClick={() => setSelected(`s${s.id}`)}>
                 <span className={styles.entryHead}>
+                  {s.pinned && <Icon name="pin" size={11} title="Pinned" />}
                   <span className={styles.entryConn}>{s.name}</span>
+                  {s.folder && <Chip tone="mute" small>{s.folder}</Chip>}
+                  {s.tags.map((t) => (
+                    <span key={t} className="ink-3" style={{ fontSize: 11 }}>
+                      #{t}
+                    </span>
+                  ))}
                   <span className={styles.entryWhen}>updated {formatRelative(s.updated_at)}</span>
                 </span>
                 <span className={styles.entrySql}>{s.sql}</span>
               </button>
             ))}
           {mode === 'scripts' && filteredScripts.length === 0 && <EmptyState title="No saved scripts">Use File → Save as script in a query tab.</EmptyState>}
+          {mode === 'snippets' && <SnippetsPanel />}
         </div>
       </section>
       <section className={styles.detail} aria-label="Details">
@@ -157,6 +253,8 @@ export function HistoryPage() {
         {script && (
           <ScriptDetail
             script={script}
+            folders={folders}
+            onChanged={() => void loadScripts()}
             onDelete={async () => {
               if (await ask({ title: `Delete ${script.name}?`, body: 'The saved script is removed from this computer.', confirmLabel: 'Delete', danger: true })) {
                 await api.deleteScript(script.id).catch(toastError);
@@ -167,7 +265,8 @@ export function HistoryPage() {
             onCopy={() => void copyText(script.sql).then(() => toast('SQL copied'))}
           />
         )}
-        {!entry && !script && <EmptyState title="Select an entry">Details and actions appear here.</EmptyState>}
+        {!entry && !script && mode !== 'snippets' && <EmptyState title="Select an entry">Details and actions appear here.</EmptyState>}
+        {mode === 'snippets' && <SnippetHelp />}
       </section>
     </div>
   );
@@ -211,7 +310,7 @@ function HistoryDetail({ entry, onSaved }: { entry: HistoryEntry; onSaved: () =>
           confirmLabel="Save script"
           onClose={() => setNaming(false)}
           onSubmit={async (name) => {
-            await api.saveScript({ id: null, name, sql: entry.sql, connection_id: entry.connection_id });
+            await api.saveScript({ id: null, name, sql: entry.sql, connection_id: entry.connection_id, folder: null, tags: [], pinned: false });
             toast(`Saved script ${name}`, 'positive');
             onSaved();
           }}
@@ -221,13 +320,70 @@ function HistoryDetail({ entry, onSaved }: { entry: HistoryEntry; onSaved: () =>
   );
 }
 
-function ScriptDetail({ script, onDelete, onCopy }: { script: SavedScript; onDelete: () => void; onCopy: () => void }) {
+function ScriptDetail({ script, folders, onChanged, onDelete, onCopy }: { script: SavedScript; folders: string[]; onChanged: () => void; onDelete: () => void; onCopy: () => void }) {
   const session = useWorkspace((s) => s.session);
+  const toastError = useUi((s) => s.toastError);
+  const [folder, setFolder] = useState(script.folder ?? '');
+  const [tags, setTags] = useState(script.tags.join(', '));
+  useEffect(() => {
+    setFolder(script.folder ?? '');
+    setTags(script.tags.join(', '));
+  }, [script]);
+  const saveMeta = async (patch: Partial<SavedScript>) => {
+    try {
+      await api.saveScript({
+        id: script.id,
+        name: script.name,
+        sql: script.sql,
+        connection_id: script.connection_id,
+        folder: (patch.folder !== undefined ? patch.folder : script.folder) || null,
+        tags: patch.tags ?? script.tags,
+        pinned: patch.pinned ?? script.pinned,
+      });
+      onChanged();
+    } catch (e) {
+      toastError(e);
+    }
+  };
   return (
     <>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <Eyebrow>Saved script · updated {formatTimestamp(script.updated_at)}</Eyebrow>
         <h2 className={styles.detailTitle}>{script.name}</h2>
+      </div>
+      <div className={styles.metaFields}>
+        <label className="dq-field__label" htmlFor="dq-script-folder">
+          Folder
+        </label>
+        <input
+          id="dq-script-folder"
+          className="dq-input dq-input--sm"
+          list="dq-script-folders"
+          placeholder="No folder"
+          value={folder}
+          onChange={(e) => setFolder(e.target.value)}
+          onBlur={() => folder !== (script.folder ?? '') && void saveMeta({ folder })}
+        />
+        <datalist id="dq-script-folders">
+          {folders.map((f) => (
+            <option key={f} value={f} />
+          ))}
+        </datalist>
+        <label className="dq-field__label" htmlFor="dq-script-tags">
+          Tags
+        </label>
+        <input
+          id="dq-script-tags"
+          className="dq-input dq-input--sm"
+          placeholder="reports, billing"
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          onBlur={() => {
+            const next = tags.split(',').map((t) => t.trim()).filter(Boolean);
+            if (next.join() !== script.tags.join()) void saveMeta({ tags: next });
+          }}
+        />
+        <Checkbox label="Pinned to the top" checked={script.pinned} onChange={(pinned) => void saveMeta({ pinned })} />
       </div>
       <div className={styles.sql}>
         <SqlViewer value={script.sql} flavor={session?.flavor ?? 'postgres'} label="Script" />
@@ -241,7 +397,7 @@ function ScriptDetail({ script, onDelete, onCopy }: { script: SavedScript; onDel
           Delete
         </Button>
       </div>
-      <p className={styles.note}>Scripts open in a tab and run only when you press Run.</p>
+      <p className={styles.note}>Scripts open in a tab and run only when you press Run. With autosave on (Settings → History), edits in that tab are saved back to the script.</p>
     </>
   );
 }

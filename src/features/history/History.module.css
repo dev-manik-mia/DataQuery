@@ -126,3 +126,24 @@
 .more {
   padding: var(--space-3) var(--space-6);
 }
+
+.filters {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.filters select {
+  flex: 1;
+  min-width: 0;
+}
+
+.metaFields {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.metaFields > :last-child {
+  grid-column: 1 / -1;
+}
