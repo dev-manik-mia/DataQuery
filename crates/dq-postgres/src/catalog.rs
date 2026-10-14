@@ -275,16 +275,20 @@ async fn columns(client: &Client, oid: u32) -> DbResult<Vec<ColumnInfo>> {
                 || typtype == "e"
                 || is_native_oid(r.get::<_, u32>(8))
                 || (typtype == "d" && is_native_oid(r.get::<_, u32>(9)));
-            let always_generated = identity == "a" || !generated_expr.is_empty();
+            let name: String = r.get(0);
+            let default: Option<String> = r.get(3);
+            // CockroachDB gives keyless tables a hidden `rowid` key filled by `unique_rowid()`.
+            let rowid = name == "rowid" && default.as_deref() == Some("unique_rowid()");
+            let always_generated = identity == "a" || !generated_expr.is_empty() || rowid;
             ColumnInfo {
-                name: r.get(0),
+                name,
                 numeric: [20, 21, 23, 26, 700, 701, 790, 1700].contains(&type_oid),
                 editable: data_type != "bytea" && !always_generated,
-                generated: !identity.is_empty() || !generated_expr.is_empty(),
+                generated: !identity.is_empty() || !generated_expr.is_empty() || rowid,
                 identity: !identity.is_empty(),
                 data_type,
                 nullable: r.get(2),
-                default: r.get(3),
+                default,
                 primary_key: r.get(11),
                 comment: r.get(10),
                 read_as_text: !native,
@@ -318,19 +322,27 @@ async fn constraints(client: &Client, oid: u32) -> DbResult<Vec<ConstraintInfo>>
         .collect())
 }
 
+fn undefined_function(e: &tokio_postgres::Error) -> bool {
+    e.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_FUNCTION)
+}
+
 async fn indexes(client: &Client, oid: u32) -> DbResult<Vec<IndexInfo>> {
-    let rows = client
-        .query(
+    let query = |size: &str| {
+        format!(
             "SELECT i.relname::text, pg_get_indexdef(x.indexrelid), x.indisunique, x.indisprimary, \
                     ARRAY(SELECT a.attname::text FROM unnest(x.indkey) WITH ORDINALITY k(attnum, ord) \
                           JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum ORDER BY k.ord), \
-                    pg_relation_size(x.indexrelid) \
+                    {size} \
              FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid WHERE x.indrelid = $1 \
-             ORDER BY x.indisprimary DESC, i.relname",
-            &[&oid],
+             ORDER BY x.indisprimary DESC, i.relname"
         )
-        .await
-        .map_err(pg)?;
+    };
+    let rows = match client.query(&query("pg_relation_size(x.indexrelid)"), &[&oid]).await {
+        // CockroachDB has no per-index size.
+        Err(e) if undefined_function(&e) => client.query(&query("NULL::int8"), &[&oid]).await,
+        other => other,
+    }
+    .map_err(pg)?;
     Ok(rows
         .iter()
         .map(|r| IndexInfo {
@@ -339,7 +351,7 @@ async fn indexes(client: &Client, oid: u32) -> DbResult<Vec<IndexInfo>> {
             unique: r.get(2),
             primary: r.get(3),
             columns: r.get(4),
-            size_bytes: Some(r.get(5)),
+            size_bytes: r.get(5),
         })
         .collect())
 }
@@ -357,7 +369,7 @@ async fn size(client: &Client, oid: u32, kind: NodeKind) -> DbResult<Option<Tabl
     match r {
         Ok(r) => Ok(Some(TableSize { total_bytes: r.get(0), table_bytes: r.get(1), index_bytes: r.get(2) })),
         // CockroachDB has no size functions; its sizes are per range, not per table.
-        Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_FUNCTION) => Ok(None),
+        Err(e) if undefined_function(&e) => Ok(None),
         Err(e) => Err(pg(e)),
     }
 }

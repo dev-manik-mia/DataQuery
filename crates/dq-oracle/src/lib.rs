@@ -1,0 +1,1 @@
+//! Oracle adapter (in progress).

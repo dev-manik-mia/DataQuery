@@ -176,9 +176,11 @@ async fn structure_and_ddl() {
     assert!(st.constraints.iter().any(|c| c.name == "orders_customer_fk"));
     assert!(st.indexes.iter().any(|i| i.name == "orders_created_at_idx" && !i.unique));
     assert_eq!(st.foreign_keys[0].target.name, "customers");
-    // CockroachDB adds a hidden `rowid` key to tables without one.
+    // CockroachDB adds a hidden `rowid` key to tables without one, so even they can be edited safely.
     let no_pk = s.structure(&table("no_pk")).await.unwrap();
-    assert!(no_pk.columns.iter().all(|c| c.name != "rowid"), "{:?}", no_pk.columns);
+    assert_eq!(no_pk.row_identity, ["rowid"]);
+    let rowid = no_pk.column("rowid").unwrap();
+    assert!(rowid.generated && !rowid.editable);
     let ddl = s.ddl(&table("orders")).await.unwrap();
     assert!(ddl.contains("CREATE TABLE"), "{ddl}");
     let view = ObjectRef { kind: NodeKind::View, ..table("paid_orders") };

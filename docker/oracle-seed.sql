@@ -39,7 +39,7 @@ CREATE TABLE type_samples (
   ts    TIMESTAMP(3) WITH TIME ZONE,
   day   DATE,
   doc   CLOB,
-  raw   RAW(64),
+  bin   RAW(64),
   label VARCHAR2(50),
   ratio BINARY_DOUBLE
 );
