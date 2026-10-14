@@ -52,6 +52,18 @@ pub fn contact_points(host: &str, port: u16) -> Vec<String> {
         .collect()
 }
 
+/// A single contact point on this machine (local Docker, port forwarding): the
+/// nodes advertise addresses that are not reachable from here, so every node
+/// is reached through that contact point, as with an SSH tunnel.
+async fn loopback(points: &[String]) -> Option<SocketAddr> {
+    let [point] = points else { return None };
+    let host = point.rsplit_once(':').map_or(point.as_str(), |(h, _)| h).trim_matches(['[', ']']);
+    if host != "localhost" && !host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
+        return None;
+    }
+    tokio::net::lookup_host(point).await.ok()?.next()
+}
+
 pub async fn connect(params: &ConnectParams) -> DbResult<Driver> {
     dq_core::tls::install_crypto_provider();
     let config = &params.config;
@@ -59,9 +71,12 @@ pub async fn connect(params: &ConnectParams) -> DbResult<Driver> {
         .connection_timeout(Duration::from_secs(u64::from(config.connect_timeout_secs.max(1))))
         .fetch_schema_metadata(false)
         .custom_identity(scylla::client::SelfIdentity::new().with_application_name("DataQuery"));
-    builder = match params.endpoint {
-        Some(endpoint) => builder.known_node_addr(endpoint).address_translator(Arc::new(Tunnel(endpoint))),
-        None => builder.known_nodes(contact_points(&config.host, config.port)),
+    let points = contact_points(&config.host, config.port);
+    builder = match (params.endpoint, loopback(&points).await) {
+        (Some(endpoint), _) | (None, Some(endpoint)) => {
+            builder.known_node_addr(endpoint).address_translator(Arc::new(Tunnel(endpoint)))
+        }
+        (None, None) => builder.known_nodes(points),
     };
     if !config.username.trim().is_empty() {
         builder = builder.user(config.username.clone(), params.password().unwrap_or_default());

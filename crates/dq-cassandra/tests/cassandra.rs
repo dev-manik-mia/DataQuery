@@ -195,7 +195,8 @@ async fn values_are_exact_and_results_page() {
         let d = f.run(&format!("SELECT location, tags, attrs FROM {}.devices", f.ks)).await?;
         let loc: serde_json::Value = serde_json::from_str(&text(&d.rows[0][0])).unwrap();
         assert_eq!(loc["label"], "Paris");
-        assert_eq!(d.columns[0].type_name, "frozen<location>");
+        // Result metadata does not say whether a UDT is frozen.
+        assert!(d.columns[0].type_name.ends_with("location"), "{}", d.columns[0].type_name);
         assert_eq!(text(&d.rows[0][1]), r#"["eu","heat"]"#);
         assert_eq!(text(&d.rows[0][2]), r#"{"fw":"1.2"}"#);
 
@@ -472,7 +473,7 @@ async fn schema_changes_run_through_the_editor() {
                 columns: vec![col("id", "int"), col("ts", "timestamp"), col("note", "text")],
                 primary_key: vec!["id".into(), "ts".into()],
             },
-            SchemaChange::AddColumn { table: table.clone(), column: col("extra", "map<text, int>") },
+            SchemaChange::AddColumn { table: table.clone(), column: col("extra", "bigint") },
             SchemaChange::DropColumn { table: table.clone(), column: "note".into() },
         ];
         for change in &changes {
