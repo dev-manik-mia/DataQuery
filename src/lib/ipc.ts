@@ -19,12 +19,16 @@ import type { ConnectionImportReport } from '@/bindings/ConnectionImportReport';
 import type { ConnectionList } from '@/bindings/ConnectionList';
 import type { Dependencies } from '@/bindings/Dependencies';
 import type { DiffSide } from '@/bindings/DiffSide';
+import type { DocIndex } from '@/bindings/DocIndex';
+import type { DocumentChange } from '@/bindings/DocumentChange';
+import type { DocumentPage } from '@/bindings/DocumentPage';
 import type { EngineInfo } from '@/bindings/EngineInfo';
 import type { ExplainResult } from '@/bindings/ExplainResult';
 import type { ExportFormat } from '@/bindings/ExportFormat';
 import type { ExportOptions } from '@/bindings/ExportOptions';
 import type { ExportReport } from '@/bindings/ExportReport';
 import type { ExportSource } from '@/bindings/ExportSource';
+import type { FindRequest } from '@/bindings/FindRequest';
 import type { Folder } from '@/bindings/Folder';
 import type { FrameworkMigrations } from '@/bindings/FrameworkMigrations';
 import type { Guarded } from '@/bindings/Guarded';
@@ -159,6 +163,21 @@ export const api = {
     call<Cell>('cell_value', { sessionId, object: objectRef(object), key, column }),
   saveCell: ({ sessionId }: Sid, object: ObjectRef, key: ColumnValue[], column: string, path: string) =>
     call<number>('save_cell', { sessionId, object: objectRef(object), key, column, path }),
+
+  // documents (MongoDB, DynamoDB)
+  documentsFind: ({ sessionId }: Sid, request: FindRequest) =>
+    call<DocumentPage>('documents_find', { sessionId, request: { ...request, object: objectRef(request.object) } }),
+  documentsCount: ({ sessionId }: Sid, object: ObjectRef, filter: string) =>
+    call<RowCount | null>('documents_count', { sessionId, object: objectRef(object), filter }),
+  documentsAggregate: ({ sessionId }: Sid, object: ObjectRef, pipeline: string, limit: number) =>
+    call<DocumentPage>('documents_aggregate', { sessionId, object: objectRef(object), pipeline, limit }),
+  documentsIndexes: ({ sessionId }: Sid, object: ObjectRef) => call<DocIndex[]>('documents_indexes', { sessionId, object: objectRef(object) }),
+  documentsValidation: ({ sessionId }: Sid, object: ObjectRef) =>
+    call<string | null>('documents_validation', { sessionId, object: objectRef(object) }),
+  documentsStatement: ({ sessionId }: Sid, request: FindRequest) =>
+    call<string>('documents_statement', { sessionId, request: { ...request, object: objectRef(request.object) } }),
+  documentsWrite: ({ sessionId }: Sid, object: ObjectRef, change: DocumentChange, confirmation: Confirmation | null) =>
+    call<Guarded<string>>('documents_write', { sessionId, object: objectRef(object), change, confirmation }),
 
   // schema
   schemaChangePreview: ({ sessionId }: Sid, changes: SchemaChange[]) => call<string>('schema_change_preview', { sessionId, changes }),

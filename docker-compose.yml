@@ -108,6 +108,27 @@ services:
     build: { context: docker, dockerfile: fakesnow.Dockerfile }
     ports: ["58000:8000"]
 
+  # Single-node replica set (transactions need one) with authentication. It
+  # listens on 57017 inside too, so the advertised member address works from the host.
+  mongodb:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: dataquery
+      MONGO_INITDB_ROOT_PASSWORD: dataquery
+      MONGO_INITDB_DATABASE: dataquery_test
+    entrypoint: ["bash", "-c", "openssl rand -base64 756 > /tmp/rs.key && chmod 400 /tmp/rs.key && chown 999:999 /tmp/rs.key && exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /tmp/rs.key --port 57017 --bind_ip_all"]
+    ports: ["57017:57017"]
+    volumes: ["./docker/mongodb-seed.js:/docker-entrypoint-initdb.d/seed.js:ro"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--port", "57017", "-u", "dataquery", "-p", "dataquery", "--authenticationDatabase", "admin", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:57017' }] }).ok }"]
+      interval: 3s
+      retries: 60
+
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports: ["58002:8000"]
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

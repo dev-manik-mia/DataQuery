@@ -8,7 +8,7 @@ use crate::node::ObjectRef;
 use crate::schema::{ColumnInfo, TableStructure};
 use crate::table::{RowFilter, SortSpec};
 
-use super::dialect::Dialect;
+use super::dialect::{Dialect, SqlFlavor};
 use super::lexer::{TokenKind, tokenize};
 
 pub const MAX_FILTER_LEN: usize = 8_000;
@@ -213,10 +213,22 @@ pub fn select_template(d: &dyn Dialect, object: &ObjectRef, columns: &[String]) 
         columns.iter().map(|c| d.display_ident(c)).collect::<Vec<_>>().join(", ")
     };
     let name = d.display_name(object);
-    if d.flavor() == super::SqlFlavor::Sqlserver {
-        return format!("SELECT TOP (100) {list}\nFROM {name};");
+    match d.flavor() {
+        SqlFlavor::Sqlserver => format!("SELECT TOP (100) {list}\nFROM {name};"),
+        SqlFlavor::Mongodb if columns.is_empty() => format!("{name}.find({{}}).limit(100)"),
+        SqlFlavor::Mongodb => {
+            let projection: Vec<String> = columns.iter().map(|c| format!("{}: 1", d.display_ident(c))).collect();
+            format!("{name}.find({{}}, {{ {} }}).limit(100)", projection.join(", "))
+        }
+        // No LIMIT in PartiQL: the editor's row limit applies.
+        SqlFlavor::Partiql => format!("SELECT {list}\nFROM {name};"),
+        _ => format!("SELECT {list}\nFROM {name}\n{};", d.paginate("", true, 0, 100).trim_start()),
     }
-    format!("SELECT {list}\nFROM {name}\n{};", d.paginate("", true, 0, 100).trim_start())
+}
+
+/// `field: null` lines for shell templates, indented by `indent` spaces.
+fn shell_fields(d: &dyn Dialect, names: &[&str], indent: usize) -> String {
+    names.iter().map(|n| format!("{:indent$}{}: null", "", d.display_ident(n))).collect::<Vec<_>>().join(",\n")
 }
 
 fn template_placeholder(d: &dyn Dialect, n: usize) -> String {
@@ -229,6 +241,18 @@ pub fn insert_template(d: &dyn Dialect, structure: &TableStructure) -> String {
     if cols.is_empty() {
         let first = structure.columns.first().map(|c| d.display_ident(&c.name));
         return format!("{};", d.insert_defaults(&d.display_name(&structure.object), first.as_deref()));
+    }
+    match d.flavor() {
+        SqlFlavor::Mongodb => {
+            let names: Vec<&str> = cols.iter().filter(|c| c.name != "_id").map(|c| c.name.as_str()).collect();
+            return format!("{}.insertOne({{\n{}\n}})", d.display_name(&structure.object), shell_fields(d, &names, 2));
+        }
+        // `INSERT INTO "t" VALUE {'pk': ?, 'n': ?}`
+        SqlFlavor::Partiql => {
+            let pairs: Vec<String> = cols.iter().map(|c| format!("{}: ?", d.quote_literal(&c.name))).collect();
+            return format!("INSERT INTO {}\nVALUE {{{}}};", d.display_name(&structure.object), pairs.join(", "));
+        }
+        _ => {}
     }
     let names: Vec<String> = cols.iter().map(|c| d.display_ident(&c.name)).collect();
     let values: Vec<String> = (1..=cols.len()).map(|n| template_placeholder(d, n)).collect();
@@ -251,6 +275,15 @@ fn template_where(d: &dyn Dialect, structure: &TableStructure, first: usize) -> 
 
 /// `UPDATE` template setting every editable non-key column, matched on the row identity.
 pub fn update_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    if d.flavor() == SqlFlavor::Mongodb {
+        let names: Vec<&str> =
+            structure.columns.iter().filter(|c| c.name != "_id").map(|c| c.name.as_str()).collect();
+        return format!(
+            "{}.updateOne(\n  {{ _id: null }},\n  {{ $set: {{\n{}\n  }} }}\n)",
+            d.display_name(&structure.object),
+            shell_fields(d, &names, 4)
+        );
+    }
     let sets: Vec<String> = structure
         .columns
         .iter()
@@ -268,6 +301,9 @@ pub fn update_template(d: &dyn Dialect, structure: &TableStructure) -> String {
 
 /// `DELETE` template matched on the row identity.
 pub fn delete_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    if d.flavor() == SqlFlavor::Mongodb {
+        return format!("{}.deleteOne({{ _id: null }})", d.display_name(&structure.object));
+    }
     format!("DELETE FROM {}\nWHERE {};", d.display_name(&structure.object), template_where(d, structure, 1))
 }
 
@@ -649,5 +685,19 @@ mod tests {
         assert_eq!(stmt.sql, "INSERT INTO `app`.`orders` (`id`, `total`) VALUES (?, ?), (?, ?)");
         assert_eq!(stmt.params.len(), 4);
         assert_eq!(stmt.expect_rows, Some(2));
+    }
+
+    #[test]
+    fn document_templates() {
+        use crate::sql::dialect::{MongoDialect, PartiqlDialect};
+        let object = ObjectRef::new(NodeKind::Table, "shop", None, "orders");
+        let columns = vec!["_id".to_owned(), "total".to_owned()];
+        assert_eq!(select_template(&MongoDialect, &object, &columns), "db.orders.find({}, { _id: 1, total: 1 }).limit(100)");
+        assert_eq!(select_template(&PartiqlDialect, &object, &[]), "SELECT *\nFROM orders;");
+        let odd = TableStructure { object: ObjectRef::new(NodeKind::Table, "shop", None, "order items"), ..orders() };
+        assert_eq!(delete_template(&MongoDialect, &odd), "db.getCollection(\"order items\").deleteOne({ _id: null })");
+        let partiql = TableStructure { object: object.clone(), ..orders() };
+        assert!(insert_template(&PartiqlDialect, &partiql).starts_with("INSERT INTO orders\nVALUE {'id': ?, 'total': ?"));
+        assert!(update_template(&MongoDialect, &partiql).contains("$set: {\n    id: null,\n    total: null"));
     }
 }

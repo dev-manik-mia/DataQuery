@@ -28,6 +28,25 @@ pub struct ColumnInfo {
     pub read_as_text: bool,
 }
 
+impl ColumnInfo {
+    /// A document field the collection does not have yet: any type, inferred from the value.
+    pub fn new_field(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            data_type: String::new(),
+            nullable: true,
+            default: None,
+            primary_key: false,
+            generated: false,
+            identity: false,
+            editable: true,
+            numeric: false,
+            comment: None,
+            read_as_text: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

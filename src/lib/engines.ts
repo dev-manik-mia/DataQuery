@@ -19,6 +19,10 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'duckdb';
     case 'snowflake':
       return 'snowflake';
+    case 'mongodb':
+      return 'mongodb';
+    case 'dynamodb':
+      return 'partiql';
     default:
       return 'postgres';
   }
@@ -26,7 +30,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
 
 /** Databases contain schemas (all but MySQL / MariaDB, where the database is the schema). */
 export function hasSchemas(flavor: SqlFlavor): boolean {
-  return flavor !== 'mysql' && flavor !== 'clickhouse';
+  return !['mysql', 'clickhouse', 'mongodb', 'partiql'].includes(flavor);
 }
 
 /** The schema new objects land in when none is named; Oracle uses the user's own schema. */
@@ -71,6 +75,7 @@ export function placeholderLabel(flavor: SqlFlavor, n: number): string {
 export function databaseLabel(engine: Engine): string {
   if (engine === 'oracle') return 'Service name';
   if (engine === 'duckdb' || engine === 'sqlite') return 'Database file';
+  if (engine === 'mongodb') return 'Default database';
   return 'Database';
 }
 
@@ -90,6 +95,8 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: 'FREEPDB1', username: 'system' };
     case 'clickhouse':
       return { database: 'default', username: 'default' };
+    case 'mongodb':
+      return { database: 'test', username: '' };
     default:
       return { database: '', username: '' };
   }
@@ -119,6 +126,14 @@ const ORACLE_SSL_LABELS: Record<SslMode, string> = {
   'verify-full': 'TCPS (verify certificate and DN)',
 };
 
+const MONGO_SSL_LABELS: Record<SslMode, string> = {
+  disable: 'tls=false',
+  prefer: 'tls, tlsInsecure',
+  require: 'tls, tlsInsecure',
+  'verify-ca': 'tls, tlsAllowInvalidHostnames',
+  'verify-full': 'tls=true',
+};
+
 const HTTPS_SSL_LABELS: Record<SslMode, string> = {
   disable: 'HTTP (no TLS)',
   prefer: 'HTTPS (no verification)',
@@ -138,7 +153,10 @@ export function sslModeLabel(engine: Engine, mode: SslMode): string {
       return ORACLE_SSL_LABELS[mode];
     case 'clickhouse':
     case 'snowflake':
+    case 'partiql':
       return HTTPS_SSL_LABELS[mode];
+    case 'mongodb':
+      return MONGO_SSL_LABELS[mode];
     default:
       return mode;
   }

@@ -3,6 +3,7 @@ import type { Cell } from "./Cell";
 import type { ColumnMeta } from "./ColumnMeta";
 import type { ColumnSearch } from "./ColumnSearch";
 import type { ColumnValue } from "./ColumnValue";
+import type { FindRequest } from "./FindRequest";
 import type { ObjectRef } from "./ObjectRef";
 import type { SortSpec } from "./SortSpec";
 
@@ -18,4 +19,4 @@ matches: Array<ColumnValue>,
 /**
  * Per-column searches from the grid header.
  */
-searches: Array<ColumnSearch>, } | { "type": "rows", columns: Array<ColumnMeta>, rows: Array<Array<Cell>>, };
+searches: Array<ColumnSearch>, } | { "type": "documents", request: FindRequest, } | { "type": "rows", columns: Array<ColumnMeta>, rows: Array<Array<Cell>>, };

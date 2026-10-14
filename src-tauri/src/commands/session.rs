@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dq_core::DbResult;
+use dq_core::document::DocumentFeatures;
 use dq_core::engine::Capabilities;
 use dq_core::result::ServerInfo;
 use dq_core::sql::SqlFlavor;
@@ -21,6 +22,8 @@ pub struct SessionInfo {
     pub server: ServerInfo,
     pub capabilities: Capabilities,
     pub flavor: SqlFlavor,
+    /// Set for document engines: their tables open in the Documents view.
+    pub documents: Option<DocumentFeatures>,
     /// The connection goes through an SSH tunnel.
     pub tunneled: bool,
     /// Why the connection is not fully secure, if it is not.
@@ -39,6 +42,7 @@ async fn open(state: &AppState, connection_id: &str, session_id: String) -> DbRe
         server: opened.session.info().clone(),
         capabilities: adapter.capabilities(),
         flavor: opened.session.dialect().flavor(),
+        documents: opened.session.documents().map(|d| d.features()),
         tunneled: opened.tunnel.is_some(),
         insecure: connection.config.insecure_reason().map(str::to_owned),
         connection,

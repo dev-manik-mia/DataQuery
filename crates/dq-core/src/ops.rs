@@ -41,7 +41,16 @@ async fn edit_structure(session: &dyn Session, object: &ObjectRef, full_row: boo
     Ok(s)
 }
 
+/// Refuses SQL-built operations on document engines, whose UI uses the Documents view.
+fn sql_only(session: &dyn Session) -> DbResult<()> {
+    if session.documents().is_some() {
+        return Err(DbError::unsupported("Open this collection in the Documents view."));
+    }
+    Ok(())
+}
+
 pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResult<TablePage> {
+    sql_only(session)?;
     if !req.object.kind.is_relation() {
         return Err(DbError::invalid("Only tables and views have data."));
     }
@@ -56,6 +65,7 @@ pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResu
 }
 
 pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFilter) -> DbResult<RowCount> {
+    sql_only(session)?;
     let unfiltered = builder::validate_filter(session.dialect(), filter.filter.as_deref())?.is_none()
         && filter.matches.is_empty()
         && filter.searches.iter().all(|s| s.contains.is_empty());
@@ -85,6 +95,7 @@ pub async fn cell_value(
     column: &str,
     limits: CellLimits,
 ) -> DbResult<crate::value::Cell> {
+    sql_only(session)?;
     let structure = session.structure(object).await?;
     let q = builder::cell_query(session.dialect(), &structure, key, column)?;
     let (_, mut rows) = session.read_query(&object.database, &q.sql, &q.params, limits).await?;
@@ -100,6 +111,7 @@ pub async fn preview_changes(
     changes: &[RowChange],
     full_row: bool,
 ) -> DbResult<String> {
+    sql_only(session)?;
     let structure = edit_structure(session, object, full_row).await?;
     builder::preview_changes(session.dialect(), &structure, changes)
 }
@@ -111,6 +123,7 @@ pub async fn apply_changes(
     changes: &[RowChange],
     full_row: bool,
 ) -> DbResult<ApplyReport> {
+    sql_only(session)?;
     let structure = edit_structure(session, object, full_row).await?;
     let statements = builder::change_statements(session.dialect(), &structure, changes)?;
     let started = Instant::now();
@@ -149,6 +162,14 @@ pub async fn export(
                 return Err(DbError::invalid("Only read-only statements can be exported."));
             }
             (session.info().database.clone(), statement.text(sql).to_owned(), Vec::new(), fallback_table.clone())
+        }
+        ExportSource::Table { object, .. } if let Some(store) = session.documents() => {
+            let request = crate::document::FindRequest::new(object.clone(), crate::document::MAX_PAGE);
+            (object.database.clone(), store.find_statement(&request)?, Vec::new(), object.clone())
+        }
+        ExportSource::Documents { request } => {
+            let store = session.documents().ok_or_else(|| DbError::unsupported("This engine has no documents."))?;
+            (request.object.database.clone(), store.find_statement(request)?, Vec::new(), request.object.clone())
         }
         ExportSource::Table { object, rows, sort } => {
             let structure = session.structure(object).await?;
@@ -238,14 +259,20 @@ pub async fn import(
     if structure.object.kind != NodeKind::Table {
         return Err(DbError::invalid("Rows can only be imported into tables."));
     }
+    let store = session.documents();
     let columns: Vec<String> = mapping.iter().map(|m| m.column.clone()).collect();
     let mut infos = Vec::with_capacity(columns.len());
     for c in &columns {
-        let info = structure.column(c).ok_or_else(|| DbError::invalid(format!("Unknown column `{c}`.")))?;
+        let info = match structure.column(c) {
+            Some(info) => info.clone(),
+            // Documents take new fields; their type is inferred from each value.
+            None if store.is_some() => crate::schema::ColumnInfo::new_field(c),
+            None => return Err(DbError::invalid(format!("Unknown column `{c}`."))),
+        };
         if !info.editable {
             return Err(DbError::invalid(format!("Column `{c}` ({}) cannot be imported from text.", info.data_type)));
         }
-        infos.push(info.clone());
+        infos.push(info);
     }
     let fields: Vec<FieldRef> = mapping.iter().map(|m| m.field.clone()).collect();
     let mut report = ImportReport::default();
@@ -283,13 +310,6 @@ pub async fn import(
     report.skipped = invalid_rows.len() as u64;
 
     // Pass 2: insert the valid rows.
-    let dialect = session.dialect();
-    // Stay inside the engine's limits on rows per INSERT and parameters per statement.
-    let batch_rows = (options.batch_rows.clamp(1, 5_000) as usize)
-        .min(dialect.max_insert_rows())
-        .min(dialect.max_params() / columns.len().max(1))
-        .max(1);
-    let commit_rows = if options.commit_rows == 0 { usize::MAX } else { options.commit_rows as usize };
     let mut skip = invalid_rows.into_iter().peekable();
     let mut rows = transfer::rows(source, fields)?
         .enumerate()
@@ -301,6 +321,18 @@ pub async fn import(
             skip.peek() != Some(&number)
         })
         .peekable();
+    if let Some(store) = store {
+        insert_documents(store, object, &infos, &mut rows, control, &mut report).await?;
+        report.duration_ms = elapsed_ms(started);
+        return Ok(report);
+    }
+    let dialect = session.dialect();
+    // Stay inside the engine's limits on rows per INSERT and parameters per statement.
+    let batch_rows = (options.batch_rows.clamp(1, 5_000) as usize)
+        .min(dialect.max_insert_rows())
+        .min(dialect.max_params() / columns.len().max(1))
+        .max(1);
+    let commit_rows = if options.commit_rows == 0 { usize::MAX } else { options.commit_rows as usize };
     let mut done = 0u64;
     while rows.peek().is_some() {
         let mut in_tx = 0usize;
@@ -342,6 +374,36 @@ pub async fn import(
     }
     report.duration_ms = elapsed_ms(started);
     Ok(report)
+}
+
+/// Writes validated rows as documents in batches of 500. Document engines have
+/// no multi-batch transaction: batches already written stay when a later one fails.
+async fn insert_documents(
+    store: &dyn crate::document::DocumentStore,
+    object: &ObjectRef,
+    columns: &[crate::schema::ColumnInfo],
+    rows: &mut (dyn Iterator<Item = (usize, DbResult<Vec<Option<String>>>)> + Send),
+    control: &TransferControl,
+    report: &mut ImportReport,
+) -> DbResult<()> {
+    const BATCH: usize = 500;
+    loop {
+        control.check()?;
+        let batch = (&mut *rows).take(BATCH).map(|(_, r)| r).collect::<DbResult<Vec<_>>>()?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+        match store.insert_rows(object, columns, batch).await {
+            Ok(n) => report.rows += n,
+            Err(e) if report.rows > 0 || e.kind == ErrorKind::Cancelled => {
+                report.stopped = true;
+                report.message = Some(format!("{} {} documents were written before this.", e.message, report.rows));
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
+        control.progress(report.rows, 0);
+    }
 }
 
 fn elapsed_ms(started: Instant) -> u64 {

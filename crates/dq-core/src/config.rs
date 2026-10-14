@@ -301,6 +301,28 @@ impl ConnConfig {
         Ok(())
     }
 
+    /// `DynamoDB`: a region, an optional endpoint (e.g. `DynamoDB` Local), and an
+    /// access key ID unless credentials come from an AWS CLI profile.
+    fn validate_dynamodb(&self) -> DbResult<()> {
+        let region = self.property("region").or(match &self.auth {
+            AuthMethod::AwsIam { region, .. } => Some(region.as_str()),
+            _ => None,
+        });
+        let region_ok = region.is_some_and(|r| {
+            r.len() <= 32 && r.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        });
+        if !region_ok {
+            return Err(DbError::invalid("Enter an AWS region such as eu-west-1."));
+        }
+        if !self.host.trim().is_empty() {
+            validate_host(&self.host, "Endpoint")?;
+        }
+        if matches!(self.auth, AuthMethod::Password) && self.username.trim().is_empty() {
+            return Err(DbError::invalid("Enter an access key ID, or use an AWS CLI profile."));
+        }
+        Ok(())
+    }
+
     fn validate_properties(&self) -> DbResult<()> {
         for (key, value) in &self.properties {
             let key_ok =
@@ -321,11 +343,16 @@ impl ConnConfig {
             }
             return self.validate_file();
         }
-        validate_host(&self.host, "Host")?;
+        if self.engine == Engine::Dynamodb {
+            self.validate_dynamodb()?;
+        } else {
+            validate_host(&self.host, "Host")?;
+        }
         if self.port == 0 {
             return Err(DbError::invalid("Port must be between 1 and 65535."));
         }
-        if self.username.trim().is_empty() {
+        // MongoDB may run without authentication; DynamoDB checks its access key above.
+        if self.username.trim().is_empty() && !matches!(self.engine, Engine::Mongodb | Engine::Dynamodb) {
             return Err(DbError::invalid("Username is required."));
         }
         if self.username.len() > 128 || self.database.len() > 128 {
@@ -399,9 +426,13 @@ pub struct ParsedUrl {
 
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
-/// `snowflake://` and `duckdb://` URLs. For Oracle the path is the service
+/// `snowflake://`, `duckdb://`, `mongodb://` and `mongodb+srv://` URLs. For Oracle the path is the service
 /// name; for Snowflake it is `database/schema`; for `DuckDB` it is the file.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
+    // Several hosts are not a valid URL authority, so MongoDB URLs are read by hand.
+    if input.trim().starts_with("mongodb://") || input.trim().starts_with("mongodb+srv://") {
+        return parse_mongo_url(input.trim());
+    }
     let url = Url::parse(input.trim()).map_err(|_| DbError::invalid("This is not a valid connection URL."))?;
     let engine = match url.scheme() {
         "postgres" | "postgresql" => Engine::Postgres,
@@ -432,9 +463,6 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
                 .file_stem()
                 .map_or_else(|| path.clone(), |s| s.to_string_lossy().into_owned());
             return Ok(ParsedUrl { config, password: None, name_suggestion });
-        }
-        "mongodb" | "mongodb+srv" => {
-            return Err(DbError::unsupported("MongoDB connections are planned (P2)."));
         }
         other => {
             return Err(DbError::unsupported(format!("Unsupported URL scheme `{other}`.")));
@@ -506,9 +534,121 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     Ok(ParsedUrl { password: url.password().map(decode).filter(|p| !p.is_empty()), config, name_suggestion })
 }
 
+/// `mongodb://user:pw@h1:27017,h2:27018/db?replicaSet=rs0&authSource=admin&tls=true`
+/// and `mongodb+srv://user:pw@cluster0.example.net/db`. Several hosts stay
+/// comma-separated in `host`; driver options become properties.
+fn parse_mongo_url(input: &str) -> DbResult<ParsedUrl> {
+    let decode = |s: &str| {
+        url::form_urlencoded::parse(format!("v={}", s.replace('+', "%2B")).as_bytes())
+            .next()
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_default()
+    };
+    let (srv, rest) = match input.strip_prefix("mongodb+srv://") {
+        Some(rest) => (true, rest),
+        None => (false, input.strip_prefix("mongodb://").unwrap_or(input)),
+    };
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let (authority, database) = rest.split_once('/').unwrap_or((rest, ""));
+    let (userinfo, hosts) = authority.rsplit_once('@').map_or(("", authority), |(u, h)| (u, h));
+    let (user, password) = userinfo.split_once(':').map_or((userinfo, None), |(u, p)| (u, Some(p)));
+    if hosts.is_empty() {
+        return Err(DbError::invalid("The URL has no host."));
+    }
+    // One host keeps its port in `port`; several stay as `h1:p1,h2:p2`.
+    let (host, port) = match hosts.split_once(',') {
+        None => match hosts.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())) {
+            Some((h, p)) => (h.to_owned(), p.parse().map_err(|_| DbError::invalid("The port is not valid."))?),
+            None => (hosts.to_owned(), 27017),
+        },
+        Some(_) => (hosts.to_owned(), 27017),
+    };
+    let mut properties = BTreeMap::new();
+    if srv {
+        properties.insert("srv".to_owned(), "true".to_owned());
+    }
+    let mut ssl_mode = if srv { SslMode::VerifyFull } else { SslMode::Disable };
+    let mut connect_timeout_secs = 10;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes");
+        match key.to_ascii_lowercase().as_str() {
+            "tls" | "ssl" => {
+                ssl_mode = match (truthy, ssl_mode) {
+                    (false, _) => SslMode::Disable,
+                    (true, SslMode::Require) => SslMode::Require,
+                    (true, _) => SslMode::VerifyFull,
+                };
+            }
+            "tlsinsecure" | "tlsallowinvalidcertificates" if truthy => ssl_mode = SslMode::Require,
+            "authsource" => _ = properties.insert("auth_source".to_owned(), value.into_owned()),
+            "replicaset" => _ = properties.insert("replica_set".to_owned(), value.into_owned()),
+            "readpreference" => _ = properties.insert("read_preference".to_owned(), value.into_owned()),
+            "directconnection" => _ = properties.insert("direct_connection".to_owned(), value.into_owned()),
+            "authmechanism" => _ = properties.insert("auth_mechanism".to_owned(), value.into_owned()),
+            "connecttimeoutms" => {
+                let ms: u32 = value.parse().map_err(|_| DbError::invalid("connectTimeoutMS must be a number."))?;
+                connect_timeout_secs = ms.div_ceil(1000).max(1);
+            }
+            _ => {}
+        }
+    }
+    let database = decode(database);
+    let config = ConnConfig {
+        engine: Engine::Mongodb,
+        host: host.clone(),
+        port,
+        database: database.clone(),
+        username: decode(user),
+        ssl_mode,
+        connect_timeout_secs,
+        properties,
+        ..ConnConfig::default()
+    };
+    config.validate()?;
+    let first_host = host.split(',').next().unwrap_or_default().to_owned();
+    let name_suggestion = if database.is_empty() { first_host } else { format!("{database}@{first_host}") };
+    Ok(ParsedUrl { config, password: password.map(decode).filter(|p| !p.is_empty()), name_suggestion })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_mongodb_urls() {
+        let p = parse_connection_url(
+            "mongodb://ana:p%40ss@h1:27018,h2:27019/shop?replicaSet=rs0&authSource=admin&tls=true",
+        )
+        .unwrap();
+        assert_eq!((p.config.engine, p.config.host.as_str()), (Engine::Mongodb, "h1:27018,h2:27019"));
+        assert_eq!((p.config.database.as_str(), p.config.ssl_mode), ("shop", SslMode::VerifyFull));
+        assert_eq!((p.config.property("replica_set"), p.config.property("auth_source")), (Some("rs0"), Some("admin")));
+        assert_eq!(p.password.as_deref(), Some("p@ss"));
+        let p = parse_connection_url("mongodb+srv://ana@cluster0.example.net/app").unwrap();
+        assert_eq!((p.config.property("srv"), p.config.ssl_mode), (Some("true"), SslMode::VerifyFull));
+        let p = parse_connection_url("mongodb://localhost:57017").unwrap();
+        assert_eq!((p.config.host.as_str(), p.config.port, p.config.ssl_mode), ("localhost", 57017, SslMode::Disable));
+        assert_eq!(p.password, None);
+    }
+
+    #[test]
+    fn document_engine_rules() {
+        let dynamo = ConnConfig {
+            engine: Engine::Dynamodb,
+            host: String::new(),
+            port: 443,
+            username: "AKIAEXAMPLE".into(),
+            properties: [("region".to_owned(), "eu-west-1".to_owned())].into(),
+            ..ConnConfig::default()
+        };
+        dynamo.validate().unwrap();
+        assert!(ConnConfig { properties: BTreeMap::new(), ..dynamo.clone() }.validate().is_err());
+        assert!(ConnConfig { username: String::new(), ..dynamo.clone() }.validate().is_err());
+        let profile = AuthMethod::AwsIam { region: "eu-west-1".into(), profile: Some("dev".into()) };
+        ConnConfig { username: String::new(), auth: profile, ..dynamo }.validate().unwrap();
+        let mongo = ConnConfig { engine: Engine::Mongodb, host: "a:1,b:2".into(), ..ConnConfig::default() };
+        mongo.validate().unwrap();
+    }
 
     #[test]
     fn parses_postgres_url_and_splits_secret() {

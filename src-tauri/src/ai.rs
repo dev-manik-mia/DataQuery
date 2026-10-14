@@ -169,6 +169,8 @@ pub fn prepare(
         SqlFlavor::Clickhouse => "ClickHouse SQL",
         SqlFlavor::Duckdb => "DuckDB SQL",
         SqlFlavor::Snowflake => "Snowflake SQL",
+        SqlFlavor::Mongodb => "MongoDB shell (mongosh) syntax, e.g. db.orders.find({ … })",
+        SqlFlavor::Partiql => "DynamoDB PartiQL",
     };
     let (hint, task, mut sent) = match request {
         AiRequest::Sql { question } => {

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use dq_core::config::{AuthMethod, ConnConfig};
+use dq_core::engine::Engine;
 use dq_core::{DbError, DbResult, ErrorKind};
 use tokio::process::Command;
 
@@ -58,6 +59,15 @@ pub async fn password(config: &ConnConfig, saved: Option<String>) -> DbResult<Op
     let port = config.port.to_string();
     Ok(Some(match &config.auth {
         AuthMethod::Password => return Ok(saved),
+        // DynamoDB signs every request itself: it needs the profile's credentials,
+        // passed to the adapter as the CLI's credential-process JSON.
+        AuthMethod::AwsIam { profile, .. } if config.engine == Engine::Dynamodb => {
+            let mut args = vec!["configure", "export-credentials", "--format", "process"];
+            if let Some(profile) = profile {
+                args.extend(["--profile", profile]);
+            }
+            run("aws", &args, "Install the AWS CLI and run `aws configure` or `aws sso login`.").await?
+        }
         AuthMethod::AwsIam { region, profile } => {
             let mut args = vec![
                 "rds",

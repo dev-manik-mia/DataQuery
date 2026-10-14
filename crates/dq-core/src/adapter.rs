@@ -11,6 +11,7 @@ use async_trait::async_trait;
 
 use crate::config::ConnConfig;
 use crate::edit::BoundStatement;
+use crate::document::DocumentStore;
 use crate::engine::{Capabilities, Engine};
 use crate::error::{DbError, DbResult};
 use crate::explain::{ExplainDialect, ExplainResult};
@@ -167,6 +168,13 @@ pub trait Session: Send + Sync {
 
     /// Server monitoring, when the engine supports it.
     fn monitor(&self) -> Option<&dyn Monitor> {
+        None
+    }
+
+    /// Document operations, for document engines (`MongoDB`, `DynamoDB`).
+    /// Their tables open in the Documents view, and table exports and imports
+    /// go through these instead of generated SQL.
+    fn documents(&self) -> Option<&dyn DocumentStore> {
         None
     }
 

@@ -1,6 +1,7 @@
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useMemo, useState } from 'react';
 
+import type { ColumnInfo } from '@/bindings/ColumnInfo';
 import type { CsvOptions } from '@/bindings/CsvOptions';
 import type { DbError } from '@/bindings/DbError';
 import type { ImportOptions } from '@/bindings/ImportOptions';
@@ -31,6 +32,11 @@ const IMPORT_DEFAULTS: ImportOptions = { batch_rows: 250, commit_rows: 0, skip_i
  * CSV or JSON import: choose file, preview, map columns, then validate every
  * row before anything is written. Bad rows are reported by number.
  */
+/** A document field the collection does not have yet; its type is inferred per value. */
+function newField(name: string): ColumnInfo {
+  return { name, data_type: '', nullable: true, default: null, primary_key: false, generated: false, identity: false, editable: true, numeric: false, comment: null };
+}
+
 export function ImportDialog({ object, structure, onClose, onImported }: { object: ObjectRef; structure: TableStructure; onClose: () => void; onImported: () => void }) {
   const session = useWorkspace((s) => s.session)!;
   const toast = useUi((s) => s.toast);
@@ -45,7 +51,15 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
   const [jobId, setJobId] = useState<string | null>(null);
   const progress = useTransferProgress(jobId);
 
-  const targets = structure.columns.filter((c) => c.editable);
+  const documents = session.documents !== null;
+  // Documents take new fields: file headers the collection does not have yet are offered too.
+  const targets = useMemo(() => {
+    const existing = structure.columns.filter((c) => c.editable);
+    if (!documents || !preview) return existing;
+    const known = new Set(existing.map((c) => c.name.toLowerCase()));
+    const added = preview.headers.filter((h) => h.trim() && !known.has(h.trim().toLowerCase())).map((h) => newField(h.trim()));
+    return [...existing, ...added];
+  }, [structure.columns, documents, preview]);
   const source = useMemo<ImportSource | null>(() => (path ? (json ? { type: 'json', path } : { type: 'csv', path, options: csv }) : null), [path, json, csv]);
 
   useEffect(() => {
@@ -58,7 +72,9 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
         setPreview(p);
         // Map columns whose header or key matches a column name.
         const auto: Record<string, string> = {};
-        for (const c of targets) {
+        const known = structure.columns.filter((c) => c.editable);
+        const fields = documents ? [...known, ...p.headers.filter((h) => !known.some((c) => c.name.toLowerCase() === h.trim().toLowerCase())).map((h) => newField(h.trim()))] : known;
+        for (const c of fields) {
           const i = p.headers.findIndex((h) => h.trim().toLowerCase() === c.name.toLowerCase());
           auto[c.name] = i >= 0 ? (json ? p.headers[i]! : String(i)) : SKIP;
         }
@@ -207,6 +223,17 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
             ))}
           </div>
           {missing.length > 0 && <Alert tone="caution">Map the required columns: {missing.join(', ')}.</Alert>}
+          {documents ? (
+            <>
+              <div style={{ paddingTop: 4 }}>
+                <Checkbox label="Skip invalid rows" help="Import the valid rows and report the others." checked={options.skip_invalid} onChange={(v) => setOptions({ ...options, skip_invalid: v })} />
+              </div>
+              <Alert tone="info">
+                Every row is checked first. Values take the type of the existing field; new fields get numbers, booleans, objects and arrays from the text. Documents are written in batches of 500: batches already written stay if a later one fails.
+              </Alert>
+            </>
+          ) : (
+          <>
           <div className={styles.importGrid}>
             <TextField label="Rows per INSERT" mono inputMode="numeric" value={String(options.batch_rows)} onChange={(e) => setOptions({ ...options, batch_rows: Number(e.target.value.replace(/\D/g, '')) || 1 })} />
             <TextField
@@ -225,6 +252,8 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
           <Alert tone="info">
             Every row is checked first (types, NULLs, lengths). {options.commit_rows ? `Rows are committed every ${formatCount(options.commit_rows)} rows.` : 'Rows are inserted in one transaction: if any fails, nothing is imported.'}
           </Alert>
+          </>
+          )}
         </>
       )}
       {report && (

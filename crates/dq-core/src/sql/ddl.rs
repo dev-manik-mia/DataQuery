@@ -313,6 +313,9 @@ fn alter_column(
     };
     let default_sql = |e: &str| expression(d, e, "default");
     Ok(match d.flavor() {
+        SqlFlavor::Mongodb | SqlFlavor::Partiql => {
+            return Err(DbError::unsupported("Document collections have no SQL schema to change."));
+        }
         SqlFlavor::Postgres => {
             let mut parts = Vec::new();
             if let Some(t) = data_type {
@@ -438,6 +441,9 @@ fn alter_column(
 /// [`SchemaChange::needs_structure`] says so.
 pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&TableStructure>) -> DbResult<Vec<String>> {
     let flavor = d.flavor();
+    if flavor.is_document() {
+        return Err(DbError::unsupported("Document collections have no SQL schema to change."));
+    }
     let table = d.quoted_name(change.table());
     let alter = |body: String| format!("ALTER TABLE {table} {body}");
     // sp_rename takes the current name as a string and the new name unquoted.
@@ -489,7 +495,8 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                     vec![alter(format!("RENAME TO {}", d.quoted_name(&target)))]
                 }
                 SqlFlavor::Sqlserver => vec![sp_rename(table.clone(), new_name, "")],
-                SqlFlavor::Mysql | SqlFlavor::Clickhouse => {
+                // Refused above.
+                SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb | SqlFlavor::Partiql => {
                     let target = ObjectRef { name: new_name.clone(), ..t.clone() };
                     vec![format!("RENAME TABLE {table} TO {}", d.quoted_name(&target))]
                 }
@@ -504,7 +511,9 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Mysql
                 | SqlFlavor::Clickhouse
                 | SqlFlavor::Duckdb
-                | SqlFlavor::Snowflake => format!("ADD COLUMN {def}"),
+                | SqlFlavor::Snowflake
+                | SqlFlavor::Mongodb
+                | SqlFlavor::Partiql => format!("ADD COLUMN {def}"),
             })]
         }
         SchemaChange::DropColumn { column, .. } => {
@@ -564,7 +573,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                     vec![format!("DROP INDEX {}", d.quoted_name(&index))]
                 }
                 SqlFlavor::Mysql if n == "PRIMARY" => vec![alter("DROP PRIMARY KEY".into())],
-                SqlFlavor::Mysql | SqlFlavor::Sqlserver | SqlFlavor::Clickhouse => {
+                SqlFlavor::Mysql
+                | SqlFlavor::Sqlserver
+                | SqlFlavor::Clickhouse
+                | SqlFlavor::Mongodb
+                | SqlFlavor::Partiql => {
                     vec![format!("DROP INDEX {} ON {table}", d.quote_ident(n))]
                 }
             }

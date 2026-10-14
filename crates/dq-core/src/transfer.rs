@@ -103,6 +103,8 @@ pub enum ExportSource {
         rows: RowFilter,
         sort: Option<SortSpec>,
     },
+    /// Documents matching a Documents-view request (document engines).
+    Documents { request: crate::document::FindRequest },
     /// Rows already loaded in the grid, e.g. a selection. Rejected when any
     /// cell was shortened for display, so an export never silently loses data.
     Rows { columns: Vec<ColumnMeta>, rows: Vec<Row> },

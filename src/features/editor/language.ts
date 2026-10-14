@@ -1,4 +1,5 @@
 import { snippetCompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
+import { javascript } from '@codemirror/lang-javascript';
 import { MSSQL, MySQL, PLSQL, PostgreSQL, StandardSQL, sql, type SQLDialect, type SQLNamespace } from '@codemirror/lang-sql';
 import { EditorState } from '@codemirror/state';
 
@@ -16,7 +17,38 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   clickhouse: MySQL,
   duckdb: PostgreSQL,
   snowflake: StandardSQL,
+  // Not SQL: MongoDB uses the JavaScript mode below.
+  mongodb: StandardSQL,
+  partiql: StandardSQL,
 };
+
+/** Shell methods offered after `db.<collection>.`. */
+const MONGO_METHODS = [
+  'find', 'findOne', 'aggregate', 'countDocuments', 'estimatedDocumentCount', 'distinct', 'insertOne', 'insertMany',
+  'updateOne', 'updateMany', 'replaceOne', 'deleteOne', 'deleteMany', 'findOneAndUpdate', 'findOneAndReplace',
+  'findOneAndDelete', 'createIndex', 'dropIndex', 'getIndexes', 'drop', 'renameCollection', 'stats',
+];
+
+/** `db.` completes collection names (and `getCollection`); `db.<name>.` completes shell methods. */
+function mongoSource(model: SchemaModel | null): CompletionSource {
+  const collections = (model?.tables ?? []).map((t) => t.object.name);
+  return (context) => {
+    const method = context.matchBefore(/db\.[\w$]+\.\w*/);
+    if (method) {
+      const from = method.from + method.text.lastIndexOf('.') + 1;
+      return { from, options: MONGO_METHODS.map((m) => ({ label: m, type: 'method', apply: `${m}()` })), validFor: /^\w*$/ };
+    }
+    const db = context.matchBefore(/db\.\w*/);
+    if (!db) return null;
+    const options: Completion[] = [
+      ...collections.filter((c) => /^[A-Za-z_$][\w$]*$/.test(c)).map((c) => ({ label: c, type: 'class' })),
+      ...collections.filter((c) => !/^[A-Za-z_$][\w$]*$/.test(c)).map((c) => ({ label: c, type: 'class', apply: `getCollection(${JSON.stringify(c)})` })),
+      { label: 'getCollection', type: 'function', apply: 'getCollection("")' },
+      { label: 'runCommand', type: 'function', apply: 'runCommand({ })' },
+    ];
+    return { from: db.from + 3, options, validFor: /^\w*$/ };
+  };
+}
 
 /**
  * The completion namespace: `schema.table` (and bare `table` for the default
@@ -48,8 +80,11 @@ export function snippetSource(snippets: Snippet[]): CompletionSource {
   };
 }
 
-/** CodeMirror SQL language for a dialect, with schema-aware and snippet completion. */
+/** CodeMirror language for a dialect, with schema-aware and snippet completion. */
 export function sqlLanguage(flavor: SqlFlavor, model: SchemaModel | null = null, snippets: Snippet[] = []) {
+  if (flavor === 'mongodb') {
+    return [javascript(), EditorState.languageData.of(() => [{ autocomplete: mongoSource(model) }, { autocomplete: snippetSource(snippets) }])];
+  }
   const language = sql({
     dialect: DIALECTS[flavor],
     schema: completionSchema(model),
