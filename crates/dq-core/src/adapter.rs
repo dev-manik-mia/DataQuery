@@ -15,7 +15,7 @@ use crate::engine::{Capabilities, Engine};
 use crate::error::DbResult;
 use crate::node::{Node, ObjectRef};
 use crate::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult};
-use crate::schema::TableStructure;
+use crate::schema::{Dependencies, SchemaModel, TableStructure};
 use crate::sql::Dialect;
 use crate::value::CellLimits;
 
@@ -104,7 +104,15 @@ pub trait Session: Send + Sync {
 
     async fn structure(&self, object: &ObjectRef) -> DbResult<TableStructure>;
 
+    /// Definition of any object with [`NodeKind::has_definition`](crate::node::NodeKind::has_definition).
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String>;
+
+    /// What a table or view depends on and what depends on it.
+    async fn dependencies(&self, object: &ObjectRef) -> DbResult<Dependencies>;
+
+    /// Tables, columns and foreign keys of `database`: one schema, or every
+    /// user schema when `schema` is `None`. Bounded by [`SchemaModel::MAX_TABLES`].
+    async fn schema_model(&self, database: &str, schema: Option<&str>) -> DbResult<SchemaModel>;
 
     /// Runs a read-only query on a catalog connection for `database` and
     /// returns every row (callers bound the query with `LIMIT`).

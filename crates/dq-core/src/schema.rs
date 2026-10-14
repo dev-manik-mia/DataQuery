@@ -52,6 +52,86 @@ pub struct IndexInfo {
     pub definition: String,
     pub unique: bool,
     pub primary: bool,
+    /// Indexed columns in order; empty for expression-only indexes.
+    pub columns: Vec<String>,
+    #[ts(type = "number | null")]
+    pub size_bytes: Option<i64>,
+}
+
+/// A foreign key, with its columns paired in order with the target's columns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct ForeignKey {
+    pub name: String,
+    /// The table that holds the key.
+    pub source: ObjectRef,
+    pub columns: Vec<String>,
+    pub target: ObjectRef,
+    pub target_columns: Vec<String>,
+    pub on_update: Option<String>,
+    pub on_delete: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, TS)]
+#[ts(export)]
+pub struct TableSize {
+    /// Table, indexes and TOAST/overflow together.
+    #[ts(type = "number")]
+    pub total_bytes: i64,
+    #[ts(type = "number")]
+    pub table_bytes: i64,
+    #[ts(type = "number")]
+    pub index_bytes: i64,
+}
+
+/// One edge in the dependency view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct Dependency {
+    pub object: ObjectRef,
+    /// How the two objects are related, e.g. `foreign key orders_customer_fk`, `view`, `trigger`.
+    pub relation: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export)]
+pub struct Dependencies {
+    /// Objects this one depends on.
+    pub uses: Vec<Dependency>,
+    /// Objects that depend on this one.
+    pub used_by: Vec<Dependency>,
+}
+
+/// Columns of one table, for autocomplete, the ER diagram and the AI schema summary.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct ModelTable {
+    pub object: ObjectRef,
+    pub columns: Vec<ModelColumn>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct ModelColumn {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub primary_key: bool,
+}
+
+/// Tables, columns and foreign keys of a database (or one schema), bounded.
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export)]
+pub struct SchemaModel {
+    pub tables: Vec<ModelTable>,
+    pub foreign_keys: Vec<ForeignKey>,
+    /// More tables exist than were returned.
+    pub truncated: bool,
+}
+
+impl SchemaModel {
+    pub const MAX_TABLES: usize = 2_000;
+    pub const MAX_COLUMNS: usize = 40_000;
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -71,6 +151,8 @@ pub struct TableStructure {
     pub comment: Option<String>,
     #[ts(type = "number | null")]
     pub row_estimate: Option<i64>,
+    pub foreign_keys: Vec<ForeignKey>,
+    pub size: Option<TableSize>,
 }
 
 impl TableStructure {

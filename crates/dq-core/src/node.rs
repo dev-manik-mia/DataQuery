@@ -12,13 +12,29 @@ pub enum NodeKind {
     Table,
     View,
     MaterializedView,
+    Index,
+    Sequence,
+    Trigger,
+    Function,
+    Procedure,
+    /// A folder in the tree, e.g. "Functions"; `name` is one of the `GROUP_*` ids.
+    Group,
 }
 
 impl NodeKind {
     pub fn is_relation(self) -> bool {
         matches!(self, Self::Table | Self::View | Self::MaterializedView)
     }
+
+    /// Objects whose definition can be shown (`Session::ddl`).
+    pub fn has_definition(self) -> bool {
+        !matches!(self, Self::Database | Self::Schema | Self::Group)
+    }
 }
+
+pub const GROUP_SEQUENCES: &str = "sequences";
+pub const GROUP_FUNCTIONS: &str = "functions";
+pub const GROUP_PROCEDURES: &str = "procedures";
 
 /// Identifies a database object. For engines without schemas `schema` is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -28,6 +44,31 @@ pub struct ObjectRef {
     pub database: String,
     pub schema: Option<String>,
     pub name: String,
+    /// The owning table of an index or trigger, or the argument list of a
+    /// function or procedure (which may be overloaded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent: Option<String>,
+}
+
+impl ObjectRef {
+    pub fn new(kind: NodeKind, database: impl Into<String>, schema: Option<String>, name: impl Into<String>) -> Self {
+        Self { kind, database: database.into(), schema, name: name.into(), parent: None }
+    }
+
+    #[must_use]
+    pub fn with_parent(mut self, parent: impl Into<String>) -> Self {
+        self.parent = Some(parent.into());
+        self
+    }
+
+    /// The table that owns an index or trigger.
+    pub fn owner_table(&self) -> Option<ObjectRef> {
+        matches!(self.kind, NodeKind::Index | NodeKind::Trigger)
+            .then(|| self.parent.clone())
+            .flatten()
+            .map(|t| Self::new(NodeKind::Table, self.database.clone(), self.schema.clone(), t))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
