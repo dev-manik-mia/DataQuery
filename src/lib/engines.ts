@@ -13,6 +13,12 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'sqlserver';
     case 'oracle':
       return 'oracle';
+    case 'clickhouse':
+      return 'clickhouse';
+    case 'duckdb':
+      return 'duckdb';
+    case 'snowflake':
+      return 'snowflake';
     default:
       return 'postgres';
   }
@@ -20,7 +26,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
 
 /** Databases contain schemas (all but MySQL / MariaDB, where the database is the schema). */
 export function hasSchemas(flavor: SqlFlavor): boolean {
-  return flavor !== 'mysql';
+  return flavor !== 'mysql' && flavor !== 'clickhouse';
 }
 
 /** The schema new objects land in when none is named; Oracle uses the user's own schema. */
@@ -30,6 +36,10 @@ export function defaultSchema(flavor: SqlFlavor, user?: string): string | null {
       return 'public';
     case 'sqlserver':
       return 'dbo';
+    case 'duckdb':
+      return 'main';
+    case 'snowflake':
+      return 'PUBLIC';
     case 'oracle':
       return user ? user.toUpperCase() : null;
     default:
@@ -45,7 +55,13 @@ export function placeholderLabel(flavor: SqlFlavor, n: number): string {
     case 'sqlserver':
       return `@P${n}`;
     case 'oracle':
+    case 'snowflake':
       return `:${n}`;
+    case 'duckdb':
+      return `$${n}`;
+    case 'clickhouse':
+      // Named `{name:Type}` parameters take values in order of first appearance.
+      return `{…} #${n}`;
     default:
       return `?${n}`;
   }
@@ -53,7 +69,9 @@ export function placeholderLabel(flavor: SqlFlavor, n: number): string {
 
 /** Label of the database field; Oracle connects to a service (pluggable database). */
 export function databaseLabel(engine: Engine): string {
-  return engine === 'oracle' ? 'Service name' : 'Database';
+  if (engine === 'oracle') return 'Service name';
+  if (engine === 'duckdb' || engine === 'sqlite') return 'Database file';
+  return 'Database';
 }
 
 /** Database and user a new connection form starts with. */
@@ -70,6 +88,8 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: 'master', username: 'sa' };
     case 'oracle':
       return { database: 'FREEPDB1', username: 'system' };
+    case 'clickhouse':
+      return { database: 'default', username: 'default' };
     default:
       return { database: '', username: '' };
   }
@@ -99,6 +119,14 @@ const ORACLE_SSL_LABELS: Record<SslMode, string> = {
   'verify-full': 'TCPS (verify certificate and DN)',
 };
 
+const HTTPS_SSL_LABELS: Record<SslMode, string> = {
+  disable: 'HTTP (no TLS)',
+  prefer: 'HTTPS (no verification)',
+  require: 'HTTPS (no verification)',
+  'verify-ca': 'HTTPS (verify certificate)',
+  'verify-full': 'HTTPS (verify certificate and host)',
+};
+
 /** SSL mode as the engine's own client spells it (`sslmode`, `--ssl-mode`, `encrypt`, TCPS). */
 export function sslModeLabel(engine: Engine, mode: SslMode): string {
   switch (flavorOf(engine)) {
@@ -108,6 +136,9 @@ export function sslModeLabel(engine: Engine, mode: SslMode): string {
       return SQLSERVER_SSL_LABELS[mode];
     case 'oracle':
       return ORACLE_SSL_LABELS[mode];
+    case 'clickhouse':
+    case 'snowflake':
+      return HTTPS_SSL_LABELS[mode];
     default:
       return mode;
   }

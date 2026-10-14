@@ -68,6 +68,7 @@ const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   cockroachdb: 'Sessions from crdb_internal.cluster_sessions',
   sqlserver: 'Sessions from sys.dm_exec_sessions',
   oracle: 'Sessions from V$SESSION',
+  clickhouse: 'Running queries from system.processes',
 };
 
 export function MonitorView({ active }: { active: boolean }) {

@@ -16,11 +16,22 @@ export const TYPE_SUGGESTIONS: Record<SqlFlavor, string[]> = {
   postgres: ['bigint', 'integer', 'smallint', 'numeric(12,2)', 'double precision', 'boolean', 'text', 'varchar(255)', 'uuid', 'date', 'timestamp', 'timestamptz', 'jsonb', 'bytea', 'text[]', 'inet', 'interval'],
   mysql: ['bigint', 'int', 'smallint', 'tinyint(1)', 'decimal(12,2)', 'double', 'varchar(255)', 'text', 'char(36)', 'date', 'datetime', 'timestamp', 'json', 'blob', "enum('a','b')"],
   sqlserver: ['bigint', 'int', 'smallint', 'bit', 'decimal(12,2)', 'float', 'money', 'nvarchar(255)', 'nvarchar(max)', 'varchar(255)', 'uniqueidentifier', 'date', 'datetime2(3)', 'datetimeoffset(3)', 'time', 'varbinary(max)'],
+  clickhouse: ['UInt64', 'Int64', 'UInt32', 'Int32', 'Float64', 'Decimal(12, 2)', 'String', 'LowCardinality(String)', 'Bool', 'Date', 'DateTime', 'DateTime64(3)', 'UUID', 'Array(String)', 'Map(String, String)', 'JSON'],
+  duckdb: ['BIGINT', 'INTEGER', 'SMALLINT', 'DECIMAL(12,2)', 'DOUBLE', 'BOOLEAN', 'VARCHAR', 'UUID', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'INTERVAL', 'BLOB', 'JSON', 'VARCHAR[]', 'STRUCT(a INTEGER)'],
+  snowflake: ['NUMBER(38,0)', 'NUMBER(12,2)', 'FLOAT', 'BOOLEAN', 'VARCHAR', 'VARCHAR(255)', 'DATE', 'TIME', 'TIMESTAMP_NTZ', 'TIMESTAMP_TZ', 'VARIANT', 'OBJECT', 'ARRAY', 'BINARY', 'GEOGRAPHY'],
   oracle: ['NUMBER(19)', 'NUMBER(10)', 'NUMBER(12,2)', 'BINARY_DOUBLE', 'VARCHAR2(255 CHAR)', 'NVARCHAR2(255)', 'CHAR(1)', 'CLOB', 'DATE', 'TIMESTAMP(6)', 'TIMESTAMP(6) WITH TIME ZONE', 'RAW(16)', 'BLOB', 'JSON'],
 };
 
 /** What the engine calls a column that numbers itself. */
-const IDENTITY_LABEL: Record<SqlFlavor, string> = { postgres: 'Identity', mysql: 'AUTO_INCREMENT', sqlserver: 'IDENTITY', oracle: 'Identity' };
+const IDENTITY_LABEL: Record<SqlFlavor, string> = {
+  postgres: 'Identity',
+  mysql: 'AUTO_INCREMENT',
+  sqlserver: 'IDENTITY',
+  oracle: 'Identity',
+  clickhouse: 'Identity (not supported)',
+  duckdb: 'Identity (use a sequence default)',
+  snowflake: 'IDENTITY',
+};
 
 function TypeList({ flavor }: { flavor: SqlFlavor }) {
   return (

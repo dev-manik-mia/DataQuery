@@ -52,7 +52,7 @@ export function ImportUrlDialog({ onClose }: { onClose: () => void }) {
           type="password"
           autoFocus
           placeholder="postgres://user:password@host:5432/database"
-          hint="postgres://, cockroachdb://, mysql://, mariadb://, sqlserver:// or oracle://. The URL is not stored. A password in it is moved to the system keychain when you save."
+          hint="postgres://, cockroachdb://, mysql://, mariadb://, sqlserver://, oracle://, clickhouse://, snowflake:// or duckdb:///path/to/file. The URL is not stored. A password in it is moved to the system keychain when you save."
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />

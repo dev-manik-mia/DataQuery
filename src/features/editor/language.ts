@@ -1,5 +1,5 @@
 import { snippetCompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
-import { MSSQL, MySQL, PLSQL, PostgreSQL, sql, type SQLDialect, type SQLNamespace } from '@codemirror/lang-sql';
+import { MSSQL, MySQL, PLSQL, PostgreSQL, StandardSQL, sql, type SQLDialect, type SQLNamespace } from '@codemirror/lang-sql';
 import { EditorState } from '@codemirror/state';
 
 import type { SchemaModel } from '@/bindings/SchemaModel';
@@ -7,7 +7,16 @@ import type { Snippet } from '@/bindings/Snippet';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import { defaultSchema } from '@/lib/engines';
 
-const DIALECTS: Record<SqlFlavor, SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, sqlserver: MSSQL, oracle: PLSQL };
+const DIALECTS: Record<SqlFlavor, SQLDialect> = {
+  postgres: PostgreSQL,
+  mysql: MySQL,
+  sqlserver: MSSQL,
+  oracle: PLSQL,
+  // Backtick identifiers, like MySQL.
+  clickhouse: MySQL,
+  duckdb: PostgreSQL,
+  snowflake: StandardSQL,
+};
 
 /**
  * The completion namespace: `schema.table` (and bare `table` for the default

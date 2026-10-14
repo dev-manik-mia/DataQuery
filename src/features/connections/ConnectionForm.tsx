@@ -13,7 +13,7 @@ import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { SshTunnel } from '@/bindings/SshTunnel';
 import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
-import { Alert, Button, EngineMark, ErrorAlert, FieldShell, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
+import { Alert, Button, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
 import { connectionDefaults, databaseLabel, insecureReason, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
@@ -43,6 +43,21 @@ import { TrustHostKey } from './TrustHostKey';
 
 const ENVIRONMENTS: Environment[] = ['Local', 'Development', 'Staging', 'Production'];
 
+/** File types offered when choosing a database file. */
+const DATABASE_FILTERS: Partial<Record<Engine, { name: string; extensions: string[] }[]>> = {
+  duckdb: [{ name: 'DuckDB database', extensions: ['duckdb', 'db', 'ddb'] }],
+  sqlite: [{ name: 'SQLite database', extensions: ['sqlite', 'sqlite3', 'db'] }],
+};
+
+/** Engine settings kept in `properties`. */
+const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string }[]>> = {
+  snowflake: [
+    { key: 'warehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
+    { key: 'role', label: 'Role', placeholder: 'default role' },
+    { key: 'schema', label: 'Schema', placeholder: 'PUBLIC' },
+  ],
+};
+
 const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', 'disable'];
 
 const keychainName = isMac ? 'macOS Keychain' : navigator.userAgent.includes('Windows') ? 'Windows Credential Manager' : 'the system keychain';
@@ -65,6 +80,8 @@ interface FormState {
   clearPassword: boolean;
   sslMode: SslMode;
   timeout: string;
+  /** Engine settings such as Snowflake's warehouse and role. */
+  properties: Record<string, string>;
 }
 
 function initialState(engine: Engine, defaultPort: number | null, existing?: { name: string; folder_id: string | null; environment: Environment; config: ConnConfig }, prefill?: ParsedUrl): FormState {
@@ -89,6 +106,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     clearPassword: false,
     sslMode: config?.ssl_mode ?? 'verify-full',
     timeout: String(config?.connect_timeout_secs ?? 10),
+    properties: { ...(config?.properties ?? {}) },
   };
 }
 
@@ -98,8 +116,13 @@ type SectionId = 'auth' | 'tls' | 'ssh' | 'options';
 
 const DEFAULT_OPTIONS: ConnOptions = { keepalive_secs: 60, connect_retries: 0, idle_timeout_mins: 0, pool_size: 4 };
 
-function validate(s: FormState): Errors {
+function validate(s: FormState, fileBased: boolean): Errors {
   const errors: Errors = {};
+  if (fileBased) {
+    if (!s.name.trim()) errors.name = 'Give the connection a name.';
+    if (!s.database.trim()) errors.database = 'Choose a database file, or enter :memory:.';
+    return errors;
+  }
   if (Object.keys(validateOptions(s.options)).length) errors.options = 'Check the connection options.';
   if (s.ssh && [s.ssh.host, ...s.ssh.jumps].some((h) => !h.host || !h.username || h.port < 1 || h.port > 65535 || (h.auth.method === 'private_key' && !h.auth.path))) {
     errors.ssh = 'Every SSH host needs a host, port, user and (for key auth) a key file.';
@@ -126,6 +149,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   const connect = useWorkspace((s) => s.connect);
   const existing = connections.find((c) => c.id === connectionId);
   const [state, setState] = useState(() => initialState(engine, info?.default_port ?? null, existing, prefill));
+  const fileBased = info?.file_based ?? false;
   const [touched, setTouched] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState<'save' | 'connect' | null>(null);
@@ -138,7 +162,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   }));
   const toggle = (k: SectionId) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
 
-  const errors = useMemo(() => validate(state), [state]);
+  const errors = useMemo(() => validate(state, fileBased), [state, fileBased]);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setState((s) => ({ ...s, [key]: value }));
     setResult(null);
@@ -185,8 +209,9 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
         pool_size: Number(state.options.pool_size),
       },
       auth: state.auth,
+      properties: Object.fromEntries(Object.entries(state.properties).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v)),
     },
-    password: state.auth.method === 'password' ? passwordChange() : { action: 'clear' },
+    password: fileBased ? { action: 'clear' } : state.auth.method === 'password' ? passwordChange() : { action: 'clear' },
     ssh_secrets: hopChanges(),
   });
 
@@ -229,7 +254,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   };
 
   const err = (key: keyof FormState) => (touched ? errors[key] : undefined);
-  const insecure = insecureReason({ host: state.host.trim(), ssl_mode: state.sslMode, ssh: state.ssh });
+  const insecure = fileBased ? null : insecureReason({ host: state.host.trim(), ssl_mode: state.sslMode, ssh: state.ssh });
   const passwordHint = existing?.has_password
     ? state.clearPassword
       ? 'The saved password will be removed when you save.'
@@ -283,8 +308,22 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
               )}
             </FieldShell>
           </div>
+          {fileBased ? (
+            <FileField
+              className={styles.full}
+              label={databaseLabel(engine)}
+              value={state.database || null}
+              error={err('database')}
+              filters={DATABASE_FILTERS[engine]}
+              allowCreate
+              typed
+              hint="Choose a file, create a new one, or type :memory: for a temporary database. Opening it read-only lets other programs read it too."
+              onChange={(path) => set('database', path ?? '')}
+            />
+          ) : (
+            <>
           <div className={styles.hostRow}>
-            <TextField label="Host" mono value={state.host} error={err('host')} onChange={(e) => set('host', e.target.value)} />
+            <TextField label={engine === 'snowflake' ? 'Account' : 'Host'} mono value={state.host} error={err('host')} hint={engine === 'snowflake' ? 'Account identifier (myorg-myaccount or xy12345.eu-west-1) or the full host name.' : undefined} onChange={(e) => set('host', e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
           <TextField
@@ -295,6 +334,16 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             onChange={(e) => set('database', e.target.value)}
           />
           <TextField label="Username" mono value={state.username} error={err('username')} onChange={(e) => set('username', e.target.value)} />
+          {ENGINE_PROPERTIES[engine]?.map((p) => (
+            <TextField
+              key={p.key}
+              label={p.label}
+              mono
+              placeholder={p.placeholder}
+              value={state.properties[p.key] ?? ''}
+              onChange={(e) => set('properties', { ...state.properties, [p.key]: e.target.value })}
+            />
+          ))}
           {state.auth.method === 'password' && (
           <div className={styles.full} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <TextField
@@ -331,6 +380,10 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             }
           />
           <TextField label="Connect timeout" mono inputMode="numeric" suffix="seconds" value={state.timeout} error={err('timeout')} onChange={(e) => set('timeout', e.target.value.replace(/\D/g, ''))} />
+            </>
+          )}
+          {!fileBased && (
+            <>
           <FormSection title="Authentication" summary={authSummary(state.auth)} open={openSections.auth} onToggle={() => toggle('auth')}>
             <AuthFields auth={state.auth} onChange={(a) => set('auth', a)} />
             {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}
@@ -346,6 +399,8 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             )}
             {err('ssh') && <span className={`dq-field__error ${styles.full}`}>{err('ssh')}</span>}
           </FormSection>
+            </>
+          )}
           <FormSection title="Connection options" summary={optionsSummary(state.readOnly, state.options)} open={openSections.options} onToggle={() => toggle('options')}>
             <OptionFields
               readOnly={state.readOnly}
@@ -371,7 +426,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             {result.info.read_only && ' · Server is read-only (standby).'}
           </Alert>
         )}
-        {result && !result.ok && <ErrorAlert error={result.error} title={`Could not connect to ${state.host}:${state.port}`} />}
+        {result && !result.ok && <ErrorAlert error={result.error} title={fileBased ? `Could not open ${state.database}` : `Could not connect to ${state.host}:${state.port}`} />}
         {result && !result.ok && <TrustHostKey error={result.error} onTrusted={() => void test()} />}
 
         <div className={styles.formActions}>
