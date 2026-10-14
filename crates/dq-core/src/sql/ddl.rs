@@ -46,12 +46,32 @@ pub struct IndexColumn {
 #[serde(tag = "op", rename_all = "snake_case")]
 #[ts(export)]
 pub enum SchemaChange {
-    CreateTable { table: ObjectRef, columns: Vec<ColumnDef>, primary_key: Vec<String> },
-    DropTable { table: ObjectRef, cascade: bool },
-    RenameTable { table: ObjectRef, new_name: String },
-    AddColumn { table: ObjectRef, column: ColumnDef },
-    DropColumn { table: ObjectRef, column: String },
-    RenameColumn { table: ObjectRef, column: String, new_name: String },
+    CreateTable {
+        table: ObjectRef,
+        columns: Vec<ColumnDef>,
+        primary_key: Vec<String>,
+    },
+    DropTable {
+        table: ObjectRef,
+        cascade: bool,
+    },
+    RenameTable {
+        table: ObjectRef,
+        new_name: String,
+    },
+    AddColumn {
+        table: ObjectRef,
+        column: ColumnDef,
+    },
+    DropColumn {
+        table: ObjectRef,
+        column: String,
+    },
+    RenameColumn {
+        table: ObjectRef,
+        column: String,
+        new_name: String,
+    },
     AlterColumn {
         table: ObjectRef,
         column: String,
@@ -59,8 +79,16 @@ pub enum SchemaChange {
         nullable: Option<bool>,
         default: Option<DefaultChange>,
     },
-    CreateIndex { table: ObjectRef, name: String, columns: Vec<IndexColumn>, unique: bool },
-    DropIndex { table: ObjectRef, name: String },
+    CreateIndex {
+        table: ObjectRef,
+        name: String,
+        columns: Vec<IndexColumn>,
+        unique: bool,
+    },
+    DropIndex {
+        table: ObjectRef,
+        name: String,
+    },
     AddForeignKey {
         table: ObjectRef,
         name: String,
@@ -70,9 +98,21 @@ pub enum SchemaChange {
         on_delete: Option<String>,
         on_update: Option<String>,
     },
-    AddUnique { table: ObjectRef, name: String, columns: Vec<String> },
-    AddCheck { table: ObjectRef, name: String, expression: String },
-    DropConstraint { table: ObjectRef, name: String, kind: ConstraintKind },
+    AddUnique {
+        table: ObjectRef,
+        name: String,
+        columns: Vec<String>,
+    },
+    AddCheck {
+        table: ObjectRef,
+        name: String,
+        expression: String,
+    },
+    DropConstraint {
+        table: ObjectRef,
+        name: String,
+        kind: ConstraintKind,
+    },
 }
 
 impl SchemaChange {
@@ -352,7 +392,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
         }
         SchemaChange::AddCheck { name: n, expression: e, .. } => {
             name(n, "The constraint name")?;
-            vec![alter(format!("ADD CONSTRAINT {} CHECK ({})", d.quote_ident(n), expression(d, e, "check expression")?))]
+            vec![alter(format!(
+                "ADD CONSTRAINT {} CHECK ({})",
+                d.quote_ident(n),
+                expression(d, e, "check expression")?
+            ))]
         }
         SchemaChange::DropConstraint { name: n, kind, .. } => {
             name(n, "The constraint name")?;
@@ -409,7 +453,11 @@ mod tests {
   PRIMARY KEY ("id")
 )"#]
         );
-        let my = SchemaChange::CreateTable { table: my_table(), columns: vec![ColumnDef { identity: true, ..col("id", "int unsigned") }], primary_key: vec!["id".into()] };
+        let my = SchemaChange::CreateTable {
+            table: my_table(),
+            columns: vec![ColumnDef { identity: true, ..col("id", "int unsigned") }],
+            primary_key: vec!["id".into()],
+        };
         assert!(statements(&MysqlDialect, &my, None).unwrap()[0].contains("`id` int unsigned AUTO_INCREMENT"));
     }
 
@@ -508,15 +556,28 @@ mod tests {
             columns: vec![IndexColumn { name: "total".into(), descending: true }],
             unique: false,
         };
-        assert_eq!(statements(&PostgresDialect, &idx, None).unwrap()[0], r#"CREATE INDEX "orders_total_idx" ON "public"."orders" ("total" DESC)"#);
+        assert_eq!(
+            statements(&PostgresDialect, &idx, None).unwrap()[0],
+            r#"CREATE INDEX "orders_total_idx" ON "public"."orders" ("total" DESC)"#
+        );
         let drop = SchemaChange::DropIndex { table: pg_table(), name: "orders_total_idx".into() };
         assert_eq!(statements(&PostgresDialect, &drop, None).unwrap()[0], r#"DROP INDEX "public"."orders_total_idx""#);
         let drop_my = SchemaChange::DropIndex { table: my_table(), name: "orders_total_idx".into() };
-        assert_eq!(statements(&MysqlDialect, &drop_my, None).unwrap()[0], "DROP INDEX `orders_total_idx` ON `shop`.`orders`");
-        let fk = SchemaChange::DropConstraint { table: my_table(), name: "fk".into(), kind: ConstraintKind::ForeignKey };
-        assert_eq!(statements(&MysqlDialect, &fk, None).unwrap()[0], "ALTER TABLE `shop`.`orders` DROP FOREIGN KEY `fk`");
+        assert_eq!(
+            statements(&MysqlDialect, &drop_my, None).unwrap()[0],
+            "DROP INDEX `orders_total_idx` ON `shop`.`orders`"
+        );
+        let fk =
+            SchemaChange::DropConstraint { table: my_table(), name: "fk".into(), kind: ConstraintKind::ForeignKey };
+        assert_eq!(
+            statements(&MysqlDialect, &fk, None).unwrap()[0],
+            "ALTER TABLE `shop`.`orders` DROP FOREIGN KEY `fk`"
+        );
         let rename = SchemaChange::RenameTable { table: my_table(), new_name: "sales".into() };
-        assert_eq!(statements(&MysqlDialect, &rename, None).unwrap()[0], "RENAME TABLE `shop`.`orders` TO `shop`.`sales`");
+        assert_eq!(
+            statements(&MysqlDialect, &rename, None).unwrap()[0],
+            "RENAME TABLE `shop`.`orders` TO `shop`.`sales`"
+        );
         assert_eq!(preview(&["SELECT 1".into(), "SELECT 2".into()]), "SELECT 1;\n\nSELECT 2;\n");
     }
 }

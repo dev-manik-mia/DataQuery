@@ -288,7 +288,8 @@ fn default_sql(raw: Option<String>, extra: &str, mariadb: bool) -> Option<String
         return Some(MysqlDialect.quote_literal(&raw));
     }
     let upper = raw.to_ascii_uppercase();
-    let bare = ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME", "CURRENT_DATE", "CURRENT_TIME"].iter().any(|k| upper.starts_with(k));
+    let bare =
+        ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME", "CURRENT_DATE", "CURRENT_TIME"].iter().any(|k| upper.starts_with(k));
     Some(if bare { raw } else { format!("({raw})") })
 }
 

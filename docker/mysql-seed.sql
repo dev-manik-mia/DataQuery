@@ -64,3 +64,5 @@ GRANT ALL PRIVILEGES ON billing.* TO 'dataquery'@'%';
 -- Monitoring (screen 07) reads every session and InnoDB lock waits.
 GRANT PROCESS ON *.* TO 'dataquery'@'%';
 GRANT SELECT ON performance_schema.* TO 'dataquery'@'%';
+-- Scratch databases for schema-diff tests.
+GRANT ALL PRIVILEGES ON `it\_%`.* TO 'dataquery'@'%';

@@ -6,7 +6,7 @@ use dq_core::sql::{
     SqlFlavor, StatementInfo, StatementKind, TxEffect, redact_literals, split_statements, transaction_effect,
 };
 use dq_core::{DbError, ErrorKind};
-use dq_store::{HistoryStatus, NewHistoryEntry, Retention};
+use dq_store::{HistoryStatus, NewHistoryEntry, Retention, SavedConnection};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
@@ -40,6 +40,44 @@ pub struct RunReport {
     pub duration_ms: u64,
     /// Transaction state after the run.
     pub tx: TxStatus,
+}
+
+/// Records one statement in history (if enabled) on a blocking thread. Result
+/// rows are never stored; SQL is redacted by the store.
+pub fn record_history(
+    state: &AppState,
+    settings: &dq_store::Settings,
+    connection: &SavedConnection,
+    open: &OpenSession,
+    sql: &str,
+    duration: std::time::Duration,
+    result: Result<Option<i64>, DbError>,
+) {
+    if !settings.keep_history {
+        return;
+    }
+    let flavor = open.session.dialect().flavor();
+    let entry = NewHistoryEntry {
+        connection_id: Some(connection.id.clone()),
+        connection_name: connection.name.clone(),
+        database: open.session.info().database.clone(),
+        sql: if settings.history_redact_literals { redact_literals(sql, flavor) } else { sql.to_owned() },
+        duration_ms: duration.as_millis() as i64,
+        status: match &result {
+            Ok(_) => HistoryStatus::Ok,
+            Err(e) if e.kind == ErrorKind::Cancelled => HistoryStatus::Cancelled,
+            Err(_) => HistoryStatus::Error,
+        },
+        rows: result.as_ref().ok().copied().flatten(),
+        error: result.err().map(|e| e.message),
+    };
+    let store = state.store.clone();
+    let retention = Retention { max_entries: settings.history_max_entries, max_days: settings.history_max_days };
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(e) = store.add_history(&entry, retention) {
+            tracing::warn!(error = %e, "could not record history");
+        }
+    });
 }
 
 /// Next transaction state after a statement ran (or failed).
@@ -114,32 +152,16 @@ pub async fn run_sql(
         let ran = Instant::now();
         let result = open.session.execute(text, &params, options).await;
         open.set_tx_status(next_tx(open.tx_status(), text, flavor, result.is_err()));
-        if settings.keep_history {
-            let recorded =
-                if settings.history_redact_literals { redact_literals(text, flavor) } else { text.to_owned() };
-            let entry = NewHistoryEntry {
-                connection_id: Some(connection.id.clone()),
-                connection_name: connection.name.clone(),
-                database: open.session.info().database.clone(),
-                sql: recorded,
-                duration_ms: ran.elapsed().as_millis() as i64,
-                status: match &result {
-                    Ok(_) => HistoryStatus::Ok,
-                    Err(e) if e.kind == ErrorKind::Cancelled => HistoryStatus::Cancelled,
-                    Err(_) => HistoryStatus::Error,
-                },
-                rows: result.as_ref().ok().map(|r| r.affected.map_or(r.rows.len() as i64, |a| a as i64)),
-                error: result.as_ref().err().map(|e| e.message.clone()),
-            };
-            let store = state.store.clone();
-            let retention =
-                Retention { max_entries: settings.history_max_entries, max_days: settings.history_max_days };
-            tauri::async_runtime::spawn_blocking(move || {
-                if let Err(e) = store.add_history(&entry, retention) {
-                    tracing::warn!(error = %e, "could not record history");
-                }
-            });
-        }
+        let rows = result.as_ref().ok().map(|r| r.affected.map_or(r.rows.len() as i64, |a| a as i64));
+        record_history(
+            &state,
+            &settings,
+            &connection,
+            &open,
+            text,
+            ran.elapsed(),
+            result.as_ref().map(|_| rows).map_err(Clone::clone),
+        );
         let failed = result.is_err();
         let (result, error) = match result {
             Ok(r) => (Some(r), None),

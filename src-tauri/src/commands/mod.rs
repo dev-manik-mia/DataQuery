@@ -7,6 +7,7 @@ pub mod explorer;
 pub mod history;
 pub mod monitor;
 pub mod query;
+pub mod schema;
 pub mod session;
 pub mod settings;
 pub mod system;

@@ -50,7 +50,13 @@ const DETECTORS: &[Detector] = &[
         framework: "Prisma",
         table: "_prisma_migrations",
         columns: &["migration_name", "finished_at"],
-        select: ["id", "migration_name", "finished_at", "CASE WHEN rolled_back_at IS NOT NULL THEN 'rolled back' WHEN finished_at IS NULL THEN 'failed' ELSE 'applied' END", "NULL"],
+        select: [
+            "id",
+            "migration_name",
+            "finished_at",
+            "CASE WHEN rolled_back_at IS NOT NULL THEN 'rolled back' WHEN finished_at IS NULL THEN 'failed' ELSE 'applied' END",
+            "NULL",
+        ],
         order_by: "started_at DESC",
     },
     Detector {
@@ -92,7 +98,13 @@ const DETECTORS: &[Detector] = &[
         framework: "Flyway",
         table: "flyway_schema_history",
         columns: &["installed_rank", "version", "success"],
-        select: ["coalesce(version, script)", "description", "installed_on", "CASE WHEN success THEN 'applied' ELSE 'failed' END", "installed_rank"],
+        select: [
+            "coalesce(version, script)",
+            "description",
+            "installed_on",
+            "CASE WHEN success THEN 'applied' ELSE 'failed' END",
+            "installed_rank",
+        ],
         order_by: "installed_rank DESC",
     },
     Detector {
@@ -142,7 +154,12 @@ pub async fn inspect(session: &dyn Session, model: &SchemaModel) -> DbResult<Vec
         };
         let cast = |expr: &str| d.cast_to_text(&quote(expr));
         let [version, name, applied, status, batch] = detector.select;
-        let order = detector.order_by.split_whitespace().map(|w| if w == "DESC" { w.to_owned() } else { quote(w) }).collect::<Vec<_>>().join(" ");
+        let order = detector
+            .order_by
+            .split_whitespace()
+            .map(|w| if w == "DESC" { w.to_owned() } else { quote(w) })
+            .collect::<Vec<_>>()
+            .join(" ");
         let sql = format!(
             "SELECT {}, {}, {}, {}, {} FROM {} ORDER BY {order} LIMIT {MAX_ROWS}",
             cast(version),

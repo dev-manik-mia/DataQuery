@@ -553,3 +553,129 @@ async fn monitor_shows_blocking_and_cancels() {
     assert!(monitor.server_settings(Some("max_conn")).await.unwrap().iter().any(|s| s.name == "max_connections"));
     assert!(!monitor.largest_tables("dataquery_test", 5).await.unwrap().is_empty());
 }
+
+async fn run_all(s: &dyn Session, sql: &str) {
+    for statement in dq_core::sql::split_statements(sql, dq_core::sql::SqlFlavor::Postgres) {
+        let text = statement.text(sql);
+        s.execute(text, &[], OPTS).await.unwrap_or_else(|e| panic!("{text}: {e:?}"));
+    }
+}
+
+#[tokio::test]
+async fn schema_changes_diff_and_migrations() {
+    use dq_core::diff::{Container, diff};
+    use dq_core::schema::ConstraintKind;
+    use dq_core::sql::ddl::{self, ColumnDef, DefaultChange, IndexColumn, SchemaChange};
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    run_all(&*s, "DROP SCHEMA IF EXISTS it_diff_a CASCADE; DROP SCHEMA IF EXISTS it_diff_b CASCADE; CREATE SCHEMA it_diff_a; CREATE SCHEMA it_diff_b").await;
+    let t = |schema: &str, name: &str| ObjectRef::new(NodeKind::Table, "dataquery_test", Some(schema.into()), name);
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
+    let changes = vec![
+        SchemaChange::CreateTable {
+            table: t("it_diff_a", "accounts"),
+            columns: vec![ColumnDef { identity: true, nullable: false, ..col("id", "bigint") }, col("email", "text")],
+            primary_key: vec!["id".into()],
+        },
+        SchemaChange::CreateTable {
+            table: t("it_diff_a", "invoices"),
+            columns: vec![
+                ColumnDef { identity: true, nullable: false, ..col("id", "bigint") },
+                col("account_id", "bigint"),
+                ColumnDef { default: Some("0".into()), nullable: false, ..col("amount", "numeric(12,2)") },
+            ],
+            primary_key: vec!["id".into()],
+        },
+        SchemaChange::AddForeignKey {
+            table: t("it_diff_a", "invoices"),
+            name: "invoices_account_fk".into(),
+            columns: vec!["account_id".into()],
+            target: t("it_diff_a", "accounts"),
+            target_columns: vec!["id".into()],
+            on_delete: Some("cascade".into()),
+            on_update: None,
+        },
+        SchemaChange::AddUnique {
+            table: t("it_diff_a", "accounts"),
+            name: "accounts_email_key".into(),
+            columns: vec!["email".into()],
+        },
+        SchemaChange::AddCheck {
+            table: t("it_diff_a", "invoices"),
+            name: "amount_positive".into(),
+            expression: "amount >= 0".into(),
+        },
+        SchemaChange::CreateIndex {
+            table: t("it_diff_a", "invoices"),
+            name: "invoices_amount_idx".into(),
+            columns: vec![IndexColumn { name: "amount".into(), descending: true }],
+            unique: false,
+        },
+        SchemaChange::AlterColumn {
+            table: t("it_diff_a", "accounts"),
+            column: "email".into(),
+            data_type: Some("varchar(320)".into()),
+            nullable: Some(false),
+            default: Some(DefaultChange::Set { expression: "''".into() }),
+        },
+    ];
+    let mut statements = Vec::new();
+    for change in &changes {
+        statements.extend(ddl::statements(s.dialect(), change, None).unwrap());
+    }
+    let bound = statements
+        .iter()
+        .map(|sql| Ok(dq_core::edit::BoundStatement { sql: sql.clone(), params: vec![], expect_rows: None }));
+    s.run_in_transaction("dataquery_test", &mut bound.collect::<Vec<_>>().into_iter()).await.unwrap();
+    let accounts = ops::structure(&*s, &t("it_diff_a", "accounts")).await.unwrap();
+    let email = accounts.column("email").unwrap();
+    assert_eq!((email.data_type.as_str(), email.nullable), ("character varying(320)", false));
+    assert!(accounts.constraints.iter().any(|c| c.kind == ConstraintKind::Unique));
+
+    // Diff a → empty b, apply, then nothing is left to change.
+    let snapshot = |schema: &'static str| {
+        let s = s.clone();
+        async move {
+            let model = s.schema_model("dataquery_test", Some(schema)).await.unwrap();
+            let mut tables = Vec::new();
+            for table in model.tables {
+                tables.push(ops::structure(&*s, &table.object).await.unwrap());
+            }
+            tables
+        }
+    };
+    let a = Container { database: "dataquery_test".into(), schema: Some("it_diff_a".into()) };
+    let b = Container { database: "dataquery_test".into(), schema: Some("it_diff_b".into()) };
+    let plan = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    assert!(plan.sql.contains(r#"CREATE TABLE "it_diff_b"."invoices""#), "{}", plan.sql);
+    assert!(plan.sql.contains(r#"REFERENCES "it_diff_b"."accounts""#), "{}", plan.sql);
+    run_all(&*s, &plan.sql).await;
+    let again = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    assert!(again.items.is_empty(), "{:#?}\n{}", again.items, again.sql);
+
+    // A change on one side shows up as a column change.
+    run_all(&*s, "ALTER TABLE it_diff_b.invoices ADD COLUMN memo text; ALTER TABLE it_diff_b.invoices ALTER COLUMN amount DROP NOT NULL").await;
+    let drift = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    assert!(drift.sql.contains("DROP COLUMN \"memo\"") && drift.sql.contains("SET NOT NULL"), "{}", drift.sql);
+
+    // Framework migrations.
+    run_all(&*s, "CREATE TABLE it_diff_a.django_migrations (id serial PRIMARY KEY, app text, name text, applied timestamptz DEFAULT now()); \
+                  INSERT INTO it_diff_a.django_migrations (app, name) VALUES ('auth', '0001_initial'), ('auth', '0002_more'); \
+                  CREATE TABLE it_diff_a._prisma_migrations (id text PRIMARY KEY, migration_name text, started_at timestamptz DEFAULT now(), finished_at timestamptz, rolled_back_at timestamptz); \
+                  INSERT INTO it_diff_a._prisma_migrations (id, migration_name, finished_at) VALUES ('a', '20260101_init', now()), ('b', '20260102_broken', NULL)").await;
+    let model = s.schema_model("dataquery_test", Some("it_diff_a")).await.unwrap();
+    let found = dq_core::migrations::inspect(&*s, &model).await.unwrap();
+    let django = found.iter().find(|f| f.framework == "Django").unwrap();
+    assert_eq!(django.entries[0].version, "0002_more");
+    assert_eq!(django.entries[0].name.as_deref(), Some("auth"));
+    let prisma = found.iter().find(|f| f.framework == "Prisma").unwrap();
+    assert!(prisma.entries.iter().any(|e| e.status == "failed" && e.name.as_deref() == Some("20260102_broken")));
+    run_all(&*s, "DROP SCHEMA it_diff_a CASCADE; DROP SCHEMA it_diff_b CASCADE").await;
+}

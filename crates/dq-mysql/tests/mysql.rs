@@ -591,3 +591,115 @@ async fn monitor_shows_blocking_and_cancels() {
     assert!(monitor.server_settings(Some("max_conn")).await.unwrap().iter().any(|s| s.name == "max_connections"));
     assert!(!monitor.largest_tables(DB, 5).await.unwrap().is_empty());
 }
+
+async fn run_all(s: &dyn Session, sql: &str) {
+    for statement in dq_core::sql::split_statements(sql, dq_core::sql::SqlFlavor::Mysql) {
+        let text = statement.text(sql);
+        s.execute(text, &[], OPTS).await.unwrap_or_else(|e| panic!("{text}: {e:?}"));
+    }
+}
+
+#[tokio::test]
+async fn schema_changes_diff_and_migrations() {
+    use dq_core::diff::{Container, diff};
+    use dq_core::sql::ddl::{self, ColumnDef, DefaultChange, SchemaChange};
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    run_all(&*s, "DROP DATABASE IF EXISTS it_diff_a; DROP DATABASE IF EXISTS it_diff_b; CREATE DATABASE it_diff_a; CREATE DATABASE it_diff_b").await;
+    let t = |db: &str, name: &str| ObjectRef::new(NodeKind::Table, db, None, name);
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
+    let changes = vec![
+        SchemaChange::CreateTable {
+            table: t("it_diff_a", "accounts"),
+            columns: vec![
+                ColumnDef { identity: true, nullable: false, ..col("id", "bigint") },
+                ColumnDef { default: Some("'x'".into()), ..col("email", "varchar(100)") },
+            ],
+            primary_key: vec!["id".into()],
+        },
+        SchemaChange::CreateTable {
+            table: t("it_diff_a", "invoices"),
+            columns: vec![
+                ColumnDef { nullable: false, ..col("id", "int") },
+                col("account_id", "bigint"),
+                col("amount", "decimal(12,2)"),
+            ],
+            primary_key: vec!["id".into()],
+        },
+    ];
+    let mut statements = Vec::new();
+    for change in &changes {
+        statements.extend(ddl::statements(s.dialect(), change, None).unwrap());
+    }
+    run_all(&*s, &ddl::preview(&statements)).await;
+    // MODIFY keeps the default, comment and AUTO_INCREMENT it did not change.
+    let structure = ops::structure(&*s, &t("it_diff_a", "accounts")).await.unwrap();
+    let modify = SchemaChange::AlterColumn {
+        table: t("it_diff_a", "accounts"),
+        column: "email".into(),
+        data_type: Some("varchar(200)".into()),
+        nullable: Some(false),
+        default: None,
+    };
+    run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), &modify, Some(&structure)).unwrap())).await;
+    let id_modify = SchemaChange::AlterColumn {
+        table: t("it_diff_a", "accounts"),
+        column: "id".into(),
+        data_type: Some("bigint unsigned".into()),
+        nullable: None,
+        default: None,
+    };
+    let structure = ops::structure(&*s, &t("it_diff_a", "accounts")).await.unwrap();
+    run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), &id_modify, Some(&structure)).unwrap())).await;
+    let after = ops::structure(&*s, &t("it_diff_a", "accounts")).await.unwrap();
+    let email = after.column("email").unwrap();
+    assert_eq!(
+        (email.data_type.as_str(), email.nullable, email.default.as_deref()),
+        ("varchar(200)", false, Some("'x'"))
+    );
+    assert!(after.column("id").unwrap().identity);
+    let set_default = SchemaChange::AlterColumn {
+        table: t("it_diff_a", "accounts"),
+        column: "email".into(),
+        data_type: None,
+        nullable: None,
+        default: Some(DefaultChange::Drop),
+    };
+    run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), &set_default, None).unwrap())).await;
+
+    let snapshot = |db: &'static str| {
+        let s = s.clone();
+        async move {
+            let model = s.schema_model(db, None).await.unwrap();
+            let mut tables = Vec::new();
+            for table in model.tables {
+                tables.push(ops::structure(&*s, &table.object).await.unwrap());
+            }
+            tables
+        }
+    };
+    let a = Container { database: "it_diff_a".into(), schema: None };
+    let b = Container { database: "it_diff_b".into(), schema: None };
+    let plan = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    run_all(&*s, &plan.sql).await;
+    let again = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    assert!(again.items.is_empty(), "{:#?}\n{}", again.items, again.sql);
+
+    run_all(&*s, "CREATE TABLE it_diff_a.migrations (id INT AUTO_INCREMENT PRIMARY KEY, migration VARCHAR(255), batch INT); \
+                  INSERT INTO it_diff_a.migrations (migration, batch) VALUES ('2014_10_12_create_users', 1), ('2026_01_01_add_orders', 2)").await;
+    let model = s.schema_model("it_diff_a", None).await.unwrap();
+    let found = dq_core::migrations::inspect(&*s, &model).await.unwrap();
+    let laravel = found.iter().find(|f| f.framework == "Laravel").unwrap();
+    assert_eq!(
+        (laravel.entries[0].version.as_str(), laravel.entries[0].batch.as_deref()),
+        ("2026_01_01_add_orders", Some("2"))
+    );
+    run_all(&*s, "DROP DATABASE it_diff_a; DROP DATABASE it_diff_b").await;
+}

@@ -88,7 +88,13 @@ fn index_columns(i: &crate::schema::IndexInfo) -> Vec<IndexColumn> {
 }
 
 /// A comparable description of a constraint, plus the change that creates it.
-fn constraint_change(t: &TableStructure, name: &str, table: &ObjectRef, source: &Container, target: &Container) -> Option<(String, SchemaChange)> {
+fn constraint_change(
+    t: &TableStructure,
+    name: &str,
+    table: &ObjectRef,
+    source: &Container,
+    target: &Container,
+) -> Option<(String, SchemaChange)> {
     let c = t.constraints.iter().find(|c| c.name == name)?;
     match c.kind {
         ConstraintKind::ForeignKey => {
@@ -118,11 +124,17 @@ fn constraint_change(t: &TableStructure, name: &str, table: &ObjectRef, source: 
         }
         ConstraintKind::Unique => {
             let columns = t.indexes.iter().find(|i| i.name == name).map(|i| i.columns.clone())?;
-            Some((format!("unique ({})", columns.join(",")), SchemaChange::AddUnique { table: table.clone(), name: name.to_owned(), columns }))
+            Some((
+                format!("unique ({})", columns.join(",")),
+                SchemaChange::AddUnique { table: table.clone(), name: name.to_owned(), columns },
+            ))
         }
         ConstraintKind::Check => {
             let expression = c.definition.trim().trim_start_matches("CHECK").trim().to_owned();
-            Some((format!("check {}", norm(&expression)), SchemaChange::AddCheck { table: table.clone(), name: name.to_owned(), expression }))
+            Some((
+                format!("check {}", norm(&expression)),
+                SchemaChange::AddCheck { table: table.clone(), name: name.to_owned(), expression },
+            ))
         }
         ConstraintKind::PrimaryKey | ConstraintKind::Exclusion => None,
     }
@@ -152,7 +164,9 @@ pub fn diff(
         list.iter().filter(|t| t.object.kind == NodeKind::Table).map(|t| t.object.name.clone()).collect()
     };
     let (source_names, target_names) = (tables(source), tables(target));
-    let find = |list: &'_ [TableStructure], name: &str| list.iter().find(|t| t.object.name == name && t.object.kind == NodeKind::Table).cloned();
+    let find = |list: &'_ [TableStructure], name: &str| {
+        list.iter().find(|t| t.object.name == name && t.object.kind == NodeKind::Table).cloned()
+    };
 
     for name in &source_names {
         let s = find(source, name).ok_or_else(|| DbError::internal("source table vanished"))?;
@@ -173,7 +187,12 @@ pub fn diff(
                 if i.columns.is_empty() {
                     out.warnings.push(format!("{name}: expression index {} must be created manually.", i.name));
                 } else {
-                    plan.late.push(SchemaChange::CreateIndex { table: table.clone(), name: i.name.clone(), columns: index_columns(i), unique: i.unique });
+                    plan.late.push(SchemaChange::CreateIndex {
+                        table: table.clone(),
+                        name: i.name.clone(),
+                        columns: index_columns(i),
+                        unique: i.unique,
+                    });
                 }
             }
             continue;
@@ -188,8 +207,8 @@ pub fn diff(
                 Some(tc) => {
                     let type_changed = norm(&sc.data_type) != norm(&tc.data_type);
                     let null_changed = sc.nullable != tc.nullable;
-                    let default_changed = !sc.identity
-                        && sc.default.as_deref().map(norm) != tc.default.as_deref().map(norm);
+                    let default_changed =
+                        !sc.identity && sc.default.as_deref().map(norm) != tc.default.as_deref().map(norm);
                     if type_changed || null_changed || default_changed {
                         let mut details = Vec::new();
                         if type_changed {
@@ -199,7 +218,11 @@ pub fn diff(
                             details.push(if sc.nullable { "nullable".into() } else { "not null".to_owned() });
                         }
                         if default_changed {
-                            details.push(format!("default {} → {}", tc.default.as_deref().unwrap_or("none"), sc.default.as_deref().unwrap_or("none")));
+                            details.push(format!(
+                                "default {} → {}",
+                                tc.default.as_deref().unwrap_or("none"),
+                                sc.default.as_deref().unwrap_or("none")
+                            ));
                         }
                         item(&mut out, name, "column", &sc.name, DiffChange::Changed, details.join(", "));
                         plan.alters.push((
@@ -227,12 +250,18 @@ pub fn diff(
         let source_keys: Vec<(String, String, SchemaChange)> = s
             .constraints
             .iter()
-            .filter_map(|c| constraint_change(&s, &c.name, &table, source_container, target_container).map(|(k, ch)| (c.name.clone(), k, ch)))
+            .filter_map(|c| {
+                constraint_change(&s, &c.name, &table, source_container, target_container)
+                    .map(|(k, ch)| (c.name.clone(), k, ch))
+            })
             .collect();
         let target_keys: Vec<(String, String)> = t
             .constraints
             .iter()
-            .filter_map(|c| constraint_change(&t, &c.name, &table, target_container, target_container).map(|(k, _)| (c.name.clone(), k)))
+            .filter_map(|c| {
+                constraint_change(&t, &c.name, &table, target_container, target_container)
+                    .map(|(k, _)| (c.name.clone(), k))
+            })
             .collect();
         for (cname, key, change) in &source_keys {
             match target_keys.iter().find(|(n, _)| n == cname) {
@@ -242,7 +271,8 @@ pub fn diff(
                 }
                 Some((_, tkey)) if tkey != key => {
                     item(&mut out, name, "constraint", cname, DiffChange::Changed, key.clone());
-                    let kind = s.constraints.iter().find(|c| &c.name == cname).map_or(ConstraintKind::Check, |c| c.kind);
+                    let kind =
+                        s.constraints.iter().find(|c| &c.name == cname).map_or(ConstraintKind::Check, |c| c.kind);
                     plan.drops.push(SchemaChange::DropConstraint { table: table.clone(), name: cname.clone(), kind });
                     plan.late.push(change.clone());
                 }
@@ -270,14 +300,23 @@ pub fn diff(
             if ti.is_some() {
                 plan.drops.insert(0, SchemaChange::DropIndex { table: table.clone(), name: si.name.clone() });
             }
-            plan.late.push(SchemaChange::CreateIndex { table: table.clone(), name: si.name.clone(), columns: index_columns(si), unique: si.unique });
+            plan.late.push(SchemaChange::CreateIndex {
+                table: table.clone(),
+                name: si.name.clone(),
+                columns: index_columns(si),
+                unique: si.unique,
+            });
         }
         for ti in plain_indexes(&t).filter(|ti| !plain_indexes(&s).any(|si| si.name == ti.name)) {
             item(&mut out, name, "index", &ti.name, DiffChange::Removed, format!("({})", ti.columns.join(", ")));
             plan.drops.insert(0, SchemaChange::DropIndex { table: table.clone(), name: ti.name.clone() });
         }
         if primary_key(&s) != primary_key(&t) {
-            out.warnings.push(format!("{name}: the primary key differs ({:?} vs {:?}); change it manually.", primary_key(&s), primary_key(&t)));
+            out.warnings.push(format!(
+                "{name}: the primary key differs ({:?} vs {:?}); change it manually.",
+                primary_key(&s),
+                primary_key(&t)
+            ));
         }
     }
     for name in target_names.iter().filter(|n| !source_names.contains(n)) {
@@ -325,7 +364,11 @@ mod tests {
         TableStructure {
             object: ObjectRef::new(NodeKind::Table, "app", Some(schema.into()), name),
             columns,
-            constraints: vec![ConstraintInfo { kind: ConstraintKind::PrimaryKey, name: format!("{name}_pkey"), definition: "PRIMARY KEY (id)".into() }],
+            constraints: vec![ConstraintInfo {
+                kind: ConstraintKind::PrimaryKey,
+                name: format!("{name}_pkey"),
+                definition: "PRIMARY KEY (id)".into(),
+            }],
             indexes: vec![IndexInfo {
                 name: format!("{name}_pkey"),
                 definition: String::new(),
@@ -347,11 +390,26 @@ mod tests {
     fn plans_creates_alters_and_drops() {
         let src_c = Container { database: "app".into(), schema: Some("public".into()) };
         let dst_c = Container { database: "app".into(), schema: Some("staging".into()) };
-        let mut orders = table("public", "orders", vec![col("id", "bigint", false), col("total", "numeric(14,2)", false), col("note", "text", true)]);
-        orders.indexes.push(IndexInfo { name: "orders_total_idx".into(), definition: String::new(), unique: false, primary: false, columns: vec!["total".into()], size_bytes: None });
+        let mut orders = table(
+            "public",
+            "orders",
+            vec![col("id", "bigint", false), col("total", "numeric(14,2)", false), col("note", "text", true)],
+        );
+        orders.indexes.push(IndexInfo {
+            name: "orders_total_idx".into(),
+            definition: String::new(),
+            unique: false,
+            primary: false,
+            columns: vec!["total".into()],
+            size_bytes: None,
+        });
         let source = vec![orders, table("public", "customers", vec![col("id", "bigint", false)])];
         let target = vec![
-            table("staging", "orders", vec![col("id", "bigint", false), col("total", "numeric(12,2)", true), col("legacy", "text", true)]),
+            table(
+                "staging",
+                "orders",
+                vec![col("id", "bigint", false), col("total", "numeric(12,2)", true), col("legacy", "text", true)],
+            ),
             table("staging", "old_stuff", vec![col("id", "int", false)]),
         ];
         let diff = diff(&PostgresDialect, &source, &src_c, &target, &dst_c).unwrap();
@@ -362,7 +420,11 @@ mod tests {
         assert!(kinds.contains(&("index", "orders_total_idx", DiffChange::Added)));
         assert!(kinds.contains(&("table", "customers", DiffChange::Added)));
         assert!(kinds.contains(&("table", "old_stuff", DiffChange::Removed)));
-        assert!(diff.sql.contains(r#"ALTER TABLE "staging"."orders" ALTER COLUMN "total" TYPE numeric(14,2)"#), "{}", diff.sql);
+        assert!(
+            diff.sql.contains(r#"ALTER TABLE "staging"."orders" ALTER COLUMN "total" TYPE numeric(14,2)"#),
+            "{}",
+            diff.sql
+        );
         assert!(diff.sql.contains(r#"CREATE TABLE "staging"."customers""#));
         assert!(diff.sql.contains(r#"DROP TABLE "staging"."old_stuff""#));
         // Drops come before creates; indexes after columns exist.
