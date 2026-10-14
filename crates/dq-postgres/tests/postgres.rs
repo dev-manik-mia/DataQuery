@@ -429,3 +429,88 @@ async fn row_filters_bind_matches_and_searches() {
         RowFilter { matches: vec![ColumnValue { column: "discount".into(), value: None }], ..RowFilter::default() };
     assert!(ops::row_count(&*s, &object, &null).await.unwrap().count > 0);
 }
+
+#[tokio::test]
+async fn explorer_lists_routines_sequences_indexes_and_triggers() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    for sql in [
+        "CREATE SCHEMA IF NOT EXISTS it_objects",
+        "DROP TABLE IF EXISTS it_objects.events",
+        "DROP FUNCTION IF EXISTS it_objects.touch() CASCADE",
+        "DROP FUNCTION IF EXISTS it_objects.add(int, int)",
+        "DROP FUNCTION IF EXISTS it_objects.add(text, text)",
+        "DROP PROCEDURE IF EXISTS it_objects.noop()",
+        "DROP SEQUENCE IF EXISTS it_objects.ticket_seq",
+        "CREATE TABLE it_objects.events (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, at timestamptz)",
+        "CREATE INDEX events_at_idx ON it_objects.events (at)",
+        "CREATE FUNCTION it_objects.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.at := now(); RETURN NEW; END $$",
+        "CREATE TRIGGER events_touch BEFORE INSERT ON it_objects.events FOR EACH ROW EXECUTE FUNCTION it_objects.touch()",
+        "CREATE FUNCTION it_objects.add(a int, b int) RETURNS int LANGUAGE sql AS 'SELECT a + b'",
+        "CREATE FUNCTION it_objects.add(a text, b text) RETURNS text LANGUAGE sql AS 'SELECT a || b'",
+        "CREATE PROCEDURE it_objects.noop() LANGUAGE sql AS 'SELECT 1'",
+        "CREATE SEQUENCE it_objects.ticket_seq START 100 INCREMENT 5",
+    ] {
+        s.execute(sql, &[], OPTS).await.unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let schema = ObjectRef::new(NodeKind::Schema, "dataquery_test", Some("it_objects".into()), "it_objects");
+    let nodes = s.list_children(Some(&schema)).await.unwrap();
+    let groups: Vec<_> = nodes
+        .iter()
+        .filter(|n| n.object.kind == NodeKind::Group)
+        .map(|n| (n.object.name.as_str(), n.row_estimate))
+        .collect();
+    assert_eq!(
+        groups,
+        [("sequences", Some(2)), ("functions", Some(3)), ("procedures", Some(1))],
+        "identity sequence counts too"
+    );
+
+    let functions =
+        s.list_children(Some(&nodes.iter().find(|n| n.object.name == "functions").unwrap().object)).await.unwrap();
+    let overloads: Vec<_> =
+        functions.iter().filter(|n| n.object.name == "add").map(|n| n.object.parent.clone().unwrap()).collect();
+    assert_eq!(overloads, ["a integer, b integer", "a text, b text"]);
+    let add_text = functions.iter().find(|n| n.object.parent.as_deref() == Some("a text, b text")).unwrap();
+    assert!(s.ddl(&add_text.object).await.unwrap().contains("a || b"));
+
+    let events = nodes.iter().find(|n| n.object.name == "events").unwrap();
+    assert!(events.expandable);
+    let children = s.list_children(Some(&events.object)).await.unwrap();
+    let names: Vec<_> = children.iter().map(|n| (n.object.kind, n.object.name.as_str())).collect();
+    assert!(
+        names.contains(&(NodeKind::Index, "events_at_idx")) && names.contains(&(NodeKind::Trigger, "events_touch")),
+        "{names:?}"
+    );
+    for child in &children {
+        let ddl = s.ddl(&child.object).await.unwrap();
+        assert!(ddl.starts_with("CREATE"), "{ddl}");
+    }
+    let seq = ObjectRef::new(NodeKind::Sequence, "dataquery_test", Some("it_objects".into()), "ticket_seq");
+    let ddl = s.ddl(&seq).await.unwrap();
+    assert!(ddl.contains("INCREMENT BY 5") && ddl.contains("START WITH 100"), "{ddl}");
+
+    let structure = ops::structure(&*s, &table("public", "orders")).await.unwrap();
+    assert_eq!(structure.foreign_keys.len(), 1);
+    assert_eq!(structure.foreign_keys[0].target.name, "customers");
+    assert_eq!(structure.foreign_keys[0].columns, ["customer_id"]);
+    assert!(structure.size.unwrap().total_bytes > 0);
+    assert!(structure.indexes.iter().all(|i| i.size_bytes.is_some()));
+    assert_eq!(structure.indexes.iter().find(|i| i.primary).unwrap().columns, ["id"]);
+}
+
+#[tokio::test]
+async fn dependencies_and_schema_model() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let deps = s.dependencies(&table("public", "orders")).await.unwrap();
+    assert!(deps.uses.iter().any(|d| d.object.name == "customers" && d.relation.starts_with("foreign key")));
+    assert!(deps.used_by.iter().any(|d| d.object.name == "paid_orders" && d.object.kind == NodeKind::View));
+    let view = ObjectRef::new(NodeKind::View, "dataquery_test", Some("public".into()), "paid_orders");
+    assert!(s.dependencies(&view).await.unwrap().uses.iter().any(|d| d.object.name == "orders"));
+    let model = s.schema_model("dataquery_test", Some("public")).await.unwrap();
+    let orders = model.tables.iter().find(|t| t.object.name == "orders").unwrap();
+    assert!(orders.columns.iter().any(|c| c.name == "id" && c.primary_key && !c.nullable));
+    assert!(model.foreign_keys.iter().any(|f| f.source.name == "orders" && f.target.name == "customers"));
+    assert!(!model.truncated);
+}

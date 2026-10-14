@@ -204,7 +204,9 @@ impl Session for PgSession {
             Some(p) if matches!(p.kind, NodeKind::Table | NodeKind::MaterializedView) => {
                 catalog::table_children(&*self.catalog(&p.database).await?, p).await
             }
-            Some(p) if p.kind == NodeKind::Group => catalog::group_children(&*self.catalog(&p.database).await?, p).await,
+            Some(p) if p.kind == NodeKind::Group => {
+                catalog::group_children(&*self.catalog(&p.database).await?, p).await
+            }
             Some(_) => Ok(Vec::new()),
         }
     }

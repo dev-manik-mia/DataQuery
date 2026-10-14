@@ -501,3 +501,49 @@ async fn row_filters_bind_matches_and_searches() {
     };
     assert_eq!(ops::row_count(&*s, &object, &none).await.unwrap().count, 0, "`_` is a literal");
 }
+
+#[tokio::test]
+async fn explorer_lists_routines_indexes_and_triggers() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    for sql in [
+        "DROP TABLE IF EXISTS it_events",
+        "DROP FUNCTION IF EXISTS it_add",
+        "DROP PROCEDURE IF EXISTS it_noop",
+        "CREATE TABLE it_events (id INT AUTO_INCREMENT PRIMARY KEY, at DATETIME, KEY it_events_at (at))",
+        "CREATE TRIGGER it_events_touch BEFORE INSERT ON it_events FOR EACH ROW SET NEW.at = NOW()",
+        "CREATE FUNCTION it_add(a INT, b INT) RETURNS INT DETERMINISTIC RETURN a + b",
+        "CREATE PROCEDURE it_noop() SELECT 1",
+    ] {
+        s.execute(sql, &[], OPTS).await.unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let db = ObjectRef::new(NodeKind::Database, DB, None, DB);
+    let nodes = s.list_children(Some(&db)).await.unwrap();
+    for group in ["functions", "procedures"] {
+        let node = nodes.iter().find(|n| n.object.kind == NodeKind::Group && n.object.name == group).unwrap();
+        let routines = s.list_children(Some(&node.object)).await.unwrap();
+        let routine = routines.iter().find(|n| n.object.name.starts_with("it_")).unwrap();
+        assert!(s.ddl(&routine.object).await.unwrap().starts_with("CREATE"));
+    }
+    let events = nodes.iter().find(|n| n.object.name == "it_events").unwrap();
+    let children = s.list_children(Some(&events.object)).await.unwrap();
+    let names: Vec<_> = children.iter().map(|n| (n.object.kind, n.object.name.as_str())).collect();
+    assert!(names.contains(&(NodeKind::Index, "PRIMARY")) && names.contains(&(NodeKind::Index, "it_events_at")));
+    assert!(names.contains(&(NodeKind::Trigger, "it_events_touch")), "{names:?}");
+    for child in &children {
+        let ddl = s.ddl(&child.object).await.unwrap();
+        assert!(ddl.contains("it_events"), "{ddl}");
+    }
+    let deps = s.dependencies(&table("it_events")).await.unwrap();
+    assert!(deps.used_by.iter().any(|d| d.object.kind == NodeKind::Trigger));
+
+    let structure = ops::structure(&*s, &table("orders")).await.unwrap();
+    assert_eq!(structure.foreign_keys.len(), 1);
+    assert_eq!(structure.foreign_keys[0].target.name, "customers");
+    assert!(structure.size.is_some());
+    let model = s.schema_model(DB, None).await.unwrap();
+    assert!(model.tables.iter().any(|t| t.object.name == "orders" && t.columns.iter().any(|c| c.primary_key)));
+    assert!(model.foreign_keys.iter().any(|f| f.source.name == "orders" && f.target.name == "customers"));
+    let deps = s.dependencies(&table("customers")).await.unwrap();
+    assert!(deps.used_by.iter().any(|d| d.object.name == "orders"));
+}

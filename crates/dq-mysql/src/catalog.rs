@@ -108,7 +108,9 @@ pub async fn relations(conn: &mut Conn, database: &str) -> DbResult<Vec<Node>> {
 
 /// Indexes and triggers of a table.
 pub async fn table_children(conn: &mut Conn, table: &ObjectRef) -> DbResult<Vec<Node>> {
-    let child = |kind, name: String| Node::leaf(ObjectRef::new(kind, table.database.clone(), None, name).with_parent(&table.name));
+    let child = |kind, name: String| {
+        Node::leaf(ObjectRef::new(kind, table.database.clone(), None, name).with_parent(&table.name))
+    };
     let indexes: Vec<Row> = conn
         .exec(
             "SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
@@ -156,7 +158,8 @@ pub async fn group_children(conn: &mut Conn, group: &ObjectRef) -> DbResult<Vec<
     Ok(rows
         .iter()
         .map(|r| {
-            let mut node = Node::leaf(ObjectRef::new(kind, group.database.clone(), None, text(r, 0).unwrap_or_default()));
+            let mut node =
+                Node::leaf(ObjectRef::new(kind, group.database.clone(), None, text(r, 0).unwrap_or_default()));
             node.comment = non_empty(text(r, 1));
             node
         })
@@ -221,7 +224,8 @@ pub async fn structure(conn: &mut Conn, object: &ObjectRef) -> DbResult<TableStr
     for index in &mut indexes {
         index.size_bytes = sizes.iter().find(|(n, _)| *n == index.name).map(|(_, b)| *b);
     }
-    let foreign_keys = foreign_keys(conn, "k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?", (&object.database, &object.name)).await?;
+    let foreign_keys =
+        foreign_keys(conn, "k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?", (&object.database, &object.name)).await?;
     Ok(TableStructure {
         object: ObjectRef { kind: rel.kind, ..object.clone() },
         columns,
@@ -520,7 +524,12 @@ async fn foreign_keys(
     params: impl Into<mysql_async::Params> + Send,
 ) -> DbResult<Vec<ForeignKey>> {
     let rows: Vec<Row> = conn
-        .exec(format!("{FK_SELECT}{predicate} ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION"), params)
+        .exec(
+            format!(
+                "{FK_SELECT}{predicate} ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION"
+            ),
+            params,
+        )
         .await
         .map_err(my)?;
     let table = |db: Option<String>, name: Option<String>| {
@@ -669,7 +678,10 @@ async fn object_ddl(conn: &mut Conn, object: &ObjectRef) -> DbResult<String> {
     };
     let row: Option<Row> = conn.query_first(sql).await.map_err(my)?;
     let text = row.as_ref().and_then(|r| text(r, column)).ok_or_else(|| {
-        DbError::new(dq_core::ErrorKind::Permission, format!("The definition of {} is not visible to this user.", object.name))
+        DbError::new(
+            dq_core::ErrorKind::Permission,
+            format!("The definition of {} is not visible to this user.", object.name),
+        )
     })?;
     Ok(format!("{};\n", text.trim_end()))
 }

@@ -16,6 +16,8 @@ services:
 
   mysql:
     image: mysql:8.4
+    # Lets the test user create triggers and functions while binary logging is on.
+    command: ["--log-bin-trust-function-creators=1"]
     environment:
       MYSQL_ROOT_PASSWORD: dataquery
       MYSQL_DATABASE: dataquery_test

@@ -598,7 +598,10 @@ mod tests {
             insert_template(&PostgresDialect, &s),
             "INSERT INTO public.orders (id, total, geo)\nVALUES ($1, $2, $3);"
         );
-        assert_eq!(update_template(&PostgresDialect, &s), "UPDATE public.orders\nSET total = $1,\n    geo = $2\nWHERE id = $3;");
+        assert_eq!(
+            update_template(&PostgresDialect, &s),
+            "UPDATE public.orders\nSET total = $1,\n    geo = $2\nWHERE id = $3;"
+        );
         assert_eq!(delete_template(&MysqlDialect, &s), "DELETE FROM app.orders\nWHERE id = ?;");
         let mut no_key = orders();
         no_key.row_identity.clear();

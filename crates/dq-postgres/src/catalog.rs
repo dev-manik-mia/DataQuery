@@ -348,7 +348,7 @@ async fn size(client: &Client, oid: u32, kind: NodeKind) -> DbResult<Option<Tabl
         return Ok(None);
     }
     let r = client
-        .query_one("SELECT pg_total_relation_size($1), pg_relation_size($1), pg_indexes_size($1)", &[&oid])
+        .query_one("SELECT pg_total_relation_size($1::oid), pg_relation_size($1::oid), pg_indexes_size($1::oid)", &[&oid])
         .await
         .map_err(pg)?;
     Ok(Some(TableSize { total_bytes: r.get(0), table_bytes: r.get(1), index_bytes: r.get(2) }))
@@ -405,7 +405,8 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
     }
     let rel = relation(client, object).await?;
     let db = object.database.as_str();
-    let rel_ref = |schema: String, name: String, relkind: &str| ObjectRef::new(kind_of(relkind), db, Some(schema), name);
+    let rel_ref =
+        |schema: String, name: String, relkind: &str| ObjectRef::new(kind_of(relkind), db, Some(schema), name);
     let mut deps = Dependencies::default();
     for fk in foreign_keys(client, "c.conrelid = $1", db, rel.oid).await? {
         deps.uses.push(Dependency { object: fk.target, relation: format!("foreign key {}", fk.name) });
@@ -424,7 +425,8 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
         .await
         .map_err(pg)?;
     for r in &sources {
-        deps.uses.push(Dependency { object: rel_ref(r.get(0), r.get(1), &r.get::<_, String>(2)), relation: "reads".into() });
+        deps.uses
+            .push(Dependency { object: rel_ref(r.get(0), r.get(1), &r.get::<_, String>(2)), relation: "reads".into() });
     }
     let views = client
         .query(
@@ -437,7 +439,8 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
         .await
         .map_err(pg)?;
     for r in &views {
-        deps.used_by.push(Dependency { object: rel_ref(r.get(0), r.get(1), &r.get::<_, String>(2)), relation: "view".into() });
+        deps.used_by
+            .push(Dependency { object: rel_ref(r.get(0), r.get(1), &r.get::<_, String>(2)), relation: "view".into() });
     }
     let triggers = client
         .query(
@@ -450,7 +453,8 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
         .map_err(pg)?;
     for r in &triggers {
         let trigger: String = r.get(0);
-        let function = ObjectRef::new(NodeKind::Function, db, Some(r.get(1)), r.get::<_, String>(2)).with_parent(r.get::<_, String>(3));
+        let function = ObjectRef::new(NodeKind::Function, db, Some(r.get(1)), r.get::<_, String>(2))
+            .with_parent(r.get::<_, String>(3));
         deps.uses.push(Dependency { object: function, relation: format!("trigger {trigger}") });
         let t = ObjectRef::new(NodeKind::Trigger, db, object.schema.clone(), trigger).with_parent(&object.name);
         deps.used_by.push(Dependency { object: t, relation: "trigger".into() });
@@ -496,19 +500,33 @@ pub async fn schema_model(client: &Client, database: &str, schema: Option<&str>)
     let mut model = SchemaModel::default();
     for r in &rows {
         let (schema, name): (String, String) = (r.get(0), r.get(1));
-        let same = model.tables.last().is_some_and(|t: &ModelTable| t.object.schema.as_deref() == Some(&schema) && t.object.name == name);
+        let same = model
+            .tables
+            .last()
+            .is_some_and(|t: &ModelTable| t.object.schema.as_deref() == Some(&schema) && t.object.name == name);
         if !same {
             let object = ObjectRef::new(kind_of(&r.get::<_, String>(2)), database, Some(schema), name);
             model.tables.push(ModelTable { object, columns: Vec::new() });
         }
         if let Some(table) = model.tables.last_mut() {
-            table.columns.push(ModelColumn { name: r.get(3), data_type: r.get(4), nullable: r.get(5), primary_key: r.get(6) });
+            table.columns.push(ModelColumn {
+                name: r.get(3),
+                data_type: r.get(4),
+                nullable: r.get(5),
+                primary_key: r.get(6),
+            });
         }
     }
     model.truncated = model.tables.len() > SchemaModel::MAX_TABLES || rows.len() >= SchemaModel::MAX_COLUMNS;
     model.tables.truncate(SchemaModel::MAX_TABLES);
     let fks = client
-        .query(&format!("{FK_SELECT}{} ORDER BY tn.nspname, t.relname, c.conname", filter.replace("n.nspname", "tn.nspname")), &[&schema])
+        .query(
+            &format!(
+                "{FK_SELECT}{} ORDER BY tn.nspname, t.relname, c.conname",
+                filter.replace("n.nspname", "tn.nspname")
+            ),
+            &[&schema],
+        )
         .await
         .map_err(pg)?;
     model.foreign_keys = fks.iter().map(|r| fk_from_row(database, r)).collect();
