@@ -4,15 +4,16 @@
 
 use dq_core::explain::{ExplainResult, PlanNode};
 use dq_core::{DbError, DbResult};
-use quick_xml::{Reader, XmlVersion};
 use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 
 fn attributes(e: &BytesStart<'_>) -> Vec<(String, String)> {
     e.attributes()
         .flatten()
         .map(|a| {
             let key = a.key.as_ref().to_owned();
-            let value = a.normalized_value(XmlVersion::Implicit1_0).map(|v| v.into_owned()).unwrap_or_default();
+            let value =
+                a.normalized_value(XmlVersion::Implicit1_0).map(std::borrow::Cow::into_owned).unwrap_or_default();
             (key, value)
         })
         .collect()
@@ -50,10 +51,8 @@ pub fn parse(raw: String, analyzed: bool) -> DbResult<ExplainResult> {
                         Some(parent) => parent.children.push(node),
                         None => roots.push(node),
                     }
-                } else if name == "StmtSimple" {
-                    if let Some(statement) = statements.last_mut() {
-                        statement.children = std::mem::take(&mut roots);
-                    }
+                } else if let Some(statement) = statements.last_mut().filter(|_| name == "StmtSimple") {
+                    statement.children = std::mem::take(&mut roots);
                 }
                 continue;
             }
@@ -79,7 +78,9 @@ pub fn parse(raw: String, analyzed: bool) -> DbResult<ExplainResult> {
                     .filter(|l| Some(*l) != get(&attrs, "PhysicalOp"))
                     .map(|l| ("Logical Op".to_owned(), l.to_owned()))
                     .into_iter()
-                    .chain(OPERATOR_PROPS.iter().filter_map(|k| get(&attrs, k).map(|v| ((*k).to_owned(), v.to_owned()))))
+                    .chain(
+                        OPERATOR_PROPS.iter().filter_map(|k| get(&attrs, k).map(|v| ((*k).to_owned(), v.to_owned()))),
+                    )
                     .collect(),
                 ..PlanNode::default()
             }),

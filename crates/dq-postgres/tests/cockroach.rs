@@ -1,4 +1,4 @@
-//! Integration tests against a real CockroachDB node, through the PostgreSQL adapter.
+//! Integration tests against a real `CockroachDB` node, through the PostgreSQL adapter.
 //!
 //! Start it with `docker compose -p dataquery up -d cockroach` and run
 //! `DATAQUERY_TEST_COCKROACH=localhost:56257 cargo test -p dq-postgres --test cockroach`.
@@ -16,7 +16,9 @@ use dq_core::ops::{self, ImportMapping};
 use dq_core::result::ExecOptions;
 use dq_core::sql::{SqlFlavor, split_statements};
 use dq_core::table::{ColumnSearch, RowFilter, SortSpec, TablePageRequest};
-use dq_core::transfer::{CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl};
+use dq_core::transfer::{
+    CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
+};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
 use dq_postgres::PostgresAdapter;
@@ -129,7 +131,11 @@ async fn value_rendering_contract() {
     let cfg = require_db!();
     let s = session(&cfg).await;
     let r = s
-        .execute("SELECT big, exact, ts, doc, raw, label, tags, uid, addr, span FROM type_samples ORDER BY id", &[], OPTS)
+        .execute(
+            "SELECT big, exact, ts, doc, raw, label, tags, uid, addr, span FROM type_samples ORDER BY id",
+            &[],
+            OPTS,
+        )
         .await
         .unwrap();
     let row = &r.rows[0];
@@ -205,7 +211,10 @@ async fn table_pages_edits_and_transfers() -> DbResult<()> {
     let page = ops::table_page(&*s, &req).await?;
     assert_eq!((page.rows.len(), page.has_more), (100, true));
     assert_eq!(ops::row_count(&*s, &req.object, &req.rows).await?.count, 400);
-    let search = RowFilter { searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }], ..RowFilter::default() };
+    let search = RowFilter {
+        searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &search).await?.count, 400);
 
     let t = scratch(&*s, "it_edits", "(id INT8 PRIMARY KEY, amount DECIMAL(12,2), note STRING)").await;
@@ -231,9 +240,14 @@ async fn table_pages_edits_and_transfers() -> DbResult<()> {
     };
     assert_eq!(ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &none).await?.rows, 10);
     let imported = scratch(&*s, "it_import", "(id INT8 PRIMARY KEY, status STRING, total DECIMAL(12,2))").await;
-    let csv_source = ImportSource::Csv { path: csv.to_string_lossy().into_owned(), options: CsvOptions { empty_as_null: true, ..CsvOptions::default() } };
-    let map: Vec<ImportMapping> =
-        [("id", 0), ("status", 2), ("total", 3)].iter().map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) }).collect();
+    let csv_source = ImportSource::Csv {
+        path: csv.to_string_lossy().into_owned(),
+        options: CsvOptions { empty_as_null: true, ..CsvOptions::default() },
+    };
+    let map: Vec<ImportMapping> = [("id", 0), ("status", 2), ("total", 3)]
+        .iter()
+        .map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) })
+        .collect();
     assert_eq!(ops::import(&*s, &imported, &csv_source, &map, &ImportOptions::default(), &none).await?.rows, 10);
     run_all(&*s, "DROP TABLE it_edits; DROP TABLE it_import").await;
     Ok(())
@@ -279,7 +293,11 @@ async fn monitor_lists_sessions_and_cancels() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let (snapshot, pid) = loop {
         let snapshot = monitor.snapshot(1).await.unwrap();
-        let pid = snapshot.processes.iter().find(|p| p.query.as_deref().is_some_and(|q| q.contains("pg_sleep(20)"))).map(|p| p.pid);
+        let pid = snapshot
+            .processes
+            .iter()
+            .find(|p| p.query.as_deref().is_some_and(|q| q.contains("pg_sleep(20)")))
+            .map(|p| p.pid);
         if pid.is_some() || Instant::now() > deadline {
             break (snapshot, pid);
         }
@@ -302,11 +320,20 @@ async fn schema_changes_and_diff() {
     let s = session(&cfg).await;
     run_all(&*s, "DROP SCHEMA IF EXISTS it_diff_a CASCADE; DROP SCHEMA IF EXISTS it_diff_b CASCADE; CREATE SCHEMA it_diff_a; CREATE SCHEMA it_diff_b").await;
     let t = |schema: &str, name: &str| ObjectRef::new(NodeKind::Table, DB, Some(schema.into()), name);
-    let col = |name: &str, ty: &str| ColumnDef { name: name.into(), data_type: ty.into(), nullable: true, default: None, identity: false };
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
     let changes = vec![
         SchemaChange::CreateTable {
             table: t("it_diff_a", "accounts"),
-            columns: vec![ColumnDef { identity: true, nullable: false, ..col("id", "bigint") }, ColumnDef { default: Some("'x'".into()), ..col("email", "varchar(100)") }],
+            columns: vec![
+                ColumnDef { identity: true, nullable: false, ..col("id", "bigint") },
+                ColumnDef { default: Some("'x'".into()), ..col("email", "varchar(100)") },
+            ],
             primary_key: vec!["id".into()],
         },
         SchemaChange::AddColumn { table: t("it_diff_a", "accounts"), column: col("note", "text") },

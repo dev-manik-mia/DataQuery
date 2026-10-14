@@ -122,7 +122,14 @@ impl MsSession {
     }
 
     /// The plan XML that `setup` turns on, for `sql`.
-    async fn plan_xml(&self, setup: &str, teardown: &str, sql: &str, params: Params<'_>, timeout_secs: u32) -> DbResult<String> {
+    async fn plan_xml(
+        &self,
+        setup: &str,
+        teardown: &str,
+        sql: &str,
+        params: Params<'_>,
+        timeout_secs: u32,
+    ) -> DbResult<String> {
         let values = self
             .request(|reply| Command::Batches {
                 setup: setup.to_owned(),
@@ -260,7 +267,12 @@ impl Session for MsSession {
         let mut conn = self.write_conn(database).await?;
         let err = |e: tiberius::error::Error| self.err(&e);
         // Any error rolls the whole transaction back.
-        conn.simple_query("SET XACT_ABORT ON; BEGIN TRANSACTION").await.map_err(err)?.into_results().await.map_err(err)?;
+        conn.simple_query("SET XACT_ABORT ON; BEGIN TRANSACTION")
+            .await
+            .map_err(err)?
+            .into_results()
+            .await
+            .map_err(err)?;
         let mut counts = Vec::new();
         let outcome: DbResult<()> = async {
             for statement in statements {
@@ -276,18 +288,27 @@ impl Session for MsSession {
             Ok(())
         }
         .await;
-        if outcome.is_err() {
-            if let Ok(s) = conn.simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION").await {
-                let _ = s.into_results().await;
-            }
+        if outcome.is_err()
+            && let Ok(s) = conn.simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION").await
+        {
+            let _ = s.into_results().await;
         }
         let _ = conn.close().await;
         outcome.map(|()| counts)
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
-        let (setup, teardown) =
-            if analyze { ("SET STATISTICS XML ON", "SET STATISTICS XML OFF") } else { ("SET SHOWPLAN_XML ON", "SET SHOWPLAN_XML OFF") };
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
+        let (setup, teardown) = if analyze {
+            ("SET STATISTICS XML ON", "SET STATISTICS XML OFF")
+        } else {
+            ("SET SHOWPLAN_XML ON", "SET SHOWPLAN_XML OFF")
+        };
         let xml = self.plan_xml(setup, teardown, sql, params, timeout_secs).await?;
         crate::explain::parse(xml, analyze)
     }

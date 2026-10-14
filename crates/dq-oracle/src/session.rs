@@ -21,7 +21,9 @@ use dq_core::explain::ExplainResult;
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
-use dq_core::sql::{Dialect, OracleDialect, SqlFlavor, StatementKind, TxEffect, command_tag, split_statements, transaction_effect};
+use dq_core::sql::{
+    Dialect, OracleDialect, SqlFlavor, StatementKind, TxEffect, command_tag, split_statements, transaction_effect,
+};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult, ErrorKind};
 use oracle::{Connection, ResultSet, Row};
@@ -35,6 +37,9 @@ use crate::rows::prepare;
 use crate::values::{column_meta, decode_row};
 
 const STREAM_BATCH: usize = 1_000;
+
+/// Columns, the open result (if rows remain), the first rows, whether more exist, affected rows.
+type Outcome = (Vec<ColumnMeta>, Option<Cursor>, Vec<CellRow>, bool, Option<u64>);
 
 pub struct OraSession {
     info: ServerInfo,
@@ -61,7 +66,8 @@ impl Interrupter {
     /// server sees at once only where the network carries out-of-band data).
     async fn interrupt(&self) {
         let sql = format!("ALTER SYSTEM CANCEL SQL '{}, {}'", self.sid, self.serial);
-        let cancelled = self.pool.run(move |conn| conn.execute(&sql, &[]).map(|_| ()).map_err(|e| map_error(&e, None))).await;
+        let cancelled =
+            self.pool.run(move |conn| conn.execute(&sql, &[]).map(|_| ()).map_err(|e| map_error(&e, None))).await;
         if cancelled.is_err() {
             let conn = self.conn.clone();
             let _ = tokio::task::spawn_blocking(move || conn.break_execution()).await;
@@ -96,7 +102,9 @@ fn trim_terminator(sql: &str) -> &str {
         s.kind == StatementKind::Call
             || head.starts_with("DECLARE")
             || head.starts_with("BEGIN")
-            || ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "TYPE"].iter().any(|k| head.contains(k) && head.starts_with("CREATE"))
+            || ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "TYPE"]
+                .iter()
+                .any(|k| head.contains(k) && head.starts_with("CREATE"))
     });
     if plsql { sql } else { sql.strip_suffix(';').map_or(sql, str::trim_end) }
 }
@@ -168,7 +176,8 @@ impl OraSession {
         let opened = connect::open_query(params).await?;
         let conn = Arc::new(opened.conn);
         let pool = Arc::new(Pool::new(params.clone()));
-        let interrupter = Interrupter { conn: conn.clone(), sid: opened.sid, serial: opened.serial, pool: pool.clone() };
+        let interrupter =
+            Interrupter { conn: conn.clone(), sid: opened.sid, serial: opened.serial, pool: pool.clone() };
         Ok(Self {
             interrupter: std::sync::Mutex::new(Arc::new(interrupter)),
             query: Mutex::new(QueryState { conn, cursor: None, in_transaction: false }),
@@ -213,7 +222,13 @@ impl OraSession {
         Ok(())
     }
 
-    async fn run(&self, q: &mut QueryState, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
+    async fn run(
+        &self,
+        q: &mut QueryState,
+        sql: &str,
+        params: Params<'_>,
+        options: ExecOptions,
+    ) -> DbResult<StatementResult> {
         let started = Instant::now();
         let sql = trim_terminator(sql).to_owned();
         let effect = transaction_effect(&sql, SqlFlavor::Oracle);
@@ -222,7 +237,6 @@ impl OraSession {
         let interrupter = self.interrupter()?;
         let in_transaction = q.in_transaction || effect == TxEffect::Begin;
         let secret = self.secret();
-        type Outcome = (Vec<ColumnMeta>, Option<Cursor>, Vec<CellRow>, bool, Option<u64>);
         let outcome = with_deadline(interrupter, options.timeout_secs, move |conn| -> DbResult<Outcome> {
             let err = |e: oracle::Error| map_error(&e, secret.as_deref());
             let mut statement = prepare(conn, &sql, &params).map_err(err)?;
@@ -269,7 +283,13 @@ impl OraSession {
     }
 
     /// Streams a read-only query on a pooled connection in batches.
-    async fn read_batches(&self, sql: &str, params: Params<'_>, limits: CellLimits, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn read_batches(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         let sql = trim_terminator(sql).to_owned();
         let params = params.to_vec();
         let secret = self.secret();
@@ -281,7 +301,9 @@ impl OraSession {
             let mut batch = Vec::with_capacity(STREAM_BATCH);
             for row in rows {
                 batch.push(decode_row(&row.map_err(err)?, limits));
-                if batch.len() == STREAM_BATCH && tx.blocking_send(Ok((meta.clone(), std::mem::take(&mut batch)))).is_err() {
+                if batch.len() == STREAM_BATCH
+                    && tx.blocking_send(Ok((meta.clone(), std::mem::take(&mut batch)))).is_err()
+                {
                     return Ok(());
                 }
             }
@@ -409,7 +431,13 @@ impl Session for OraSession {
         self.pool.run(move |conn| catalog::schema_model(conn, &database, &schema)).await
     }
 
-    async fn read_query(&self, _database: &str, sql: &str, params: Params<'_>, limits: CellLimits) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
+    async fn read_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+    ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         self.read_batches(sql, params, limits, &mut |meta, batch| {
@@ -423,7 +451,13 @@ impl Session for OraSession {
         Ok((columns, rows))
     }
 
-    async fn stream_query(&self, _database: &str, sql: &str, params: Params<'_>, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         self.read_batches(sql, params, CellLimits::FULL, on_batch).await
     }
 
@@ -463,13 +497,22 @@ impl Session for OraSession {
         .map_err(|e| DbError::internal(format!("transaction task failed: {e}")))?
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         let _q = self.query.lock().await;
         let interrupter = self.interrupter()?;
         let sql = trim_terminator(sql).to_owned();
         let params = params.to_vec();
         let secret = self.secret();
-        with_deadline(interrupter, timeout_secs, move |conn| crate::explain::explain(conn, &sql, &params, analyze, secret.as_deref())).await
+        with_deadline(interrupter, timeout_secs, move |conn| {
+            crate::explain::explain(conn, &sql, &params, analyze, secret.as_deref())
+        })
+        .await
     }
 
     fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
@@ -493,7 +536,10 @@ mod tests {
     fn sql_loses_its_terminator_and_plsql_keeps_it() {
         assert_eq!(trim_terminator("SELECT 1 FROM dual;"), "SELECT 1 FROM dual");
         assert_eq!(trim_terminator("BEGIN NULL; END;\n/"), "BEGIN NULL; END;");
-        assert_eq!(trim_terminator("CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;"), "CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;");
+        assert_eq!(
+            trim_terminator("CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;"),
+            "CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;"
+        );
         assert_eq!(trim_terminator("CREATE TABLE t (a NUMBER);"), "CREATE TABLE t (a NUMBER)");
     }
 }

@@ -17,7 +17,9 @@ use dq_core::ops::{self, ImportMapping};
 use dq_core::result::ExecOptions;
 use dq_core::sql::{SqlFlavor, split_statements};
 use dq_core::table::{ColumnSearch, RowFilter, SortSpec, TablePageRequest};
-use dq_core::transfer::{CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl};
+use dq_core::transfer::{
+    CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
+};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
 use dq_oracle::OracleAdapter;
@@ -128,7 +130,10 @@ async fn explorer_lists_lazily() {
     assert_eq!(kind("ORDERS"), Some(NodeKind::Table));
     assert_eq!(kind("PAID_ORDERS"), Some(NodeKind::View));
     for group in ["sequences", "functions", "procedures"] {
-        let node = rels.iter().find(|r| r.object.kind == NodeKind::Group && r.object.name == group).unwrap_or_else(|| panic!("{group}"));
+        let node = rels
+            .iter()
+            .find(|r| r.object.kind == NodeKind::Group && r.object.name == group)
+            .unwrap_or_else(|| panic!("{group}"));
         let children = s.list_children(Some(&node.object)).await.unwrap();
         assert!(!children.is_empty(), "{group}");
         assert!(children.iter().all(|c| !c.object.name.starts_with("ISEQ$$")), "identity sequences are hidden");
@@ -137,7 +142,11 @@ async fn explorer_lists_lazily() {
     let orders = rels.iter().find(|r| r.object.name == "ORDERS").unwrap();
     let children = s.list_children(Some(&orders.object)).await.unwrap();
     let names: Vec<_> = children.iter().map(|n| (n.object.kind, n.object.name.as_str())).collect();
-    assert!(names.contains(&(NodeKind::Index, "ORDERS_CREATED_AT_IDX")) && names.contains(&(NodeKind::Trigger, "ORDERS_TOUCH")), "{names:?}");
+    assert!(
+        names.contains(&(NodeKind::Index, "ORDERS_CREATED_AT_IDX"))
+            && names.contains(&(NodeKind::Trigger, "ORDERS_TOUCH")),
+        "{names:?}"
+    );
     let found = s.search("order", 10).await.unwrap();
     assert!(found.iter().any(|n| n.object.name == "ORDERS"));
 }
@@ -179,7 +188,10 @@ async fn results_are_bounded_resumable_and_cancellable() {
     assert_eq!(text(&s.execute("SELECT 1 FROM dual", &[], OPTS).await.unwrap().rows[0][0]), "1");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(s.fetch_more(10).await.is_err());
-    let r = s.execute("SELECT LEVEL FROM dual CONNECT BY LEVEL <= 3", &[], ExecOptions { row_limit: 3, timeout_secs: 5 }).await.unwrap();
+    let r = s
+        .execute("SELECT LEVEL FROM dual CONNECT BY LEVEL <= 3", &[], ExecOptions { row_limit: 3, timeout_secs: 5 })
+        .await
+        .unwrap();
     assert_eq!((r.rows.len(), r.has_more), (3, false));
 
     let runner = s.clone();
@@ -191,7 +203,10 @@ async fn results_are_bounded_resumable_and_cancellable() {
     assert!(cancelled_at.elapsed() < Duration::from_secs(5), "{:?}", cancelled_at.elapsed());
     assert_eq!(err.kind, ErrorKind::Cancelled, "{err:?}");
     let started = Instant::now();
-    let err = s.execute("BEGIN DBMS_SESSION.SLEEP(30); END;", &[], ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
+    let err = s
+        .execute("BEGIN DBMS_SESSION.SLEEP(30); END;", &[], ExecOptions { row_limit: 10, timeout_secs: 1 })
+        .await
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Timeout, "{err:?}");
     assert!(started.elapsed() < Duration::from_secs(6), "{:?}", started.elapsed());
     assert!(s.execute("SELECT 1 FROM dual", &[], OPTS).await.is_ok(), "the session keeps working");
@@ -220,7 +235,11 @@ async fn errors_commits_and_transactions() {
     s.execute("ROLLBACK", &[], OPTS).await.unwrap();
     assert_eq!(text(&s.execute("SELECT COUNT(*) FROM it_tx", &[], OPTS).await.unwrap().rows[0][0]), "3");
     // PL/SQL blocks keep their own `;` and run as one statement.
-    run_all(&*s, "BEGIN\n  INSERT INTO it_tx VALUES (10);\n  INSERT INTO it_tx VALUES (11);\nEND;\n/\nSELECT 1 FROM dual;").await;
+    run_all(
+        &*s,
+        "BEGIN\n  INSERT INTO it_tx VALUES (10);\n  INSERT INTO it_tx VALUES (11);\nEND;\n/\nSELECT 1 FROM dual;",
+    )
+    .await;
     assert_eq!(text(&other.execute("SELECT COUNT(*) FROM it_tx", &[], OPTS).await.unwrap().rows[0][0]), "5");
     s.execute("DROP TABLE it_tx PURGE", &[], OPTS).await.unwrap();
 }
@@ -234,7 +253,10 @@ async fn structure_and_ddl() {
     let id = &st.columns[0];
     assert!(id.primary_key && id.identity && id.generated && !id.editable);
     let status = st.column("STATUS").unwrap();
-    assert_eq!((status.data_type.as_str(), status.default.as_deref(), status.nullable), ("VARCHAR2(20)", Some("'pending'"), false));
+    assert_eq!(
+        (status.data_type.as_str(), status.default.as_deref(), status.nullable),
+        ("VARCHAR2(20)", Some("'pending'"), false)
+    );
     let total = st.column("TOTAL").unwrap();
     assert!(total.numeric && total.data_type == "NUMBER(12,2)");
     let fk = st.constraints.iter().find(|c| c.name == "ORDERS_CUSTOMER_FK").expect("fk");
@@ -284,14 +306,28 @@ async fn table_pages_filters_and_searches() {
         ..RowFilter::default()
     };
     assert_eq!(ops::row_count(&*s, &req.object, &searches).await.unwrap().count, 400);
-    let literal = RowFilter { searches: vec![ColumnSearch { column: "STATUS".into(), contains: "_aid".into() }], ..RowFilter::default() };
+    let literal = RowFilter {
+        searches: vec![ColumnSearch { column: "STATUS".into(), contains: "_aid".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &literal).await.unwrap().count, 0, "`_` is a literal");
-    let id = RowFilter { matches: vec![ColumnValue { column: "ID".into(), value: Some("7".into()) }], ..RowFilter::default() };
+    let id = RowFilter {
+        matches: vec![ColumnValue { column: "ID".into(), value: Some("7".into()) }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &id).await.unwrap().count, 1);
-    let bad = TablePageRequest { rows: RowFilter { filter: Some("1=1; DELETE FROM orders".into()), ..RowFilter::default() }, ..req.clone() };
+    let bad = TablePageRequest {
+        rows: RowFilter { filter: Some("1=1; DELETE FROM orders".into()), ..RowFilter::default() },
+        ..req.clone()
+    };
     assert!(ops::table_page(&*s, &bad).await.is_err());
     let other = ObjectRef::new(NodeKind::Table, PDB, Some("BILLING".into()), "INVOICES");
-    let page = ops::table_page(&*s, &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 }).await.unwrap();
+    let page = ops::table_page(
+        &*s,
+        &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 },
+    )
+    .await
+    .unwrap();
     assert_eq!(page.columns[0].name, "ID");
 }
 
@@ -299,14 +335,24 @@ async fn table_pages_filters_and_searches() {
 async fn edits_and_transfers_round_trip() -> DbResult<()> {
     let Some(cfg) = config() else { return Ok(()) };
     let s = session(&cfg).await;
-    let t = scratch(&*s, "IT_EDITS", "(id NUMBER(19) PRIMARY KEY, amount NUMBER(12,2), note VARCHAR2(100), at TIMESTAMP(3), day DATE)").await;
+    let t = scratch(
+        &*s,
+        "IT_EDITS",
+        "(id NUMBER(19) PRIMARY KEY, amount NUMBER(12,2), note VARCHAR2(100), at TIMESTAMP(3), day DATE)",
+    )
+    .await;
     s.execute("INSERT INTO it_edits VALUES (9223372036854775807, 1, 'a', TIMESTAMP '2026-01-02 03:04:05.678', DATE '2026-01-02')", &[], OPTS).await?;
     s.execute("INSERT INTO it_edits VALUES (2, 2, 'b', NULL, NULL)", &[], OPTS).await?;
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let changes = vec![
         RowChange::Update {
             key: vec![cv("ID", Some("9223372036854775807"))],
-            values: vec![cv("AMOUNT", Some("84.50")), cv("NOTE", Some("Zoë ✓")), cv("AT", Some("2026-10-14 09:59:00.123")), cv("DAY", Some("2026-10-14 00:00:00"))],
+            values: vec![
+                cv("AMOUNT", Some("84.50")),
+                cv("NOTE", Some("Zoë ✓")),
+                cv("AT", Some("2026-10-14 09:59:00.123")),
+                cv("DAY", Some("2026-10-14 00:00:00")),
+            ],
         },
         RowChange::Insert { values: vec![cv("ID", Some("3")), cv("AMOUNT", None)] },
         RowChange::Delete { key: vec![cv("ID", Some("2"))] },
@@ -317,10 +363,13 @@ async fn edits_and_transfers_round_trip() -> DbResult<()> {
     assert_eq!((report.updated, report.inserted, report.deleted), (1, 1, 1));
     let r = s.execute("SELECT id, amount, note, at, day FROM it_edits ORDER BY id", &[], OPTS).await?;
     let rows: Vec<Vec<String>> = r.rows.iter().map(|r| r.iter().map(text).collect()).collect();
-    assert_eq!(rows, [
-        vec!["3", "NULL", "NULL", "NULL", "NULL"],
-        vec!["9223372036854775807", "84.5", "Zoë ✓", "2026-10-14 09:59:00.123", "2026-10-14 00:00:00"]
-    ]);
+    assert_eq!(
+        rows,
+        [
+            vec!["3", "NULL", "NULL", "NULL", "NULL"],
+            vec!["9223372036854775807", "84.5", "Zoë ✓", "2026-10-14 09:59:00.123", "2026-10-14 00:00:00"]
+        ]
+    );
     let failing = vec![
         RowChange::Update { key: vec![cv("ID", Some("3"))], values: vec![cv("NOTE", Some("x"))] },
         RowChange::Delete { key: vec![cv("ID", Some("404"))] },
@@ -331,18 +380,37 @@ async fn edits_and_transfers_round_trip() -> DbResult<()> {
     let dir = tempfile::tempdir().unwrap();
     let none = TransferControl::none();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: table("ORDERS"), rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() }, sort: None };
+    let source = ExportSource::Table {
+        object: table("ORDERS"),
+        rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() },
+        sort: None,
+    };
     assert_eq!(ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &none).await?.rows, 10);
-    let imported = scratch(&*s, "IT_IMPORT", "(id NUMBER(19) PRIMARY KEY, status VARCHAR2(20), total NUMBER(12,2), bin RAW(8))").await;
-    let csv_source = ImportSource::Csv { path: csv.to_string_lossy().into_owned(), options: CsvOptions { empty_as_null: true, ..CsvOptions::default() } };
-    let map: Vec<ImportMapping> =
-        [("ID", 0), ("STATUS", 2), ("TOTAL", 3)].iter().map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) }).collect();
+    let imported =
+        scratch(&*s, "IT_IMPORT", "(id NUMBER(19) PRIMARY KEY, status VARCHAR2(20), total NUMBER(12,2), bin RAW(8))")
+            .await;
+    let csv_source = ImportSource::Csv {
+        path: csv.to_string_lossy().into_owned(),
+        options: CsvOptions { empty_as_null: true, ..CsvOptions::default() },
+    };
+    let map: Vec<ImportMapping> = [("ID", 0), ("STATUS", 2), ("TOTAL", 3)]
+        .iter()
+        .map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) })
+        .collect();
     let report = ops::import(&*s, &imported, &csv_source, &map, &ImportOptions::default(), &none).await?;
     assert_eq!((report.rows, report.error_count), (10, 0));
     // SQL INSERT export runs back into the table it came from.
     s.execute("UPDATE it_import SET bin = HEXTORAW('0102FF') WHERE id = 1", &[], OPTS).await?;
     let sql_file = dir.path().join("rows.sql");
-    ops::export(&*s, &ExportSource::Table { object: imported.clone(), rows: RowFilter::default(), sort: None }, ExportFormat::SqlInsert, &ExportOptions::default(), &sql_file, &none).await?;
+    ops::export(
+        &*s,
+        &ExportSource::Table { object: imported.clone(), rows: RowFilter::default(), sort: None },
+        ExportFormat::SqlInsert,
+        &ExportOptions::default(),
+        &sql_file,
+        &none,
+    )
+    .await?;
     s.execute("DELETE FROM it_import", &[], OPTS).await?;
     run_all(&*s, &std::fs::read_to_string(&sql_file).unwrap()).await;
     let r = s.execute("SELECT COUNT(*), MAX(bin) FROM it_import", &[], OPTS).await?;
@@ -379,14 +447,20 @@ async fn read_only_profiles_cannot_write() {
     let err = s.execute("INSERT INTO no_pk VALUES (99, 'ro')", &[], OPTS).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Permission);
     let changes = vec![RowChange::Delete { key: vec![ColumnValue { column: "ID".into(), value: Some("1".into()) }] }];
-    assert_eq!(ops::apply_changes(&*s, &table("ORDERS"), &changes, false).await.unwrap_err().kind, ErrorKind::Permission);
+    assert_eq!(
+        ops::apply_changes(&*s, &table("ORDERS"), &changes, false).await.unwrap_err().kind,
+        ErrorKind::Permission
+    );
 }
 
 #[tokio::test]
 async fn explain_reads_the_plan_table() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let plan = s.explain("SELECT * FROM orders WHERE status = :1 ORDER BY total", &[Some("paid".into())], false, 30).await.unwrap();
+    let plan = s
+        .explain("SELECT * FROM orders WHERE status = :1 ORDER BY total", &[Some("paid".into())], false, 30)
+        .await
+        .unwrap();
     let root = plan.plan.expect("plan tree");
     assert_eq!(root.label, "SELECT STATEMENT");
     let mut stack = vec![&root];
@@ -410,7 +484,9 @@ async fn monitor_shows_blocking_and_cancels() {
     scratch(&*holder, "IT_MONITOR", "(id NUMBER PRIMARY KEY, v NUMBER)").await;
     holder.execute("INSERT INTO it_monitor VALUES (1, 0)", &[], OPTS).await.unwrap();
     let sid = |s: Arc<dyn Session>| async move {
-        text(&s.execute("SELECT SYS_CONTEXT('USERENV', 'SID') FROM dual", &[], OPTS).await.unwrap().rows[0][0]).parse::<i64>().unwrap()
+        text(&s.execute("SELECT SYS_CONTEXT('USERENV', 'SID') FROM dual", &[], OPTS).await.unwrap().rows[0][0])
+            .parse::<i64>()
+            .unwrap()
     };
     let (holder_sid, waiter_sid) = (sid(holder.clone()).await, sid(waiter.clone()).await);
     holder.execute("SET TRANSACTION READ WRITE", &[], OPTS).await.unwrap();
@@ -423,7 +499,9 @@ async fn monitor_shows_blocking_and_cancels() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let snapshot = loop {
         let snapshot = monitor.snapshot(30).await.unwrap();
-        if snapshot.processes.iter().any(|p| p.pid == waiter_sid && !p.blocked_by.is_empty()) || Instant::now() > deadline {
+        if snapshot.processes.iter().any(|p| p.pid == waiter_sid && !p.blocked_by.is_empty())
+            || Instant::now() > deadline
+        {
             break snapshot;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -452,16 +530,29 @@ async fn schema_changes_and_diff() {
     for t in ["IT_DIFF_INVOICES", "IT_DIFF_ACCOUNTS", "IT_DIFF_COPY"] {
         let _ = s.execute(&format!("DROP TABLE {t} CASCADE CONSTRAINTS PURGE"), &[], OPTS).await;
     }
-    let col = |name: &str, ty: &str| ColumnDef { name: name.into(), data_type: ty.into(), nullable: true, default: None, identity: false };
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
     let changes = vec![
         SchemaChange::CreateTable {
             table: table("IT_DIFF_ACCOUNTS"),
-            columns: vec![ColumnDef { identity: true, nullable: false, ..col("ID", "NUMBER(19)") }, ColumnDef { default: Some("'x'".into()), ..col("EMAIL", "VARCHAR2(100)") }],
+            columns: vec![
+                ColumnDef { identity: true, nullable: false, ..col("ID", "NUMBER(19)") },
+                ColumnDef { default: Some("'x'".into()), ..col("EMAIL", "VARCHAR2(100)") },
+            ],
             primary_key: vec!["ID".into()],
         },
         SchemaChange::CreateTable {
             table: table("IT_DIFF_INVOICES"),
-            columns: vec![ColumnDef { nullable: false, ..col("ID", "NUMBER(10)") }, col("ACCOUNT_ID", "NUMBER(19)"), col("AMOUNT", "NUMBER(12,2)")],
+            columns: vec![
+                ColumnDef { nullable: false, ..col("ID", "NUMBER(10)") },
+                col("ACCOUNT_ID", "NUMBER(19)"),
+                col("AMOUNT", "NUMBER(12,2)"),
+            ],
             primary_key: vec!["ID".into()],
         },
         SchemaChange::AddForeignKey {
@@ -473,8 +564,15 @@ async fn schema_changes_and_diff() {
             on_delete: Some("CASCADE".into()),
             on_update: None,
         },
-        SchemaChange::AddColumn { table: table("IT_DIFF_INVOICES"), column: ColumnDef { default: Some("0".into()), nullable: false, ..col("QTY", "NUMBER(10)") } },
-        SchemaChange::RenameColumn { table: table("IT_DIFF_INVOICES"), column: "AMOUNT".into(), new_name: "TOTAL".into() },
+        SchemaChange::AddColumn {
+            table: table("IT_DIFF_INVOICES"),
+            column: ColumnDef { default: Some("0".into()), nullable: false, ..col("QTY", "NUMBER(10)") },
+        },
+        SchemaChange::RenameColumn {
+            table: table("IT_DIFF_INVOICES"),
+            column: "AMOUNT".into(),
+            new_name: "TOTAL".into(),
+        },
         SchemaChange::AlterColumn {
             table: table("IT_DIFF_ACCOUNTS"),
             column: "EMAIL".into(),
@@ -495,7 +593,10 @@ async fn schema_changes_and_diff() {
         run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), change, None).unwrap())).await;
     }
     let email = ops::structure(&*s, &table("IT_DIFF_ACCOUNTS")).await.unwrap().column("EMAIL").cloned().unwrap();
-    assert_eq!((email.data_type.as_str(), email.nullable, email.default.as_deref()), ("VARCHAR2(200)", false, Some("'y'")));
+    assert_eq!(
+        (email.data_type.as_str(), email.nullable, email.default.as_deref()),
+        ("VARCHAR2(200)", false, Some("'y'"))
+    );
     let invoices = ops::structure(&*s, &table("IT_DIFF_INVOICES")).await.unwrap();
     assert!(invoices.column("TOTAL").is_some() && invoices.indexes.iter().any(|i| i.name == "IT_DIFF_INVOICES_QTY"));
     // A diff against an empty container plans every table, foreign keys last.
@@ -504,5 +605,9 @@ async fn schema_changes_and_diff() {
     let there = Container { database: PDB.into(), schema: Some("BILLING".into()) };
     let plan = diff(s.dialect(), &structures, &here, &[], &there).unwrap();
     assert!(plan.sql.contains("CREATE TABLE \"BILLING\".\"IT_DIFF_ACCOUNTS\""), "{}", plan.sql);
-    run_all(&*s, "DROP TABLE it_diff_invoices CASCADE CONSTRAINTS PURGE; DROP TABLE it_diff_accounts CASCADE CONSTRAINTS PURGE").await;
+    run_all(
+        &*s,
+        "DROP TABLE it_diff_invoices CASCADE CONSTRAINTS PURGE; DROP TABLE it_diff_accounts CASCADE CONSTRAINTS PURGE",
+    )
+    .await;
 }

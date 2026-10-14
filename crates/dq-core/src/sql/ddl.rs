@@ -393,7 +393,9 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
         SchemaChange::RenameTable { table: t, new_name } => {
             name(new_name, "The new name")?;
             match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Oracle => vec![alter(format!("RENAME TO {}", d.quote_ident(new_name)))],
+                SqlFlavor::Postgres | SqlFlavor::Oracle => {
+                    vec![alter(format!("RENAME TO {}", d.quote_ident(new_name)))]
+                }
                 SqlFlavor::Sqlserver => vec![sp_rename(table.clone(), new_name, "")],
                 SqlFlavor::Mysql => {
                     let target = ObjectRef { name: new_name.clone(), ..t.clone() };
@@ -563,7 +565,8 @@ mod tests {
             statements(&SqlServerDialect, &add, None).unwrap(),
             ["ALTER TABLE [dbo].[orders] ADD [id] int IDENTITY(1,1) NOT NULL"]
         );
-        let rename = SchemaChange::RenameColumn { table: ms_table.clone(), column: "a".into(), new_name: "it's".into() };
+        let rename =
+            SchemaChange::RenameColumn { table: ms_table.clone(), column: "a".into(), new_name: "it's".into() };
         assert_eq!(
             statements(&SqlServerDialect, &rename, None).unwrap(),
             ["EXEC sp_rename N'[dbo].[orders].[a]', N'it''s', 'COLUMN'"]
@@ -601,7 +604,10 @@ mod tests {
             ["ALTER TABLE \"APP\".\"ORDERS\" MODIFY (\"QTY\" NUMBER(12) DEFAULT NULL NULL)"]
         );
         let drop = SchemaChange::DropTable { table: ora_table, cascade: true };
-        assert_eq!(statements(&OracleDialect, &drop, None).unwrap(), ["DROP TABLE \"APP\".\"ORDERS\" CASCADE CONSTRAINTS"]);
+        assert_eq!(
+            statements(&OracleDialect, &drop, None).unwrap(),
+            ["DROP TABLE \"APP\".\"ORDERS\" CASCADE CONSTRAINTS"]
+        );
     }
 
     #[test]

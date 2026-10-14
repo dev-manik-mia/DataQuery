@@ -48,10 +48,10 @@ impl Pooled<'_> {
 
 impl Drop for Pooled<'_> {
     fn drop(&mut self) {
-        if let Some(conn) = self.conn.take() {
-            if let Ok(mut idle) = self.pool.idle.lock() {
-                idle.push(conn);
-            }
+        if let Some(conn) = self.conn.take()
+            && let Ok(mut idle) = self.pool.idle.lock()
+        {
+            idle.push(conn);
         }
     }
 }
@@ -68,10 +68,15 @@ impl Pool {
 
     /// A connection whose current database is `database` (the session's when empty).
     pub async fn get(&self, database: &str) -> DbResult<Pooled<'_>> {
+        Box::pin(self.checkout(database)).await
+    }
+
+    async fn checkout(&self, database: &str) -> DbResult<Pooled<'_>> {
         let permit = self.permits.acquire().await.map_err(|_| DbError::invalid("The session is closed."))?;
         let database = if database.is_empty() { self.default_database.as_str() } else { database };
         let idle = self.idle.lock().ok().and_then(|mut idle| {
-            let i = idle.iter().position(|c| c.database == database).or(if idle.is_empty() { None } else { Some(0) })?;
+            let i =
+                idle.iter().position(|c| c.database == database).or(if idle.is_empty() { None } else { Some(0) })?;
             Some(idle.swap_remove(i))
         });
         let mut idle = match idle {

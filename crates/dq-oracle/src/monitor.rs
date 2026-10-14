@@ -4,7 +4,9 @@
 
 use async_trait::async_trait;
 use dq_core::adapter::Session;
-use dq_core::monitor::{Gauge, LockInfo, Monitor, MonitorSnapshot, ObjectSize, ServerProcess, ServerSetting, short_query};
+use dq_core::monitor::{
+    Gauge, LockInfo, Monitor, MonitorSnapshot, ObjectSize, ServerProcess, ServerSetting, short_query,
+};
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::{DbError, DbResult, ErrorKind};
 
@@ -88,7 +90,8 @@ impl Monitor for OraSession {
                             LockInfo {
                                 pid: r.number(0).unwrap_or_default(),
                                 lock_type: r.string(1),
-                                mode: lock_mode(if request > 0 { request } else { r.number(2).unwrap_or(0) }).to_owned(),
+                                mode: lock_mode(if request > 0 { request } else { r.number(2).unwrap_or(0) })
+                                    .to_owned(),
                                 granted: request == 0,
                                 object: r.text(4),
                             }
@@ -104,7 +107,9 @@ impl Monitor for OraSession {
                     version,
                     connections: gauge.and_then(|g| Some(Gauge { used: g.number(0)?, max: g.number(1)? })),
                     active_queries: Some(processes.iter().filter(|p| p.active).count() as i64),
-                    long_running: Some(processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64),
+                    long_running: Some(
+                        processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64,
+                    ),
                     blocked: Some(processes.iter().filter(|p| !p.blocked_by.is_empty()).count() as i64),
                     replication: None,
                     processes,

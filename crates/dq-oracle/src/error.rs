@@ -30,17 +30,23 @@ pub fn map_error(e: &oracle::Error, secret: Option<&str>) -> DbError {
         12170 | 3136 => (ErrorKind::Timeout, None),
         1013 => (ErrorKind::Cancelled, None),
         942 | 4043 | 2289 | 4080 => (ErrorKind::NotFound, Some("Check the object name and its schema.")),
-        1031 | 1749 | 1720 | 1924 | 41_400 => (ErrorKind::Permission, Some("Your account lacks the privilege for this action.")),
+        1031 | 1749 | 1720 | 1924 | 41_400 => {
+            (ErrorKind::Permission, Some("Your account lacks the privilege for this action."))
+        }
         16000 | 1456 => (ErrorKind::Permission, Some("This database or transaction is read-only.")),
         1 | 1400 | 1407 | 2290 | 2291 | 2292 | 12899 | 1438 => (ErrorKind::Constraint, None),
-        54 | 30006 => (ErrorKind::Timeout, Some("Another session holds a lock on this data. Retry, or check Monitoring.")),
+        54 | 30006 => {
+            (ErrorKind::Timeout, Some("Another session holds a lock on this data. Retry, or check Monitoring."))
+        }
         60 => (ErrorKind::Server, Some("A deadlock was detected and this statement was rolled back. Run it again.")),
         900..=999 | 1722 | 1830 | 1840 | 1841 | 1843 | 1847 | 1858 | 1861 | 6550 | 24344 => (ErrorKind::Syntax, None),
         _ => (ErrorKind::Server, None),
     };
     // The message starts with `ORA-00942: `; the code travels separately.
-    let message = db.message().split_once(": ").filter(|(head, _)| head.starts_with("ORA-")).map_or(db.message(), |(_, m)| m);
-    let mut error = DbError::new(kind, clean(message.trim_end())).with_code(format!("ORA-{code:05}")).with_action(action);
+    let message =
+        db.message().split_once(": ").filter(|(head, _)| head.starts_with("ORA-")).map_or(db.message(), |(_, m)| m);
+    let mut error =
+        DbError::new(kind, clean(message.trim_end())).with_code(format!("ORA-{code:05}")).with_action(action);
     if kind == ErrorKind::Syntax && db.offset() > 0 {
         error.position = Some(db.offset() + 1);
     }

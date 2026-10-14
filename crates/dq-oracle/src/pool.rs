@@ -10,7 +10,7 @@ use tokio::sync::Semaphore;
 
 use crate::connect;
 
-/// Sets DBMS_METADATA output to plain, re-runnable DDL.
+/// Sets `DBMS_METADATA` output to plain, re-runnable DDL.
 const METADATA_SETUP: &str = "BEGIN \
   DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'SEGMENT_ATTRIBUTES', FALSE); \
   DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM, 'STORAGE', FALSE); \
@@ -45,14 +45,13 @@ impl Pool {
         let params = self.params.clone();
         tokio::task::spawn_blocking(move || {
             let reused = idle.lock().ok().and_then(|mut i| i.pop());
-            let conn = match reused {
-                Some(conn) => conn,
-                None => {
-                    let conn = connect::open_blocking(&params)?;
-                    // Plain DDL without storage clauses; failing only loses formatting.
-                    let _ = conn.execute(METADATA_SETUP, &[]);
-                    conn
-                }
+            let conn = if let Some(conn) = reused {
+                conn
+            } else {
+                let conn = connect::open_blocking(&params)?;
+                // Plain DDL without storage clauses; failing only loses formatting.
+                let _ = conn.execute(METADATA_SETUP, &[]);
+                conn
             };
             let result = work(&conn);
             let broken = result.as_ref().is_err_and(|e| matches!(e.kind, ErrorKind::Network | ErrorKind::Timeout));

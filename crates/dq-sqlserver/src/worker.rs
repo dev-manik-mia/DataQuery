@@ -26,10 +26,25 @@ use crate::error::map_error;
 use crate::values::{column_meta, decode_row};
 
 pub enum Command {
-    Execute { sql: String, params: Vec<Option<String>>, options: ExecOptions, reply: oneshot::Sender<DbResult<StatementResult>> },
-    FetchMore { limit: u32, reply: oneshot::Sender<DbResult<RowsPage>> },
+    Execute {
+        sql: String,
+        params: Vec<Option<String>>,
+        options: ExecOptions,
+        reply: oneshot::Sender<DbResult<StatementResult>>,
+    },
+    FetchMore {
+        limit: u32,
+        reply: oneshot::Sender<DbResult<RowsPage>>,
+    },
     /// Runs `setup`, then `sql`, then `teardown` as separate batches and returns every text value of every result set.
-    Batches { setup: String, sql: String, params: Vec<Option<String>>, teardown: String, timeout_secs: u32, reply: oneshot::Sender<DbResult<Vec<Vec<String>>>> },
+    Batches {
+        setup: String,
+        sql: String,
+        params: Vec<Option<String>>,
+        teardown: String,
+        timeout_secs: u32,
+        reply: oneshot::Sender<DbResult<Vec<Vec<String>>>>,
+    },
 }
 
 /// Lets another task interrupt the statement the worker is running.
@@ -81,8 +96,10 @@ impl Interrupt {
     fn error(&self, secs: u32) -> DbError {
         match self {
             Self::Cancelled => DbError::new(ErrorKind::Cancelled, "The statement was cancelled."),
-            Self::TimedOut => DbError::new(ErrorKind::Timeout, format!("The statement ran longer than {secs} s and was stopped."))
-                .with_action(Some("Narrow the query or raise the statement timeout in Settings.")),
+            Self::TimedOut => {
+                DbError::new(ErrorKind::Timeout, format!("The statement ran longer than {secs} s and was stopped."))
+                    .with_action(Some("Narrow the query or raise the statement timeout in Settings."))
+            }
         }
     }
 }
@@ -94,7 +111,11 @@ fn binds(params: &[Option<String>]) -> Vec<&dyn ToSql> {
 
 /// Runs `fut` until it finishes, the user cancels, or the timeout passes.
 async fn guarded<T>(signal: &CancelSignal, timeout_secs: u32, fut: impl Future<Output = T>) -> Result<T, Interrupt> {
-    let limit = if timeout_secs == 0 { Duration::from_secs(u64::MAX / 4) } else { Duration::from_secs(u64::from(timeout_secs)) };
+    let limit = if timeout_secs == 0 {
+        Duration::from_secs(u64::MAX / 4)
+    } else {
+        Duration::from_secs(u64::from(timeout_secs))
+    };
     tokio::select! {
         out = fut => Ok(out),
         () = signal.requested() => Err(Interrupt::Cancelled),
@@ -105,7 +126,10 @@ async fn guarded<T>(signal: &CancelSignal, timeout_secs: u32, fut: impl Future<O
 /// A statement whose result is read as rows (rather than as a row count).
 fn returns_rows(sql: &str) -> bool {
     let Some(info) = analyze(sql, SqlFlavor::Sqlserver) else { return true };
-    let dml = matches!(info.kind, StatementKind::Insert | StatementKind::Update | StatementKind::Delete | StatementKind::Merge);
+    let dml = matches!(
+        info.kind,
+        StatementKind::Insert | StatementKind::Update | StatementKind::Delete | StatementKind::Merge
+    );
     // `OUTPUT` returns the changed rows.
     !dml || dq_core::sql::lexer::tokenize(sql, SqlFlavor::Sqlserver).iter().any(|t| t.is_keyword(sql, "OUTPUT"))
 }
@@ -211,8 +235,7 @@ impl Worker {
             return None;
         }
 
-        let unfinished =
-            stream_rows(&mut conn, &signal, sql, params, options, started, command, reply, rx, &err).await;
+        let unfinished = stream_rows(&mut conn, &signal, sql, params, options, started, command, reply, rx, &err).await;
         let next = match unfinished {
             Unfinished::No => {
                 self.conn = Some(conn);
@@ -245,8 +268,8 @@ impl Worker {
         signal.start();
         let run = guarded(&signal, timeout_secs, async {
             let bound = binds(params);
-            let stream =
-                if params.is_empty() { conn.simple_query(sql).await } else { conn.query(sql, &bound).await }.map_err(err)?;
+            let stream = if params.is_empty() { conn.simple_query(sql).await } else { conn.query(sql, &bound).await }
+                .map_err(err)?;
             stream.into_results().await.map_err(err)
         })
         .await;
@@ -259,10 +282,10 @@ impl Worker {
                 Err(stop.error(timeout_secs))
             }
         };
-        if let Some(conn) = self.conn.as_mut() {
-            if let Ok(s) = conn.simple_query(teardown).await {
-                let _ = s.into_results().await;
-            }
+        if let Some(conn) = self.conn.as_mut()
+            && let Ok(s) = conn.simple_query(teardown).await
+        {
+            let _ = s.into_results().await;
         }
         Ok(results?
             .iter()
@@ -339,7 +362,9 @@ async fn stream_rows(
         let started = Instant::now();
         signal.start();
         let limit = limit.clamp(1, ExecOptions::MAX_ROW_LIMIT);
-        let read = guarded(signal, options.timeout_secs, read_page(&mut stream, &mut pending, Some(&columns), limit, err)).await;
+        let read =
+            guarded(signal, options.timeout_secs, read_page(&mut stream, &mut pending, Some(&columns), limit, err))
+                .await;
         signal.stop();
         match read {
             Ok(Ok(page)) => {

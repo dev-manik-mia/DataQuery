@@ -66,7 +66,7 @@ fn init_client() -> DbResult<()> {
     })
 }
 
-/// EZConnect Plus string: `tcp[s]://host:port/service?…`.
+/// `EZConnect` Plus string: `tcp[s]://host:port/service?…`.
 pub fn connect_string(params: &ConnectParams) -> String {
     let c = &params.config;
     let (host, port) = params.socket_target();
@@ -126,12 +126,9 @@ pub struct Opened {
 
 /// Session id and serial number of `conn` (blocking).
 pub fn session_id(conn: &Connection) -> DbResult<(i64, i64)> {
-    let row = first_row(
-        conn,
-        "SELECT SYS_CONTEXT('USERENV', 'SID'), DBMS_DEBUG_JDWP.CURRENT_SESSION_SERIAL FROM DUAL",
-        &[],
-    )?
-    .ok_or_else(|| DbError::internal("the server returned no session id"))?;
+    let row =
+        first_row(conn, "SELECT SYS_CONTEXT('USERENV', 'SID'), DBMS_DEBUG_JDWP.CURRENT_SESSION_SERIAL FROM DUAL", &[])?
+            .ok_or_else(|| DbError::internal("the server returned no session id"))?;
     Ok((row.number(0).unwrap_or(0), row.number(1).unwrap_or(0)))
 }
 
@@ -157,7 +154,11 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
             engine: config.engine,
             version: format!("Oracle {version} ({product})"),
             latency_ms: started.elapsed().as_millis() as u64,
-            tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user: row.string(1),
             database: row.string(0),
             read_only: config.read_only || row.text(3).is_some_and(|r| r.contains("STANDBY")),
@@ -185,7 +186,10 @@ mod tests {
             ..ConnConfig::default()
         };
         let plain = ConnectParams::new(config.clone(), None);
-        assert_eq!(connect_string(&plain), "tcp://db.example.com:1521/ORCLPDB1?connect_timeout=10&retry_count=0&expire_time=1");
+        assert_eq!(
+            connect_string(&plain),
+            "tcp://db.example.com:1521/ORCLPDB1?connect_timeout=10&retry_count=0&expire_time=1"
+        );
         let tls = ConnectParams::new(ConnConfig { ssl_mode: SslMode::VerifyFull, port: 2484, ..config }, None);
         assert!(connect_string(&tls).starts_with("tcps://db.example.com:2484/ORCLPDB1?"));
         assert!(connect_string(&tls).contains("ssl_server_dn_match=true"));

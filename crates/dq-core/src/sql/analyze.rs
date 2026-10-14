@@ -305,7 +305,8 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
     let mut questions = 0;
     let mut highest = 0;
     for p in params {
-        let numbered = p.strip_prefix('$').or_else(|| p.strip_prefix(':')).or_else(|| p.get(2..).filter(|_| p.starts_with('@')));
+        let numbered =
+            p.strip_prefix('$').or_else(|| p.strip_prefix(':')).or_else(|| p.get(2..).filter(|_| p.starts_with('@')));
         match numbered.and_then(|n| n.parse::<u32>().ok()) {
             Some(n) => highest = highest.max(n),
             None => questions += 1,

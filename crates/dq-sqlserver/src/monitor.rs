@@ -3,7 +3,9 @@
 
 use async_trait::async_trait;
 use dq_core::adapter::Session;
-use dq_core::monitor::{Gauge, LockInfo, Monitor, MonitorSnapshot, ObjectSize, ServerProcess, ServerSetting, short_query};
+use dq_core::monitor::{
+    Gauge, LockInfo, Monitor, MonitorSnapshot, ObjectSize, ServerProcess, ServerSetting, short_query,
+};
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::{DbError, DbResult};
 
@@ -52,7 +54,8 @@ impl Monitor for MsSession {
             .collect();
         let active = processes.iter().filter(|p| p.active).count() as i64;
         let threshold = i64::from(long_running_secs) * 1000;
-        let long_running = processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > threshold).count() as i64;
+        let long_running =
+            processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > threshold).count() as i64;
         let blocked = processes.iter().filter(|p| !p.blocked_by.is_empty()).count() as i64;
         let gauge = first_row(
             conn,

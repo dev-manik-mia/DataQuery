@@ -85,8 +85,7 @@ fn relation_node(database: &str, row: &tokio_postgres::Row) -> Node {
     node
 }
 
-const RELATION_COLUMNS: &str =
-    "n.nspname::text, c.relname::text, c.relkind::text, COALESCE(c.reltuples, -1)::int8, obj_description(c.oid, 'pg_class')";
+const RELATION_COLUMNS: &str = "n.nspname::text, c.relname::text, c.relkind::text, COALESCE(c.reltuples, -1)::int8, obj_description(c.oid, 'pg_class')";
 
 pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResult<Vec<Node>> {
     let sql = format!(

@@ -16,7 +16,9 @@ use dq_core::ops::{self, ImportMapping};
 use dq_core::result::ExecOptions;
 use dq_core::sql::{SqlFlavor, split_statements};
 use dq_core::table::{ColumnSearch, RowFilter, SortSpec, TablePageRequest};
-use dq_core::transfer::{CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl};
+use dq_core::transfer::{
+    CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
+};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
 use dq_sqlserver::SqlServerAdapter;
@@ -209,7 +211,10 @@ async fn results_are_bounded_and_resumable() {
     assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     assert!(s.fetch_more(10).await.is_err());
     // Exactly `limit` rows: no read-ahead row is lost and `has_more` is right.
-    let r = s.execute("SELECT TOP 3 name FROM sys.objects", &[], ExecOptions { row_limit: 3, timeout_secs: 5 }).await.unwrap();
+    let r = s
+        .execute("SELECT TOP 3 name FROM sys.objects", &[], ExecOptions { row_limit: 3, timeout_secs: 5 })
+        .await
+        .unwrap();
     assert_eq!((r.rows.len(), r.has_more), (3, false));
 }
 
@@ -226,7 +231,8 @@ async fn cancel_and_timeout() {
     assert_eq!(err.kind, ErrorKind::Cancelled, "{err:?}");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(!s.cancel().await.unwrap(), "nothing left to cancel");
-    let err = s.execute("WAITFOR DELAY '00:00:30'", &[], ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
+    let err =
+        s.execute("WAITFOR DELAY '00:00:30'", &[], ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Timeout, "{err:?}");
     // The session keeps working, on the same connection.
     let r = s.execute("SELECT @@SPID", &[], OPTS).await.unwrap();
@@ -285,7 +291,11 @@ async fn structure_and_ddl() {
     let fk = st.constraints.iter().find(|c| c.name == "orders_customer_fk").expect("fk");
     assert_eq!(fk.definition, "FOREIGN KEY (customer_id) REFERENCES customers (id)");
     assert!(st.constraints.iter().any(|c| c.name == "orders_status_check"));
-    assert!(st.indexes.iter().any(|i| i.name == "orders_created_at_idx" && !i.unique && i.definition.contains("created_at DESC")));
+    assert!(
+        st.indexes
+            .iter()
+            .any(|i| i.name == "orders_created_at_idx" && !i.unique && i.definition.contains("created_at DESC"))
+    );
     assert!(st.indexes.iter().any(|i| i.primary));
     assert!(st.size.is_some());
     assert!(s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty());
@@ -335,17 +345,25 @@ async fn table_page_filter_sort_and_count() {
     // A table without a key pages without ORDER BY, and CLR columns read as text.
     let samples = ops::table_page(
         &*s,
-        &TablePageRequest { object: table("type_samples"), rows: RowFilter::default(), sort: None, offset: 0, limit: 10 },
+        &TablePageRequest {
+            object: table("type_samples"),
+            rows: RowFilter::default(),
+            sort: None,
+            offset: 0,
+            limit: 10,
+        },
     )
     .await
     .unwrap();
     let geo = samples.columns.iter().position(|c| c.name == "geo").unwrap();
     assert_eq!(text(&samples.rows[0][geo]), "POINT (2.35 48.85)");
     let other = ObjectRef::new(NodeKind::Table, "billing", Some("dbo".into()), "invoices");
-    let page =
-        ops::table_page(&*s, &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 })
-            .await
-            .unwrap();
+    let page = ops::table_page(
+        &*s,
+        &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 },
+    )
+    .await
+    .unwrap();
     assert_eq!(page.columns[0].name, "id");
 }
 
@@ -353,7 +371,9 @@ async fn table_page_filter_sort_and_count() {
 async fn edits_apply_atomically_to_the_right_rows() {
     let cfg = require_db!();
     let s = session(&cfg).await;
-    let t = scratch(&*s, "it_edits", "(id BIGINT PRIMARY KEY, amount DECIMAL(12,2), note NVARCHAR(MAX), at DATETIME2(3))").await;
+    let t =
+        scratch(&*s, "it_edits", "(id BIGINT PRIMARY KEY, amount DECIMAL(12,2), note NVARCHAR(MAX), at DATETIME2(3))")
+            .await;
     s.execute(
         "INSERT INTO dbo.it_edits VALUES (9223372036854775807, 1.00, N'a', '2026-01-02 03:04:05.678'), (2, 2.00, N'b', NULL)",
         &[],
@@ -365,7 +385,11 @@ async fn edits_apply_atomically_to_the_right_rows() {
     let changes = vec![
         RowChange::Update {
             key: vec![cv("id", Some("9223372036854775807"))],
-            values: vec![cv("amount", Some("84.50")), cv("note", Some("Zoë ✓")), cv("at", Some("2026-10-14 09:59:00.123"))],
+            values: vec![
+                cv("amount", Some("84.50")),
+                cv("note", Some("Zoë ✓")),
+                cv("at", Some("2026-10-14 09:59:00.123")),
+            ],
         },
         RowChange::Insert { values: vec![cv("id", Some("3")), cv("amount", None)] },
         RowChange::Delete { key: vec![cv("id", Some("2"))] },
@@ -376,10 +400,10 @@ async fn edits_apply_atomically_to_the_right_rows() {
     assert_eq!((report.updated, report.inserted, report.deleted), (1, 1, 1));
     let r = s.execute("SELECT id, amount, note, at FROM dbo.it_edits ORDER BY id", &[], OPTS).await.unwrap();
     let rows: Vec<Vec<String>> = r.rows.iter().map(|r| r.iter().map(text).collect()).collect();
-    assert_eq!(rows, [
-        vec!["3", "NULL", "NULL", "NULL"],
-        vec!["9223372036854775807", "84.50", "Zoë ✓", "2026-10-14 09:59:00.123"]
-    ]);
+    assert_eq!(
+        rows,
+        [vec!["3", "NULL", "NULL", "NULL"], vec!["9223372036854775807", "84.50", "Zoë ✓", "2026-10-14 09:59:00.123"]]
+    );
     let failing = vec![
         RowChange::Update { key: vec![cv("id", Some("3"))], values: vec![cv("note", Some("x"))] },
         RowChange::Delete { key: vec![cv("id", Some("404"))] },
@@ -410,7 +434,12 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     let parsed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
     assert_eq!(parsed[0]["big"], "9223372036854775807");
 
-    let t = scratch(&*s, "it_import", "(id BIGINT PRIMARY KEY, status NVARCHAR(20), total DECIMAL(12,2), raw VARBINARY(8))").await;
+    let t = scratch(
+        &*s,
+        "it_import",
+        "(id BIGINT PRIMARY KEY, status NVARCHAR(20), total DECIMAL(12,2), raw VARBINARY(8))",
+    )
+    .await;
     let csv_source = |path: &std::path::Path| ImportSource::Csv {
         path: path.to_string_lossy().into_owned(),
         options: CsvOptions { empty_as_null: true, ..CsvOptions::default() },
@@ -423,10 +452,9 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     assert_eq!((report.rows, report.error_count), (10, 0));
     // Batches stay under SQL Server's 2,100 parameters per statement.
     let many = dir.path().join("many.csv");
-    let mut body = String::from("id,x,status,total\n");
-    for i in 1000..3500 {
-        body.push_str(&format!("{i},,s,{i}.25\n"));
-    }
+    let body: String = std::iter::once("id,x,status,total\n".to_owned())
+        .chain((1000..3500).map(|i| format!("{i},,s,{i}.25\n")))
+        .collect();
     std::fs::write(&many, body).unwrap();
     let big_batches = ImportOptions { batch_rows: 5_000, ..ImportOptions::default() };
     assert_eq!(ops::import(&*s, &t, &csv_source(&many), &map, &big_batches, &none).await?.rows, 2500);
@@ -465,7 +493,11 @@ async fn parameters_are_bound() {
     assert_eq!(text(&r.rows[0][1]), "1");
     assert_eq!(text(&r.rows[0][2]), "it's; DROP TABLE x");
     let big = s
-        .execute("SELECT id FROM dbo.orders WHERE id > CAST(@P1 AS int)", &[Some("0".into())], ExecOptions { row_limit: 10, timeout_secs: 30 })
+        .execute(
+            "SELECT id FROM dbo.orders WHERE id > CAST(@P1 AS int)",
+            &[Some("0".into())],
+            ExecOptions { row_limit: 10, timeout_secs: 30 },
+        )
         .await
         .unwrap();
     assert!(big.has_more);
@@ -482,7 +514,10 @@ async fn read_only_profiles_cannot_write() {
     let err = s.execute("INSERT INTO dbo.no_pk VALUES (99, 'ro')", &[], OPTS).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Permission);
     let changes = vec![RowChange::Delete { key: vec![ColumnValue { column: "id".into(), value: Some("1".into()) }] }];
-    assert_eq!(ops::apply_changes(&*s, &table("orders"), &changes, false).await.unwrap_err().kind, ErrorKind::Permission);
+    assert_eq!(
+        ops::apply_changes(&*s, &table("orders"), &changes, false).await.unwrap_err().kind,
+        ErrorKind::Permission
+    );
 }
 
 #[tokio::test]
@@ -496,9 +531,15 @@ async fn row_filters_bind_matches_and_searches() {
         searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }],
     };
     assert_eq!(ops::row_count(&*s, &object, &rows).await.unwrap().count, 400);
-    let id = RowFilter { matches: vec![ColumnValue { column: "id".into(), value: Some("7".into()) }], ..RowFilter::default() };
+    let id = RowFilter {
+        matches: vec![ColumnValue { column: "id".into(), value: Some("7".into()) }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &object, &id).await.unwrap().count, 1);
-    let none = RowFilter { searches: vec![ColumnSearch { column: "status".into(), contains: "_aid".into() }], ..RowFilter::default() };
+    let none = RowFilter {
+        searches: vec![ColumnSearch { column: "status".into(), contains: "_aid".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &object, &none).await.unwrap().count, 0, "`_` is a literal");
 }
 
@@ -517,7 +558,10 @@ async fn explorer_lists_routines_indexes_and_triggers() {
     let orders = nodes.iter().find(|n| n.object.name == "orders").unwrap();
     let children = s.list_children(Some(&orders.object)).await.unwrap();
     let names: Vec<_> = children.iter().map(|n| (n.object.kind, n.object.name.as_str())).collect();
-    assert!(names.contains(&(NodeKind::Index, "orders_pkey")) && names.contains(&(NodeKind::Index, "orders_created_at_idx")));
+    assert!(
+        names.contains(&(NodeKind::Index, "orders_pkey"))
+            && names.contains(&(NodeKind::Index, "orders_created_at_idx"))
+    );
     assert!(names.contains(&(NodeKind::Trigger, "orders_touch")), "{names:?}");
     for child in &children {
         let ddl = s.ddl(&child.object).await.unwrap();
@@ -555,7 +599,9 @@ async fn monitor_shows_blocking_and_ends_sessions() {
     let watcher = session(&cfg).await;
     scratch(&*holder, "it_monitor", "(id INT PRIMARY KEY, v INT)").await;
     holder.execute("INSERT INTO dbo.it_monitor VALUES (1, 0)", &[], OPTS).await.unwrap();
-    let pid = |s: Arc<dyn Session>| async move { text(&s.execute("SELECT @@SPID", &[], OPTS).await.unwrap().rows[0][0]).parse::<i64>().unwrap() };
+    let pid = |s: Arc<dyn Session>| async move {
+        text(&s.execute("SELECT @@SPID", &[], OPTS).await.unwrap().rows[0][0]).parse::<i64>().unwrap()
+    };
     let (holder_pid, waiter_pid) = (pid(holder.clone()).await, pid(waiter.clone()).await);
     holder.execute("BEGIN TRANSACTION", &[], OPTS).await.unwrap();
     holder.execute("UPDATE dbo.it_monitor SET v = 1 WHERE id = 1", &[], OPTS).await.unwrap();
@@ -567,7 +613,9 @@ async fn monitor_shows_blocking_and_ends_sessions() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let snapshot = loop {
         let snapshot = monitor.snapshot(30).await.unwrap();
-        if snapshot.processes.iter().any(|p| p.pid == waiter_pid && !p.blocked_by.is_empty()) || Instant::now() > deadline {
+        if snapshot.processes.iter().any(|p| p.pid == waiter_pid && !p.blocked_by.is_empty())
+            || Instant::now() > deadline
+        {
             break snapshot;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -581,7 +629,9 @@ async fn monitor_shows_blocking_and_ends_sessions() {
     assert!(monitor.kill(waiter_pid, true).await.unwrap());
     assert!(blocked.await.unwrap().is_err());
     holder.execute("ROLLBACK", &[], OPTS).await.unwrap();
-    assert!(monitor.server_settings(Some("max server")).await.unwrap().iter().any(|s| s.name == "max server memory (MB)"));
+    assert!(
+        monitor.server_settings(Some("max server")).await.unwrap().iter().any(|s| s.name == "max server memory (MB)")
+    );
     assert!(monitor.largest_tables(DB, 5).await.unwrap().iter().any(|t| t.object.name == "orders"));
     holder.execute("DROP TABLE dbo.it_monitor", &[], OPTS).await.unwrap();
 }
@@ -595,7 +645,13 @@ async fn schema_changes_and_diff() {
     let s = session(&cfg).await;
     run_all(&*s, "DROP TABLE IF EXISTS it_diff_a.invoices; DROP TABLE IF EXISTS it_diff_a.accounts; DROP TABLE IF EXISTS it_diff_b.invoices; DROP TABLE IF EXISTS it_diff_b.accounts;\nDROP SCHEMA IF EXISTS it_diff_a\nGO\nDROP SCHEMA IF EXISTS it_diff_b\nGO\nCREATE SCHEMA it_diff_a\nGO\nCREATE SCHEMA it_diff_b\nGO").await;
     let t = |schema: &str, name: &str| ObjectRef::new(NodeKind::Table, DB, Some(schema.into()), name);
-    let col = |name: &str, ty: &str| ColumnDef { name: name.into(), data_type: ty.into(), nullable: true, default: None, identity: false };
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
     let changes = vec![
         SchemaChange::CreateTable {
             table: t("it_diff_a", "accounts"),
@@ -607,7 +663,11 @@ async fn schema_changes_and_diff() {
         },
         SchemaChange::CreateTable {
             table: t("it_diff_a", "invoices"),
-            columns: vec![ColumnDef { nullable: false, ..col("id", "int") }, col("account_id", "bigint"), col("amount", "decimal(12,2)")],
+            columns: vec![
+                ColumnDef { nullable: false, ..col("id", "int") },
+                col("account_id", "bigint"),
+                col("amount", "decimal(12,2)"),
+            ],
             primary_key: vec!["id".into()],
         },
         SchemaChange::AddForeignKey {
@@ -619,7 +679,11 @@ async fn schema_changes_and_diff() {
             on_delete: Some("CASCADE".into()),
             on_update: None,
         },
-        SchemaChange::RenameColumn { table: t("it_diff_a", "invoices"), column: "amount".into(), new_name: "total".into() },
+        SchemaChange::RenameColumn {
+            table: t("it_diff_a", "invoices"),
+            column: "amount".into(),
+            new_name: "total".into(),
+        },
     ];
     for change in &changes {
         run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), change, None).unwrap())).await;
@@ -636,7 +700,10 @@ async fn schema_changes_and_diff() {
     run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), &alter, Some(&structure)).unwrap())).await;
     let after = ops::structure(&*s, &t("it_diff_a", "accounts")).await.unwrap();
     let email = after.column("email").unwrap();
-    assert_eq!((email.data_type.as_str(), email.nullable, email.default.as_deref()), ("nvarchar(200)", false, Some("'y'")));
+    assert_eq!(
+        (email.data_type.as_str(), email.nullable, email.default.as_deref()),
+        ("nvarchar(200)", false, Some("'y'"))
+    );
     let drop_default = SchemaChange::AlterColumn {
         table: t("it_diff_a", "accounts"),
         column: "email".into(),

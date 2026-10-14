@@ -1,6 +1,6 @@
 //! Query plans: the `EXPLAIN` statement for each engine and a common tree the
 //! UI renders. PostgreSQL's JSON plan maps to named fields; MySQL and MariaDB
-//! JSON plans are walked generically (every object is a node); CockroachDB's
+//! JSON plans are walked generically (every object is a node); `CockroachDB`'s
 //! text tree is read line by line. SQL Server and Oracle plans are read by
 //! their adapters, which build the same tree.
 
@@ -216,13 +216,13 @@ fn generic_node(label: &str, v: &Value) -> PlanNode {
     node
 }
 
-/// Leading number of a CockroachDB value such as `3 (100% of the table; …)` or `1,024`.
+/// Leading number of a `CockroachDB` value such as `3 (100% of the table; …)` or `1,024`.
 fn leading_number(value: &str) -> Option<f64> {
     let digits: String = value.chars().take_while(|c| c.is_ascii_digit() || *c == ',' || *c == '.').collect();
     digits.replace(',', "").parse().ok()
 }
 
-/// A CockroachDB duration such as `250µs`, `1ms` or `2.5s`, in milliseconds.
+/// A `CockroachDB` duration such as `250µs`, `1ms` or `2.5s`, in milliseconds.
 pub fn duration_ms(value: &str) -> Option<f64> {
     let value = value.trim();
     let split = value.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
@@ -238,7 +238,7 @@ pub fn duration_ms(value: &str) -> Option<f64> {
     })
 }
 
-/// Reads CockroachDB's `EXPLAIN` text tree: `• op` lines are nodes, indented
+/// Reads `CockroachDB`'s `EXPLAIN` text tree: `• op` lines are nodes, indented
 /// `key: value` lines are properties of the node above them.
 fn cockroach_plan(raw: String, analyzed: bool) -> ExplainResult {
     let mut header = PlanNode { label: "plan".into(), ..PlanNode::default() };
@@ -324,7 +324,10 @@ mod tests {
         let filter = &root.children[0];
         assert_eq!((filter.label.as_str(), filter.rows), ("filter", Some(1.0)));
         let scan = &filter.children[0];
-        assert_eq!((scan.label.as_str(), scan.detail.as_deref(), scan.actual_rows), ("scan", Some("t@t_pkey"), Some(3.0)));
+        assert_eq!(
+            (scan.label.as_str(), scan.detail.as_deref(), scan.actual_rows),
+            ("scan", Some("t@t_pkey"), Some(3.0))
+        );
     }
 
     #[test]

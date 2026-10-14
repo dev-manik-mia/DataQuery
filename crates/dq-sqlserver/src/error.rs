@@ -1,5 +1,7 @@
 //! Maps `tiberius` errors to actionable [`DbError`]s.
 
+use std::fmt::Write;
+
 use dq_core::redact::redact_known;
 use dq_core::{DbError, ErrorKind};
 use tiberius::error::{Error, IoErrorKind};
@@ -18,7 +20,9 @@ pub fn map_error(e: &Error, secret: Option<&str>) -> DbError {
                     (ErrorKind::Permission, Some("Your login lacks the permission for this action."))
                 }
                 3906 | 3908 => (ErrorKind::Permission, Some("The database is read-only.")),
-                1222 => (ErrorKind::Timeout, Some("Another session holds a lock on this data. Retry, or check Monitoring.")),
+                1222 => {
+                    (ErrorKind::Timeout, Some("Another session holds a lock on this data. Retry, or check Monitoring."))
+                }
                 1205 => (ErrorKind::Server, Some("Chosen as a deadlock victim. Run the statement again.")),
                 3980 | 3617 => (ErrorKind::Cancelled, None),
                 515 | 547 | 2601 | 2627 | 2628 | 8152 => (ErrorKind::Constraint, None),
@@ -27,10 +31,10 @@ pub fn map_error(e: &Error, secret: Option<&str>) -> DbError {
             };
             let mut detail = format!("Msg {}, Level {}, State {}", t.code(), t.class(), t.state());
             if !t.procedure().is_empty() {
-                detail.push_str(&format!(", Procedure {}", t.procedure()));
+                let _ = write!(detail, ", Procedure {}", t.procedure());
             }
             if t.line() > 0 {
-                detail.push_str(&format!(", Line {}", t.line()));
+                let _ = write!(detail, ", Line {}", t.line());
             }
             DbError::new(kind, clean(t.message()))
                 .with_code(t.code().to_string())

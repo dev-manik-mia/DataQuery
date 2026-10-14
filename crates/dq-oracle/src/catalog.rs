@@ -147,12 +147,14 @@ pub fn group_children(conn: &Connection, group: &ObjectRef) -> DbResult<Vec<Node
              AND sequence_name NOT LIKE 'ISEQ$$\\_%' ESCAPE '\\' ORDER BY sequence_name",
             NodeKind::Sequence,
         ),
-        GROUP_FUNCTIONS => {
-            ("SELECT object_name FROM all_objects WHERE owner = :1 AND object_type = 'FUNCTION' ORDER BY object_name", NodeKind::Function)
-        }
-        GROUP_PROCEDURES => {
-            ("SELECT object_name FROM all_objects WHERE owner = :1 AND object_type = 'PROCEDURE' ORDER BY object_name", NodeKind::Procedure)
-        }
+        GROUP_FUNCTIONS => (
+            "SELECT object_name FROM all_objects WHERE owner = :1 AND object_type = 'FUNCTION' ORDER BY object_name",
+            NodeKind::Function,
+        ),
+        GROUP_PROCEDURES => (
+            "SELECT object_name FROM all_objects WHERE owner = :1 AND object_type = 'PROCEDURE' ORDER BY object_name",
+            NodeKind::Procedure,
+        ),
         other => return Err(DbError::invalid(format!("Unknown group `{other}`."))),
     };
     Ok(rows(conn, sql, &[&owner])?
@@ -177,8 +179,12 @@ pub fn search(conn: &Connection, database: &str, query: &str, limit: u32) -> DbR
 
 fn relation(conn: &Connection, object: &ObjectRef) -> DbResult<(NodeKind, Option<i64>, Option<String>)> {
     let owner = owner_of(object)?;
-    let r = first_row(conn, &format!("{RELATION_SELECT} AND o.owner = :1 AND o.object_name = :2"), &[&owner, &object.name])?
-        .ok_or_else(|| not_found(object))?;
+    let r = first_row(
+        conn,
+        &format!("{RELATION_SELECT} AND o.owner = :1 AND o.object_name = :2"),
+        &[&owner, &object.name],
+    )?
+    .ok_or_else(|| not_found(object))?;
     Ok((kind_of(&r.string(2)), r.number(3), r.text(4).filter(|c| !c.is_empty())))
 }
 
@@ -326,7 +332,13 @@ fn is_not_null_check(c: &Constraint) -> bool {
     c.generated && c.condition.as_deref().is_some_and(|s| s.trim_end().ends_with("IS NOT NULL") && !s.contains(" AND "))
 }
 
-fn foreign_key(conn: &Connection, database: &str, owner: &str, table: &str, c: &Constraint) -> DbResult<Option<ForeignKey>> {
+fn foreign_key(
+    conn: &Connection,
+    database: &str,
+    owner: &str,
+    table: &str,
+    c: &Constraint,
+) -> DbResult<Option<ForeignKey>> {
     let (Some(r_owner), Some(r_name)) = (&c.r_owner, &c.r_name) else { return Ok(None) };
     let (target_table, target_columns) = constraint_columns(conn, r_owner, r_name)?;
     Ok(Some(ForeignKey {
@@ -346,7 +358,12 @@ struct Index {
     total: bool,
 }
 
-fn indexes(conn: &Connection, object: &ObjectRef, columns: &[ColumnInfo], primary_index: Option<&str>) -> DbResult<Vec<Index>> {
+fn indexes(
+    conn: &Connection,
+    object: &ObjectRef,
+    columns: &[ColumnInfo],
+    primary_index: Option<&str>,
+) -> DbResult<Vec<Index>> {
     let owner = owner_of(object)?;
     let found = rows(
         conn,
@@ -413,7 +430,7 @@ fn quoted_names(expr: &str) -> Vec<String> {
     expr.split('"').skip(1).step_by(2).map(str::to_owned).collect()
 }
 
-/// Segment sizes of the table and its indexes. Other schemas need DBA_SEGMENTS access.
+/// Segment sizes of the table and its indexes. Other schemas need `DBA_SEGMENTS` access.
 fn size(conn: &Connection, owner: &str, table: &str) -> Option<TableSize> {
     let sql = |view: &str, owner_filter: &str| {
         format!(
@@ -461,13 +478,24 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
             }),
             "R" => {
                 if let Some(fk) = foreign_key(conn, &object.database, owner, &object.name, c)? {
-                    let target = if fk.target.schema == object.schema { D.display_ident(&fk.target.name) } else { D.display_name(&fk.target) };
-                    let mut definition =
-                        format!("FOREIGN KEY ({}) REFERENCES {target} ({})", list(&fk.columns), list(&fk.target_columns));
+                    let target = if fk.target.schema == object.schema {
+                        D.display_ident(&fk.target.name)
+                    } else {
+                        D.display_name(&fk.target)
+                    };
+                    let mut definition = format!(
+                        "FOREIGN KEY ({}) REFERENCES {target} ({})",
+                        list(&fk.columns),
+                        list(&fk.target_columns)
+                    );
                     if let Some(rule) = &fk.on_delete {
                         let _ = write!(definition, " ON DELETE {rule}");
                     }
-                    constraints.push(ConstraintInfo { kind: ConstraintKind::ForeignKey, name: c.name.clone(), definition });
+                    constraints.push(ConstraintInfo {
+                        kind: ConstraintKind::ForeignKey,
+                        name: c.name.clone(),
+                        definition,
+                    });
                     foreign_keys.push(fk);
                 }
             }
@@ -502,7 +530,12 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
     })
 }
 
-fn foreign_keys_where(conn: &Connection, database: &str, predicate: &str, params: &[&dyn ToSql]) -> DbResult<Vec<ForeignKey>> {
+fn foreign_keys_where(
+    conn: &Connection,
+    database: &str,
+    predicate: &str,
+    params: &[&dyn ToSql],
+) -> DbResult<Vec<ForeignKey>> {
     let found = rows(
         conn,
         &format!(
@@ -561,7 +594,10 @@ pub fn dependencies(conn: &Connection, object: &ObjectRef) -> DbResult<Dependenc
     for r in &used_by {
         let kind = kind_of(&r.string(2));
         let relation = if kind.is_relation() { "view" } else { "reads" };
-        deps.used_by.push(Dependency { object: ObjectRef::new(kind, db.clone(), Some(r.string(0)), r.string(1)), relation: relation.into() });
+        deps.used_by.push(Dependency {
+            object: ObjectRef::new(kind, db.clone(), Some(r.string(0)), r.string(1)),
+            relation: relation.into(),
+        });
     }
     let triggers = rows(
         conn,
@@ -569,7 +605,8 @@ pub fn dependencies(conn: &Connection, object: &ObjectRef) -> DbResult<Dependenc
         &[&owner, &object.name],
     )?;
     for r in &triggers {
-        let o = ObjectRef::new(NodeKind::Trigger, db.clone(), object.schema.clone(), r.string(0)).with_parent(&object.name);
+        let o =
+            ObjectRef::new(NodeKind::Trigger, db.clone(), object.schema.clone(), r.string(0)).with_parent(&object.name);
         deps.used_by.push(Dependency { object: o, relation: "trigger".into() });
     }
     Ok(deps)
@@ -629,7 +666,7 @@ pub fn schema_model(conn: &Connection, database: &str, schema: &str) -> DbResult
     Ok(model)
 }
 
-/// Definition from DBMS_METADATA, in its plain form (no storage clauses).
+/// Definition from `DBMS_METADATA`, in its plain form (no storage clauses).
 pub fn ddl(conn: &Connection, object: &ObjectRef) -> DbResult<String> {
     let owner = owner_of(object)?;
     let metadata_type = match object.kind {
@@ -643,16 +680,20 @@ pub fn ddl(conn: &Connection, object: &ObjectRef) -> DbResult<String> {
         NodeKind::Procedure => "PROCEDURE",
         _ => return Err(DbError::invalid("This object has no definition.")),
     };
-    let r = first_row(conn, "SELECT DBMS_METADATA.GET_DDL(:1, :2, :3) FROM DUAL", &[&metadata_type, &object.name, &owner])
-        .map_err(|e| {
-            if e.code.as_deref() == Some("ORA-31603") {
-                not_found(object)
-            } else if e.kind == ErrorKind::Permission {
-                DbError::new(ErrorKind::Permission, format!("The definition of {} is not visible to this user.", object.name))
-            } else {
-                e
-            }
-        })?;
+    let r =
+        first_row(conn, "SELECT DBMS_METADATA.GET_DDL(:1, :2, :3) FROM DUAL", &[&metadata_type, &object.name, &owner])
+            .map_err(|e| {
+                if e.code.as_deref() == Some("ORA-31603") {
+                    not_found(object)
+                } else if e.kind == ErrorKind::Permission {
+                    DbError::new(
+                        ErrorKind::Permission,
+                        format!("The definition of {} is not visible to this user.", object.name),
+                    )
+                } else {
+                    e
+                }
+            })?;
     let mut text = r.and_then(|r| r.text(0)).ok_or_else(|| not_found(object))?.trim().to_owned();
     // PL/SQL units end with `/` so the script runs as written.
     if matches!(object.kind, NodeKind::Trigger | NodeKind::Function | NodeKind::Procedure) && !text.ends_with('/') {
@@ -672,12 +713,17 @@ mod tests {
 
     #[test]
     fn spells_types() {
-        let t = |ty, len, p, s, cl, cu| type_spelling(&row(&[Some("X"), Some(ty), len, p, s, None, None, None, None, None, cl, cu]));
+        let t = |ty, len, p, s, cl, cu| {
+            type_spelling(&row(&[Some("X"), Some(ty), len, p, s, None, None, None, None, None, cl, cu]))
+        };
         assert_eq!(t("NUMBER", Some("22"), Some("12"), Some("2"), None, None), "NUMBER(12,2)");
         assert_eq!(t("NUMBER", Some("22"), Some("19"), Some("0"), None, None), "NUMBER(19)");
         assert_eq!(t("NUMBER", Some("22"), None, None, None, None), "NUMBER");
         assert_eq!(t("VARCHAR2", Some("200"), None, None, Some("50"), Some("C")), "VARCHAR2(50 CHAR)");
         assert_eq!(t("VARCHAR2", Some("20"), None, None, Some("20"), Some("B")), "VARCHAR2(20)");
-        assert_eq!(t("TIMESTAMP(3) WITH TIME ZONE", Some("13"), None, Some("3"), None, None), "TIMESTAMP(3) WITH TIME ZONE");
+        assert_eq!(
+            t("TIMESTAMP(3) WITH TIME ZONE", Some("13"), None, Some("3"), None, None),
+            "TIMESTAMP(3) WITH TIME ZONE"
+        );
     }
 }

@@ -145,7 +145,13 @@ pub trait Session: Send + Sync {
     /// Plans one statement. `analyze` runs it; callers only allow that for
     /// read-only statements. The default runs the engine's `EXPLAIN` on the
     /// query connection.
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         let dialect = ExplainDialect::new(self.dialect().flavor(), &self.info().version)
             .ok_or_else(|| DbError::unsupported("Query plans are not available for this engine."))?;
         let options = ExecOptions { row_limit: 10_000, timeout_secs };

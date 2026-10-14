@@ -172,7 +172,9 @@ pub async fn group_children(conn: &mut Conn, group: &ObjectRef) -> DbResult<Vec<
     .await?;
     Ok(found
         .iter()
-        .map(|r| Node::leaf(ObjectRef::new(kind_of(&r.string(1)), group.database.clone(), group.schema.clone(), r.string(0))))
+        .map(|r| {
+            Node::leaf(ObjectRef::new(kind_of(&r.string(1)), group.database.clone(), group.schema.clone(), r.string(0)))
+        })
         .collect())
 }
 
@@ -251,9 +253,8 @@ fn wrapped_once(d: &str) -> bool {
 const NUMERIC_TYPES: &[&str] =
     &["tinyint", "smallint", "int", "bigint", "decimal", "numeric", "money", "smallmoney", "float", "real"];
 /// Types the grid cannot edit as text.
-const READ_ONLY_TYPES: &[&str] = &[
-    "binary", "varbinary", "image", "timestamp", "rowversion", "geography", "geometry", "hierarchyid", "sql_variant",
-];
+const READ_ONLY_TYPES: &[&str] =
+    &["binary", "varbinary", "image", "timestamp", "rowversion", "geography", "geometry", "hierarchyid", "sql_variant"];
 /// CLR types read with `ToString()`.
 const CLR_TYPES: &[&str] = &["geography", "geometry", "hierarchyid"];
 
@@ -295,7 +296,12 @@ async fn columns(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<Column>> {
             Column {
                 info: ColumnInfo {
                     name: r.string(0),
-                    data_type: type_spelling(&base, r.number(2).unwrap_or(0), r.number(3).unwrap_or(0), r.number(4).unwrap_or(0)),
+                    data_type: type_spelling(
+                        &base,
+                        r.number(2).unwrap_or(0),
+                        r.number(3).unwrap_or(0),
+                        r.number(4).unwrap_or(0),
+                    ),
                     nullable: r.flag(5),
                     default: r.text(6).map(|d| unwrap_default(&d)),
                     primary_key: r.flag(10),
@@ -306,10 +312,10 @@ async fn columns(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<Column>> {
                     comment: r.text(9).filter(|c| !c.is_empty()),
                     read_as_text: CLR_TYPES.contains(&base.as_str()),
                 },
-                computed: computed.then(|| {
-                    format!("AS {}{}", r.string(11), if r.flag(12) { " PERSISTED" } else { "" })
-                }),
-                identity: identity.then(|| format!("IDENTITY({},{})", r.number(13).unwrap_or(1), r.number(14).unwrap_or(1))),
+                computed: computed
+                    .then(|| format!("AS {}{}", r.string(11), if r.flag(12) { " PERSISTED" } else { "" })),
+                identity: identity
+                    .then(|| format!("IDENTITY({},{})", r.number(13).unwrap_or(1), r.number(14).unwrap_or(1))),
             }
         })
         .collect())
@@ -431,12 +437,8 @@ fn fk_rule(rule: Option<String>) -> Option<String> {
 
 /// Foreign keys matching `predicate` (over `fk`).
 async fn foreign_keys(conn: &mut Conn, database: &str, predicate: &str, params: &[&str]) -> DbResult<Vec<ForeignKey>> {
-    let found = rows(
-        conn,
-        &format!("{FK_SELECT}{predicate} ORDER BY 2, 3, 1, fkc.constraint_column_id"),
-        params,
-    )
-    .await?;
+    let found =
+        rows(conn, &format!("{FK_SELECT}{predicate} ORDER BY 2, 3, 1, fkc.constraint_column_id"), params).await?;
     let table = |schema: String, name: String| ObjectRef::new(NodeKind::Table, database, Some(schema), name);
     let mut out: Vec<ForeignKey> = Vec::new();
     for r in &found {
@@ -463,7 +465,8 @@ async fn foreign_keys(conn: &mut Conn, database: &str, predicate: &str, params: 
 
 fn fk_definition(fk: &ForeignKey, object: &ObjectRef) -> String {
     let list = |cols: &[String]| cols.iter().map(|c| D.display_ident(c)).collect::<Vec<_>>().join(", ");
-    let target = if fk.target.schema == object.schema { D.display_ident(&fk.target.name) } else { D.display_name(&fk.target) };
+    let target =
+        if fk.target.schema == object.schema { D.display_ident(&fk.target.name) } else { D.display_name(&fk.target) };
     let mut def = format!("FOREIGN KEY ({}) REFERENCES {target} ({})", list(&fk.columns), list(&fk.target_columns));
     if let Some(rule) = &fk.on_update {
         let _ = write!(def, " ON UPDATE {rule}");
@@ -501,9 +504,13 @@ async fn full_structure(conn: &mut Conn, object: &ObjectRef) -> DbResult<(TableS
     let columns = columns(conn, object).await?;
     let infos: Vec<ColumnInfo> = columns.iter().map(|c| c.info.clone()).collect();
     let indexes = indexes(conn, object, &infos).await?;
-    let foreign_keys =
-        foreign_keys(conn, &object.database, &format!("fk.parent_object_id = {OBJECT}"), &[schema_of(object), &object.name])
-            .await?;
+    let foreign_keys = foreign_keys(
+        conn,
+        &object.database,
+        &format!("fk.parent_object_id = {OBJECT}"),
+        &[schema_of(object), &object.name],
+    )
+    .await?;
     let mut constraints: Vec<ConstraintInfo> = indexes
         .iter()
         .filter_map(|i| {
@@ -567,12 +574,9 @@ pub async fn dependencies(conn: &mut Conn, object: &ObjectRef) -> DbResult<Depen
         let o = ObjectRef::new(kind_of(&r.string(2)), db.clone(), Some(r.string(0)), r.string(1));
         deps.uses.push(Dependency { object: o, relation: "reads".into() });
     }
-    let used_by = rows(
-        conn,
-        &format!("{edge}d.referencing_id WHERE d.referenced_id = {OBJECT} AND o.type <> 'TR'"),
-        &key,
-    )
-    .await?;
+    let used_by =
+        rows(conn, &format!("{edge}d.referencing_id WHERE d.referenced_id = {OBJECT} AND o.type <> 'TR'"), &key)
+            .await?;
     for r in &used_by {
         let kind = kind_of(&r.string(2));
         let o = ObjectRef::new(kind, db.clone(), Some(r.string(0)), r.string(1));
@@ -582,7 +586,8 @@ pub async fn dependencies(conn: &mut Conn, object: &ObjectRef) -> DbResult<Depen
     let triggers =
         rows(conn, &format!("SELECT name FROM sys.triggers WHERE parent_id = {OBJECT} ORDER BY name"), &key).await?;
     for r in &triggers {
-        let o = ObjectRef::new(NodeKind::Trigger, db.clone(), object.schema.clone(), r.string(0)).with_parent(&object.name);
+        let o =
+            ObjectRef::new(NodeKind::Trigger, db.clone(), object.schema.clone(), r.string(0)).with_parent(&object.name);
         deps.used_by.push(Dependency { object: o, relation: "trigger".into() });
     }
     Ok(deps)
@@ -613,7 +618,11 @@ pub async fn schema_model(conn: &mut Conn, database: &str, schema: Option<&str>)
     let mut model = SchemaModel::default();
     for r in &found {
         let (s, name) = (r.string(0), r.string(1));
-        if model.tables.last().is_none_or(|t: &ModelTable| t.object.name != name || t.object.schema.as_deref() != Some(&s)) {
+        if model
+            .tables
+            .last()
+            .is_none_or(|t: &ModelTable| t.object.name != name || t.object.schema.as_deref() != Some(&s))
+        {
             let object = ObjectRef::new(kind_of(&r.string(2)), database, Some(s), name);
             model.tables.push(ModelTable { object, columns: Vec::new() });
         }
@@ -621,7 +630,12 @@ pub async fn schema_model(conn: &mut Conn, database: &str, schema: Option<&str>)
             let base = r.string(4).to_ascii_lowercase();
             table.columns.push(ModelColumn {
                 name: r.string(3),
-                data_type: type_spelling(&base, r.number(5).unwrap_or(0), r.number(6).unwrap_or(0), r.number(7).unwrap_or(0)),
+                data_type: type_spelling(
+                    &base,
+                    r.number(5).unwrap_or(0),
+                    r.number(6).unwrap_or(0),
+                    r.number(7).unwrap_or(0),
+                ),
                 nullable: r.flag(8),
                 primary_key: r.flag(9),
             });
@@ -659,7 +673,9 @@ async fn table_ddl(conn: &mut Conn, object: &ObjectRef) -> DbResult<String> {
         })
         .collect();
     lines.extend(indexes.iter().filter(|i| i.constraint.is_some()).map(|i| i.info.definition.clone()));
-    for c in structure.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::ForeignKey | ConstraintKind::Check)) {
+    for c in
+        structure.constraints.iter().filter(|c| matches!(c.kind, ConstraintKind::ForeignKey | ConstraintKind::Check))
+    {
         lines.push(format!("CONSTRAINT {} {}", D.display_ident(&c.name), c.definition));
     }
     let mut out = format!("CREATE TABLE {} (\n  {}\n);\n", D.display_name(object), lines.join(",\n  "));
@@ -713,9 +729,13 @@ pub async fn ddl(conn: &mut Conn, object: &ObjectRef) -> DbResult<String> {
             ))
         }
         NodeKind::View | NodeKind::Function | NodeKind::Procedure | NodeKind::Trigger => {
-            let r = first_row(conn, &format!("SELECT OBJECT_DEFINITION({OBJECT})"), &[schema, &object.name], None).await?;
+            let r =
+                first_row(conn, &format!("SELECT OBJECT_DEFINITION({OBJECT})"), &[schema, &object.name], None).await?;
             let text = r.and_then(|r| r.text(0)).ok_or_else(|| {
-                DbError::new(ErrorKind::Permission, format!("The definition of {} is not visible to this login.", object.name))
+                DbError::new(
+                    ErrorKind::Permission,
+                    format!("The definition of {} is not visible to this login.", object.name),
+                )
             })?;
             Ok(format!("{}\nGO\n", text.trim_end()))
         }

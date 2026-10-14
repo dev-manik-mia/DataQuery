@@ -2,7 +2,7 @@
 //! replication views. Rows other roles own show no query text unless the
 //! account has `pg_read_all_stats`.
 //!
-//! CockroachDB keeps the same information in `crdb_internal` (sessions,
+//! `CockroachDB` keeps the same information in `crdb_internal` (sessions,
 //! queries, locks) and cancels with `CANCEL QUERY` / `CANCEL SESSION`; see
 //! [`cockroach`].
 
@@ -220,7 +220,7 @@ impl Monitor for PgSession {
     }
 }
 
-/// CockroachDB: sessions, queries and locks from `crdb_internal`. Process ids
+/// `CockroachDB`: sessions, queries and locks from `crdb_internal`. Process ids
 /// are the sessions' `pg_backend_pid`.
 mod cockroach {
     use std::collections::HashMap;
@@ -288,7 +288,9 @@ mod cockroach {
                 let mut holders: HashMap<String, i64> = HashMap::new();
                 let mut waiters: Vec<(String, i64)> = Vec::new();
                 for r in &rows {
-                    let Some(pid) = r.get::<_, Option<String>>(0).and_then(|t| by_txn.get(&t).copied()) else { continue };
+                    let Some(pid) = r.get::<_, Option<String>>(0).and_then(|t| by_txn.get(&t).copied()) else {
+                        continue;
+                    };
                     let key: String = r.get(1);
                     let granted: bool = r.get(3);
                     if granted {
@@ -319,7 +321,9 @@ mod cockroach {
             // CockroachDB has no server-wide connection limit by default.
             connections: None,
             active_queries: Some(processes.iter().filter(|p| p.active).count() as i64),
-            long_running: Some(processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64),
+            long_running: Some(
+                processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64
+            ),
             blocked: Some(processes.iter().filter(|p| !p.blocked_by.is_empty()).count() as i64),
             replication: None,
             processes,

@@ -139,7 +139,8 @@ pub async fn server_info(client: &Client, config: &ConnConfig, started: Instant)
             }
         }
         Flavor::Cockroach => {
-            let row = client.query_one("SELECT current_user::text, current_database()::text", &[]).await.map_err(err)?;
+            let row =
+                client.query_one("SELECT current_user::text, current_database()::text", &[]).await.map_err(err)?;
             // `CockroachDB CCL v25.2.1 (aarch64-…)`
             let version = banner.split_whitespace().find(|w| w.starts_with('v')).unwrap_or_default();
             let tls = !matches!(config.ssl_mode, dq_core::config::SslMode::Disable | dq_core::config::SslMode::Prefer);
@@ -147,7 +148,11 @@ pub async fn server_info(client: &Client, config: &ConnConfig, started: Instant)
                 engine: config.engine,
                 version: format!("CockroachDB {}", version.trim_start_matches('v')),
                 latency_ms: started.elapsed().as_millis() as u64,
-                tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+                tls: tls.then(|| TlsInfo {
+                    version: None,
+                    verified: config.ssl_mode.verifies_chain(),
+                    mode: config.ssl_mode,
+                }),
                 user: row.get(0),
                 database: row.get(1),
                 read_only: config.read_only,

@@ -1,5 +1,5 @@
 //! PostgreSQL adapter for DataQuery (versions 12–17, plus wire-compatible
-//! services such as Supabase, Neon and Timescale). It also serves CockroachDB,
+//! services such as Supabase, Neon and Timescale). It also serves `CockroachDB`,
 //! which speaks the PostgreSQL protocol; the few catalog differences are
 //! handled where they occur (see `connect::Flavor`).
 

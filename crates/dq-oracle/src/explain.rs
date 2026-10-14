@@ -53,7 +53,13 @@ fn tree(rows: &[TextRow]) -> Option<PlanNode> {
     nodes.pop().map(|(.., node)| node)
 }
 
-pub fn explain(conn: &Connection, sql: &str, params: &[Option<String>], analyze: bool, secret: Option<&str>) -> DbResult<ExplainResult> {
+pub fn explain(
+    conn: &Connection,
+    sql: &str,
+    params: &[Option<String>],
+    analyze: bool,
+    secret: Option<&str>,
+) -> DbResult<ExplainResult> {
     let err = |e: oracle::Error| map_error(&e, secret);
     if analyze {
         conn.execute("ALTER SESSION SET STATISTICS_LEVEL = ALL", &[]).map_err(err)?;
@@ -64,7 +70,11 @@ pub fn explain(conn: &Connection, sql: &str, params: &[Option<String>], analyze:
                 row.map_err(err)?;
             }
             let execution_ms = started.elapsed().as_secs_f64() * 1000.0;
-            let lines = text_rows(conn, "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST'))", &[])?;
+            let lines = text_rows(
+                conn,
+                "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST'))",
+                &[],
+            )?;
             let raw = lines.iter().map(|l| l.string(0)).collect::<Vec<_>>().join("\n");
             Ok(ExplainResult { plan: None, raw, analyzed: true, planning_ms: None, execution_ms: Some(execution_ms) })
         })();
@@ -72,7 +82,8 @@ pub fn explain(conn: &Connection, sql: &str, params: &[Option<String>], analyze:
         let _ = conn.rollback();
         return run;
     }
-    let id = format!("DQ{}", SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos()) % 1_000_000_000_000);
+    let id =
+        format!("DQ{}", SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos()) % 1_000_000_000_000);
     // Bind variables stay unbound: EXPLAIN PLAN plans the statement without values.
     conn.execute(&format!("EXPLAIN PLAN SET STATEMENT_ID = '{id}' FOR {sql}"), &[]).map_err(err)?;
     let rows = text_rows(
@@ -81,7 +92,8 @@ pub fn explain(conn: &Connection, sql: &str, params: &[Option<String>], analyze:
                 access_predicates, filter_predicates FROM plan_table WHERE statement_id = :1 ORDER BY id",
         &[&id],
     );
-    let lines = text_rows(conn, "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :1, 'TYPICAL'))", &[&id]);
+    let lines =
+        text_rows(conn, "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :1, 'TYPICAL'))", &[&id]);
     let _ = conn.execute("DELETE FROM plan_table WHERE statement_id = :1", &[&id]);
     let _ = conn.commit();
     let rows = rows?;
@@ -101,14 +113,53 @@ mod tests {
     #[test]
     fn builds_the_operator_tree() {
         let rows = [
-            row(&[Some("0"), None, Some("SELECT STATEMENT"), None, None, None, Some("5"), Some("400"), None, None, None]),
-            row(&[Some("1"), Some("0"), Some("SORT"), Some("ORDER BY"), None, None, Some("5"), Some("400"), None, None, None]),
-            row(&[Some("2"), Some("1"), Some("TABLE ACCESS"), Some("FULL"), Some("APP"), Some("ORDERS"), Some("4"), Some("400"), None, None, Some("\"STATUS\"='paid'")]),
+            row(&[
+                Some("0"),
+                None,
+                Some("SELECT STATEMENT"),
+                None,
+                None,
+                None,
+                Some("5"),
+                Some("400"),
+                None,
+                None,
+                None,
+            ]),
+            row(&[
+                Some("1"),
+                Some("0"),
+                Some("SORT"),
+                Some("ORDER BY"),
+                None,
+                None,
+                Some("5"),
+                Some("400"),
+                None,
+                None,
+                None,
+            ]),
+            row(&[
+                Some("2"),
+                Some("1"),
+                Some("TABLE ACCESS"),
+                Some("FULL"),
+                Some("APP"),
+                Some("ORDERS"),
+                Some("4"),
+                Some("400"),
+                None,
+                None,
+                Some("\"STATUS\"='paid'"),
+            ]),
         ];
         let root = tree(&rows).unwrap();
         assert_eq!(root.label, "SELECT STATEMENT");
         let scan = &root.children[0].children[0];
-        assert_eq!((scan.label.as_str(), scan.detail.as_deref(), scan.rows), ("TABLE ACCESS FULL", Some("APP.ORDERS"), Some(400.0)));
+        assert_eq!(
+            (scan.label.as_str(), scan.detail.as_deref(), scan.rows),
+            ("TABLE ACCESS FULL", Some("APP.ORDERS"), Some(400.0))
+        );
         assert!(scan.props.iter().any(|(k, _)| k == "Filter"));
     }
 }

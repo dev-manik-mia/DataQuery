@@ -29,7 +29,7 @@ fn install_crypto_provider() {
     });
 }
 
-fn config(params: &ConnectParams, database: Option<&str>) -> DbResult<Config> {
+fn config(params: &ConnectParams, database: Option<&str>) -> Config {
     let c = &params.config;
     let mut config = Config::new();
     config.host(&c.host);
@@ -61,11 +61,16 @@ fn config(params: &ConnectParams, database: Option<&str>) -> DbResult<Config> {
         // The certificate chain and the host name are both checked.
         SslMode::VerifyCa | SslMode::VerifyFull => config.encryption(EncryptionLevel::Required),
     }
-    Ok(config)
+    config
 }
 
 /// Opens one connection to `database` (the profile's database when `None`).
+/// The TDS handshake future is large, so it lives on the heap.
 pub async fn open(params: &ConnectParams, database: Option<&str>) -> DbResult<Conn> {
+    Box::pin(open_inner(params, database)).await
+}
+
+async fn open_inner(params: &ConnectParams, database: Option<&str>) -> DbResult<Conn> {
     install_crypto_provider();
     let c = &params.config;
     let timeout = Duration::from_secs(u64::from(c.connect_timeout_secs));
@@ -82,7 +87,7 @@ pub async fn open(params: &ConnectParams, database: Option<&str>) -> DbResult<Co
             let idle = Duration::from_secs(u64::from(c.options.keepalive_secs));
             let _ = socket2::SockRef::from(&tcp).set_tcp_keepalive(&socket2::TcpKeepalive::new().with_time(idle));
         }
-        let mut client = Client::connect(config(params, database)?, tcp.compat_write()).await.map_err(err)?;
+        let mut client = Box::pin(Client::connect(config(params, database), tcp.compat_write())).await.map_err(err)?;
         client.simple_query(SESSION_SETUP).await.map_err(err)?.into_results().await.map_err(err)?;
         Ok::<_, DbError>(client)
     };
@@ -128,7 +133,11 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
         engine: config.engine,
         version: format!("{} {version}", product.trim_end()),
         latency_ms: started.elapsed().as_millis() as u64,
-        tls: encrypted.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+        tls: encrypted.then(|| TlsInfo {
+            version: None,
+            verified: config.ssl_mode.verifies_chain(),
+            mode: config.ssl_mode,
+        }),
         user: row.text(2).unwrap_or_default(),
         database: row.text(3).unwrap_or_default(),
         read_only: config.read_only || row.text(5).is_some_and(|u| u == "READ_ONLY"),
