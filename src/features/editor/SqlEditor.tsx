@@ -6,10 +6,14 @@ import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, placeholder } from '@codemirror/view';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
+import type { SchemaModel } from '@/bindings/SchemaModel';
+import type { Snippet } from '@/bindings/Snippet';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import { api } from '@/lib/ipc';
+import { codeMirrorKey, shortcutLabel } from '@/lib/platform';
 import { statementAt } from '@/lib/sql';
 
+import { bookmarkedLines, bookmarkGutter, jumpToBookmark, setBookmarks, toggleBookmarkAt } from './bookmarks';
 import { useEditorStatus } from './editorStatus';
 import { sqlLanguage } from './language';
 import { currentStatement, errorField, setErrorAt, setStatements, statementsField } from './statements';
@@ -21,11 +25,31 @@ export interface RunTarget {
   base: number;
 }
 
+export interface StatementTarget extends RunTarget {
+  /** Values the statement needs for `$n` / `?` placeholders. */
+  paramCount: number;
+}
+
 export interface SqlEditorHandle {
   /** Selection if any, else the statement at the cursor. */
-  statementTarget: () => Promise<RunTarget | null>;
+  statementTarget: () => Promise<StatementTarget | null>;
   scriptTarget: () => RunTarget;
   focus: () => void;
+  toggleBookmark: () => void;
+  jumpBookmark: (direction: 1 | -1) => void;
+  /** Inserts text at the cursor (replacing the selection). */
+  insert: (text: string) => void;
+}
+
+/** Shortcuts the editor handles itself, in `mod+enter` form. */
+export interface EditorKeys {
+  runStatement?: string;
+  runScript?: string;
+  explain?: string;
+  save?: string;
+  bookmark?: string;
+  nextBookmark?: string;
+  prevBookmark?: string;
 }
 
 interface SqlEditorProps {
@@ -33,23 +57,45 @@ interface SqlEditorProps {
   flavor: SqlFlavor;
   errorAt: number | null;
   active: boolean;
+  keys: EditorKeys;
+  model: SchemaModel | null;
+  snippets: Snippet[];
+  bookmarks: number[];
   onChange: (value: string) => void;
+  onBookmarks: (lines: number[]) => void;
   onRunStatement: () => void;
   onRunScript: () => void;
+  onExplain: () => void;
   onSave: () => void;
 }
 
 const ANALYZE_DELAY_MS = 150;
 
+function editorKeymap(keys: EditorKeys, callbacks: React.RefObject<Pick<SqlEditorProps, 'onRunStatement' | 'onRunScript' | 'onExplain' | 'onSave'>>) {
+  const bind = (shortcut: string | undefined, run: (v: EditorView) => boolean) => (shortcut ? [{ key: codeMirrorKey(shortcut), run, preventDefault: true }] : []);
+  return Prec.highest(
+    keymap.of([
+      ...bind(keys.runStatement, (v) => (closeCompletion(v), callbacks.current.onRunStatement(), true)),
+      ...bind(keys.runScript, (v) => (closeCompletion(v), callbacks.current.onRunScript(), true)),
+      ...bind(keys.explain, () => (callbacks.current.onExplain(), true)),
+      ...bind(keys.save, () => (callbacks.current.onSave(), true)),
+      ...bind(keys.bookmark, (v) => (v.dispatch({ effects: toggleBookmarkAt.of(v.state.selection.main.head) }), true)),
+      ...bind(keys.nextBookmark, (v) => jumpToBookmark(v, 1)),
+      ...bind(keys.prevBookmark, (v) => jumpToBookmark(v, -1)),
+    ]),
+  );
+}
+
 export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor(
-  { value, flavor, errorAt, active, onChange, onRunStatement, onRunScript, onSave },
+  { value, flavor, errorAt, active, keys, model, snippets, bookmarks, onChange, onBookmarks, onRunStatement, onRunScript, onExplain, onSave },
   ref,
 ) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
-  const callbacks = useRef({ onChange, onRunStatement, onRunScript, onSave });
-  callbacks.current = { onChange, onRunStatement, onRunScript, onSave };
+  const callbacks = useRef({ onChange, onBookmarks, onRunStatement, onRunScript, onExplain, onSave });
+  callbacks.current = { onChange, onBookmarks, onRunStatement, onRunScript, onExplain, onSave };
   const language = useRef(new Compartment());
+  const keyCompartment = useRef(new Compartment());
   const analyzeTimer = useRef<number>(undefined);
 
   const analyze = async (doc: string) => {
@@ -59,17 +105,11 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
   };
 
   useEffect(() => {
-    const runKeys = Prec.highest(
-      keymap.of([
-        { key: 'Mod-Enter', run: (v) => (closeCompletion(v), callbacks.current.onRunStatement(), true) },
-        { key: 'Shift-Mod-Enter', run: (v) => (closeCompletion(v), callbacks.current.onRunScript(), true) },
-        { key: 'Mod-s', run: () => (callbacks.current.onSave(), true), preventDefault: true },
-      ]),
-    );
     const state = EditorState.create({
       doc: value,
       extensions: [
-        runKeys,
+        keyCompartment.current.of(editorKeymap(keys, callbacks)),
+        bookmarkGutter,
         lineNumbers(),
         highlightActiveLineGutter(),
         highlightSpecialChars(),
@@ -82,15 +122,20 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
         highlightSelectionMatches(),
         search({ top: true }),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
-        language.current.of(sqlLanguage(flavor)),
+        language.current.of(sqlLanguage(flavor, model, snippets)),
         sqlHighlight,
         editorTheme,
-        placeholder('Write SQL here. ⌘↵ runs the statement at the cursor.'),
+        placeholder(`Write SQL here. ${keys.runStatement ? shortcutLabel(keys.runStatement) : 'Run statement'} runs the statement at the cursor.`),
         statementsField,
         currentStatement,
         errorField,
         EditorView.contentAttributes.of({ 'aria-label': 'SQL editor', spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' }),
         EditorView.updateListener.of((u) => {
+          if (u.docChanged || u.transactions.some((tr) => tr.effects.some((e) => e.is(toggleBookmarkAt) || e.is(setBookmarks)))) {
+            const lines = bookmarkedLines(u.state);
+            const before = bookmarkedLines(u.startState);
+            if (lines.join() !== before.join()) callbacks.current.onBookmarks(lines);
+          }
           if (u.docChanged) {
             const doc = u.state.doc.toString();
             callbacks.current.onChange(doc);
@@ -106,6 +151,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       ],
     });
     view.current = new EditorView({ state, parent: host.current! });
+    view.current.dispatch({ effects: setBookmarks.of(bookmarks) });
     void analyze(value);
     return () => {
       window.clearTimeout(analyzeTimer.current);
@@ -123,8 +169,14 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
   }, [value]);
 
   useEffect(() => {
-    view.current?.dispatch({ effects: language.current.reconfigure(sqlLanguage(flavor)) });
-  }, [flavor]);
+    view.current?.dispatch({ effects: language.current.reconfigure(sqlLanguage(flavor, model, snippets)) });
+  }, [flavor, model, snippets]);
+
+  const keySignature = JSON.stringify(keys);
+  useEffect(() => {
+    view.current?.dispatch({ effects: keyCompartment.current.reconfigure(editorKeymap(keys, callbacks)) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keySignature]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: setErrorAt.of(errorAt) });
@@ -142,14 +194,31 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       const v = view.current;
       if (!v) return null;
       const sel = v.state.selection.main;
-      if (!sel.empty) return { sql: v.state.sliceDoc(sel.from, sel.to), base: sel.from };
       const doc = v.state.doc.toString();
+      if (!sel.empty) {
+        const text = v.state.sliceDoc(sel.from, sel.to);
+        const parts = await api.analyzeSql(text, flavor).catch(() => []);
+        return { sql: text, base: sel.from, paramCount: parts.length === 1 ? (parts[0]?.param_count ?? 0) : 0 };
+      }
       const statements = await analyze(doc);
       const target = statementAt(statements, sel.head);
-      return target ? { sql: doc.slice(target.from, target.to), base: target.from } : null;
+      return target ? { sql: doc.slice(target.from, target.to), base: target.from, paramCount: target.param_count } : null;
     },
     scriptTarget: () => ({ sql: view.current?.state.doc.toString() ?? '', base: 0 }),
     focus: () => view.current?.focus(),
+    toggleBookmark: () => {
+      const v = view.current;
+      if (v) v.dispatch({ effects: toggleBookmarkAt.of(v.state.selection.main.head) });
+    },
+    jumpBookmark: (direction) => {
+      if (view.current) jumpToBookmark(view.current, direction);
+    },
+    insert: (text) => {
+      const v = view.current;
+      if (!v) return;
+      v.dispatch(v.state.replaceSelection(text));
+      v.focus();
+    },
   }));
 
   return <div ref={host} style={{ height: '100%', overflow: 'hidden' }} />;

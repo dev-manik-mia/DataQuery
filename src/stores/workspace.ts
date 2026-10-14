@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import type { Cell } from '@/bindings/Cell';
 import type { ColumnMeta } from '@/bindings/ColumnMeta';
+import type { ColumnValue } from '@/bindings/ColumnValue';
 import type { DbError } from '@/bindings/DbError';
 import type { ExplainResult } from '@/bindings/ExplainResult';
 import type { ObjectRef } from '@/bindings/ObjectRef';
@@ -81,6 +82,8 @@ export interface TableTab {
   title: string;
   object: ObjectRef;
   view: TableView;
+  /** Exact-match filter, e.g. from foreign-key navigation. */
+  matches?: ColumnValue[];
 }
 
 /** A schema (or MySQL database) as a whole: ER diagram or framework migrations. */
@@ -148,7 +151,8 @@ interface WorkspaceState {
   reconnect: () => Promise<void>;
   disconnect: () => Promise<void>;
   openQueryTab: (options?: OpenQueryOptions) => string;
-  openTableTab: (object: ObjectRef, view?: TableView) => void;
+  openTableTab: (object: ObjectRef, view?: TableView, matches?: ColumnValue[]) => void;
+  setTableMatches: (id: string, matches: ColumnValue[] | undefined) => void;
   openContainerTab: (kind: ContainerTab['kind'], database: string, schema: string | null) => void;
   openMonitorTab: () => void;
   toggleSplit: () => void;
@@ -347,18 +351,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       return tab.id;
     },
 
-    openTableTab: (object, view = 'data') => {
+    openTableTab: (object, view = 'data', matches) => {
       // Indexes, functions and other non-relations only have a definition.
       const shown: TableView = object.kind === 'table' || object.kind === 'view' || object.kind === 'materialized_view' ? view : 'ddl';
       const existing = get().tabs.find((t): t is TableTab => t.kind === 'table' && sameObject(t.object, object));
       if (existing) {
         showTab(existing.id);
         if (existing.view !== shown) get().setTableView(existing.id, shown);
+        if (matches) get().setTableMatches(existing.id, matches);
         return;
       }
-      const tab: TableTab = { id: uid('tab'), kind: 'table', title: object.name, object, view: shown };
+      const tab: TableTab = { id: uid('tab'), kind: 'table', title: object.name, object, view: shown, matches };
       addTab(tab);
     },
+
+    setTableMatches: (id, matches) => patchTab(id, (t) => (t.kind === 'table' ? { ...t, matches } : t)),
 
     openContainerTab: (kind, database, schema) => {
       const existing = get().tabs.find((t): t is ContainerTab => t.kind === kind && t.database === database && t.schema === schema);

@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 
 import { Button, Dialog, TextField } from '@/components/ui';
+import { ExportDialog } from '@/features/transfer/ExportDialog';
+import { useExportRequest } from '@/features/transfer/exportData';
 import { useUi } from '@/stores/ui';
 
 import styles from './Shell.module.css';
@@ -91,8 +93,10 @@ function QuestionDialog() {
 }
 
 export function GlobalDialogs() {
+  const exporting = useExportRequest((s) => s.request);
   return (
     <>
+      {exporting && <ExportDialog key={exporting.baseName + exporting.format} />}
       <ConfirmationDialog />
       <QuestionDialog />
     </>

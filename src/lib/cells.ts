@@ -79,3 +79,59 @@ export function cellFromInput(value: string | null, like: Cell | undefined): Cel
       return { kind: 'text', value };
   }
 }
+
+/** Columns whose names contain one of the sensitive patterns are masked until revealed. */
+export function isSensitiveColumn(name: string, patterns: readonly string[]): boolean {
+  const n = name.toLowerCase();
+  return patterns.some((p) => p && n.includes(p.toLowerCase()));
+}
+
+export const MASK = '••••••';
+
+/**
+ * Parses text pasted from a spreadsheet: tab-separated rows (Excel, Numbers,
+ * Google Sheets), with quoted fields that may contain tabs and newlines.
+ */
+export function parseClipboardGrid(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  const input = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i]!;
+    if (quoted) {
+      if (ch === '"' && input[i + 1] === '"') {
+        field += '"';
+        i += 1;
+      } else if (ch === '"') quoted = false;
+      else field += ch;
+    } else if (ch === '"' && field === '') quoted = true;
+    else if (ch === '\t') {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else field += ch;
+  }
+  row.push(field);
+  rows.push(row);
+  return rows;
+}
+
+/** Classic hex dump: offset, 16 bytes in hex, then printable ASCII. */
+export function hexDump(hex: string, maxBytes = 64 * 1024): string {
+  const bytes = Math.min(hex.length / 2, maxBytes);
+  const lines: string[] = [];
+  for (let offset = 0; offset < bytes; offset += 16) {
+    const chunk: number[] = [];
+    for (let i = offset; i < Math.min(offset + 16, bytes); i += 1) chunk.push(parseInt(hex.slice(i * 2, i * 2 + 2), 16));
+    const hexPart = chunk.map((b) => b.toString(16).padStart(2, '0')).join(' ').padEnd(47, ' ');
+    const ascii = chunk.map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
+    lines.push(`${offset.toString(16).padStart(8, '0')}  ${hexPart}  ${ascii}`);
+  }
+  return lines.join('\n');
+}

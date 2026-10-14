@@ -4,10 +4,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardE
 import type { Cell } from '@/bindings/Cell';
 import type { ExportFormat } from '@/bindings/ExportFormat';
 import { Icon, Menu, type MenuEntry } from '@/components/ui';
-import { cellText, isTruncated } from '@/lib/cells';
+import { cellText, isSensitiveColumn, isTruncated, MASK, parseClipboardGrid } from '@/lib/cells';
 import { copyText, serializeRows, type CopyFormat } from '@/lib/clipboard';
 import { isMac, shortcutLabel } from '@/lib/platform';
 import { exportData } from '@/features/transfer/exportData';
+import { useSettings } from '@/stores/settings';
 import { useUi } from '@/stores/ui';
 
 import { CellInspector } from './CellInspector';
@@ -36,10 +37,28 @@ export interface CellPosition {
   col: number;
 }
 
+/** A link from a foreign-key cell to the referenced row. */
+export interface ForeignKeyLink {
+  title: string;
+  open: (row: number) => void;
+}
+
 interface DataGridProps {
   label: string;
   columns: GridColumn[];
   rows: GridRow[];
+  /** Server-side per-column search (table view). Without it, column search filters the loaded rows. */
+  onColumnSearch?: (searches: Record<string, string>) => void;
+  /** Column index → link to the referenced row. */
+  foreignKeys?: ReadonlyMap<number, ForeignKeyLink>;
+  /** Full value of a cell for the viewer (the grid holds a bounded preview). */
+  onLoadCell?: (row: number, col: number) => Promise<Cell>;
+  /** Saves a cell's complete value to a file. */
+  onSaveCell?: (row: number, col: number) => void;
+  /** Pasted spreadsheet cells, starting at a position. */
+  onPaste?: (at: CellPosition, values: string[][]) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
   /** Added to the row number, for paged views. */
   rowOffset?: number;
   editable?: boolean;
@@ -83,8 +102,17 @@ export function DataGrid({
   extraMenu,
   onDeleteRows,
   emptyText = 'No rows.',
+  onColumnSearch,
+  foreignKeys,
+  onLoadCell,
+  onSaveCell,
+  onPaste,
+  onUndo,
+  onRedo,
 }: DataGridProps) {
   const toast = useUi((s) => s.toast);
+  const maskEnabled = useSettings((s) => s.settings.mask_columns);
+  const maskPatterns = useSettings((s) => s.settings.mask_patterns);
   const scroller = useRef<HTMLDivElement>(null);
   const signature = columns.map((c) => c.name).join('\u0000');
   const [widths, setWidths] = useState<number[]>(() => columns.map(initialWidth));
@@ -96,6 +124,12 @@ export function DataGrid({
   const [inspect, setInspect] = useState<CellPosition | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; at: CellPosition } | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
+  const [pinned, setPinned] = useState<number[]>([]);
+  const [revealed, setRevealed] = useState<Set<number>>(new Set());
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searches, setSearches] = useState<Record<number, string>>({});
+  const [headMenu, setHeadMenu] = useState<{ x: number; y: number; col: number } | null>(null);
 
   const selection = controlledSelection ?? ownSelection;
   const setSelection = useCallback((next: Set<number>) => (onSelectRows ? onSelectRows(next) : setOwnSelection(next)), [onSelectRows]);
@@ -106,13 +140,54 @@ export function DataGrid({
     setOrder(columns.map((_, i) => i));
     setActive(null);
     setEditing(null);
+    setHidden(new Set());
+    setPinned([]);
+    setRevealed(new Set());
+    setSearches({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
 
-  const template = useMemo(() => `${NUMBER_WIDTH}px ${order.map((i) => `${widths[i] ?? 120}px`).join(' ')}`, [order, widths]);
-  const totalWidth = NUMBER_WIDTH + order.reduce((sum, i) => sum + (widths[i] ?? 120), 0);
+  /** Sensitive columns show a mask until revealed (Settings → Security). */
+  const masked = useMemo(
+    () => new Set(maskEnabled ? columns.flatMap((c, i) => (isSensitiveColumn(c.name, maskPatterns) && !revealed.has(i) ? [i] : [])) : []),
+    [columns, maskEnabled, maskPatterns, revealed],
+  );
 
-  const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: 16 });
+  /** On-screen order: pinned columns first, hidden ones left out. */
+  const visible = useMemo(() => [...pinned.filter((c) => !hidden.has(c)), ...order.filter((c) => !pinned.includes(c) && !hidden.has(c))], [order, pinned, hidden]);
+
+  /** Sticky offsets of pinned columns. */
+  const pinLeft = useMemo(() => {
+    const left = new Map<number, number>();
+    let x = NUMBER_WIDTH;
+    for (const c of visible) {
+      if (!pinned.includes(c)) break;
+      left.set(c, x);
+      x += widths[c] ?? 120;
+    }
+    return left;
+  }, [visible, pinned, widths]);
+
+  // Client-side column search for results the grid already holds.
+  const shownRows = useMemo(() => {
+    const active = Object.entries(searches).filter(([, v]) => v.trim());
+    if (onColumnSearch || !active.length) return rows.map((_, i) => i);
+    return rows.flatMap((r, i) =>
+      active.every(([c, v]) => (cellText(r.cells[Number(c)] ?? { kind: 'null' }) ?? 'null').toLowerCase().includes(v.trim().toLowerCase())) ? [i] : [],
+    );
+  }, [rows, searches, onColumnSearch]);
+
+  useEffect(() => {
+    if (!onColumnSearch) return;
+    const timer = window.setTimeout(() => onColumnSearch(Object.fromEntries(Object.entries(searches).map(([c, v]) => [columns[Number(c)]?.name ?? '', v]))), 350);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searches]);
+
+  const template = useMemo(() => `${NUMBER_WIDTH}px ${visible.map((i) => `${widths[i] ?? 120}px`).join(' ')}`, [visible, widths]);
+  const totalWidth = NUMBER_WIDTH + visible.reduce((sum, i) => sum + (widths[i] ?? 120), 0);
+
+  const virtualizer = useVirtualizer({ count: shownRows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: 16 });
 
   const headers = columns.map((c) => c.name);
 
@@ -121,20 +196,25 @@ export function DataGrid({
     toast(`${what} copied`);
   };
 
-  /** Cells of the given rows, in on-screen column order. */
-  const pickRows = (indexes: number[]) => indexes.map((i) => order.map((c) => rows[i]?.cells[c] ?? ({ kind: 'null' } as Cell)));
+  const maskCell = (cell: Cell, col: number): Cell => (masked.has(col) && cell.kind !== 'null' ? { kind: 'text', value: MASK } : cell);
+
+  /** Cells of the given rows, in on-screen column order; masked values stay masked. */
+  const pickRows = (indexes: number[], mask = true) =>
+    indexes.map((i) => visible.map((c) => (mask ? maskCell : (x: Cell) => x)(rows[i]?.cells[c] ?? ({ kind: 'null' } as Cell), c)));
 
   const copyRows = (indexes: number[], format: CopyFormat) => {
-    void copy(serializeRows(order.map((c) => headers[c] ?? ''), pickRows(indexes), format), indexes.length === 1 ? 'Row' : `${indexes.length} rows`);
+    void copy(serializeRows(visible.map((c) => headers[c] ?? ''), pickRows(indexes), format), indexes.length === 1 ? 'Row' : `${indexes.length} rows`);
   };
 
   const exportRows = (indexes: number[], format: ExportFormat) => {
-    const meta = order.map((c) => ({ name: columns[c]?.name ?? '', type_name: columns[c]?.typeName ?? '', numeric: columns[c]?.numeric ?? false }));
-    void exportData({ type: 'rows', columns: meta, rows: pickRows(indexes) }, format, `${label} selection`);
+    const meta = visible.map((c) => ({ name: columns[c]?.name ?? '', type_name: columns[c]?.typeName ?? '', numeric: columns[c]?.numeric ?? false }));
+    exportData({ type: 'rows', columns: meta, rows: pickRows(indexes, false) }, format, `${label} selection`);
   };
 
+  const valueText = (row: number, col: number) => cellText(maskCell(rows[row]?.cells[col] ?? { kind: 'null' }, col));
+
   const copyColumn = (col: number) => {
-    const values = rows.map((r) => cellText(r.cells[col] ?? { kind: 'null' }) ?? '');
+    const values = shownRows.map((i) => valueText(i, col) ?? '');
     void copy(values.join('\n'), 'Column');
   };
 
@@ -168,13 +248,14 @@ export function DataGrid({
   };
 
   const moveActive = (dRow: number, dCol: number) => {
-    if (!rows.length || !columns.length) return;
-    const current = active ?? { row: 0, col: order[0] ?? 0 };
-    const pos = order.indexOf(current.col);
-    const row = Math.max(0, Math.min(rows.length - 1, current.row + dRow));
-    const col = order[Math.max(0, Math.min(order.length - 1, pos + dCol))] ?? current.col;
+    if (!shownRows.length || !visible.length) return;
+    const current = active ?? { row: shownRows[0] ?? 0, col: visible[0] ?? 0 };
+    const pos = visible.indexOf(current.col);
+    const display = Math.max(0, Math.min(shownRows.length - 1, shownRows.indexOf(current.row) + dRow));
+    const row = shownRows[display] ?? current.row;
+    const col = visible[Math.max(0, Math.min(visible.length - 1, pos + dCol))] ?? current.col;
     setActive({ row, col });
-    virtualizer.scrollToIndex(row, { align: 'auto' });
+    virtualizer.scrollToIndex(display, { align: 'auto' });
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -202,10 +283,17 @@ export function DataGrid({
     } else if (mod && e.key.toLowerCase() === 'c') {
       e.preventDefault();
       if (selection.size > 0) copyRows([...selection].sort((a, b) => a - b), 'tsv');
-      else if (active) void copy(cellText(rows[active.row]?.cells[active.col] ?? { kind: 'null' }) ?? '', 'Value');
+      else if (active) void copy(valueText(active.row, active.col) ?? '', 'Value');
+    } else if (mod && e.key.toLowerCase() === 'z' && onUndo) {
+      e.preventDefault();
+      if (e.shiftKey) onRedo?.();
+      else onUndo();
+    } else if (mod && e.key.toLowerCase() === 'y' && onRedo) {
+      e.preventDefault();
+      onRedo();
     } else if (mod && e.key.toLowerCase() === 'a') {
       e.preventDefault();
-      setSelection(new Set(rows.map((_, i) => i)));
+      setSelection(new Set(shownRows));
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && editable && selection.size > 0) {
       e.preventDefault();
       onDeleteRows?.();
@@ -276,13 +364,29 @@ export function DataGrid({
             { label: `Copy ${many.length} rows as TSV`, onSelect: () => copyRows(many, 'tsv') },
             { label: `Copy ${many.length} rows as CSV`, onSelect: () => copyRows(many, 'csv') },
             { label: `Copy ${many.length} rows as JSON`, onSelect: () => copyRows(many, 'json') },
-            { label: `Export ${many.length} rows as CSV…`, onSelect: () => exportRows(many, 'csv') },
-            { label: `Export ${many.length} rows as JSON…`, onSelect: () => exportRows(many, 'json') },
+            { label: `Export ${many.length} rows…`, onSelect: () => exportRows(many, 'csv') },
           ]
         : []),
       { type: 'separator' },
       { label: 'Inspect value…', hint: 'Space', onSelect: () => setInspect(at) },
+      ...(foreignKeys?.has(at.col) && cell.kind !== 'null' ? [{ label: foreignKeys.get(at.col)!.title, onSelect: () => foreignKeys.get(at.col)!.open(at.row) }] : []),
+      ...(onSaveCell && (cell.kind === 'binary' || isTruncated(cell)) ? [{ label: 'Save value to file…', onSelect: () => onSaveCell(at.row, at.col) }] : []),
       ...(extraMenu?.(at) ?? []),
+    ];
+  };
+
+  const headActions = (col: number): MenuEntry[] => {
+    const name = columns[col]?.name ?? '';
+    const sensitive = maskEnabled && isSensitiveColumn(name, maskPatterns);
+    return [
+      { label: pinned.includes(col) ? 'Unpin column' : 'Pin column', onSelect: () => setPinned((p) => (p.includes(col) ? p.filter((c) => c !== col) : [...p, col])) },
+      { label: 'Hide column', disabled: visible.length <= 1, onSelect: () => setHidden((h) => new Set([...h, col])) },
+      ...(hidden.size ? [{ label: `Show all columns (${hidden.size} hidden)`, onSelect: () => setHidden(new Set()) }] : []),
+      { type: 'separator' },
+      { label: searchOpen ? 'Hide column search' : 'Search in columns', onSelect: () => setSearchOpen((o) => !o) },
+      { label: 'Fit width to content', onSelect: () => autosize(col) },
+      { label: 'Copy column', onSelect: () => copyColumn(col) },
+      ...(sensitive ? [{ type: 'separator' as const }, { label: revealed.has(col) ? 'Mask values' : 'Reveal values', onSelect: () => setRevealed((r) => (r.has(col) ? new Set([...r].filter((c) => c !== col)) : new Set([...r, col]))) }] : []),
     ];
   };
 
@@ -290,6 +394,7 @@ export function DataGrid({
 
   const items = virtualizer.getVirtualItems();
   const inspected = inspect && rows[inspect.row]?.cells[inspect.col];
+  const searching = Object.values(searches).some((v) => v.trim());
 
   return (
     <>
@@ -300,20 +405,34 @@ export function DataGrid({
         role="grid"
         aria-label={label}
         aria-rowcount={rows.length + 1}
-        aria-colcount={columns.length}
+        aria-colcount={visible.length}
         onKeyDown={onKeyDown}
+        onPaste={(e) => {
+          if (!onPaste || !active || editing) return;
+          const text = e.clipboardData.getData('text/plain');
+          if (!text) return;
+          e.preventDefault();
+          onPaste(active, parseClipboardGrid(text));
+        }}
       >
         <div className={styles.header} style={{ gridTemplateColumns: template, width: totalWidth }} role="row">
           <div className={`${styles.headCell} ${styles.cornerCell}`} role="columnheader" aria-label="Row number" />
-          {order.map((ci) => {
+          {visible.map((ci) => {
             const c = columns[ci]!;
             const sorted = sort?.column === c.name;
+            const left = pinLeft.get(ci);
             return (
               <div
                 key={c.name + ci}
                 role="columnheader"
                 aria-sort={sorted ? (sort?.descending ? 'descending' : 'ascending') : undefined}
                 className={styles.headCell}
+                data-pinned={left !== undefined}
+                style={left !== undefined ? { position: 'sticky', left, zIndex: 3 } : undefined}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setHeadMenu({ x: e.clientX, y: e.clientY, col: ci });
+                }}
                 data-numeric={c.numeric}
                 data-sortable={Boolean(onSort)}
                 data-dragover={dragOver === ci}
@@ -333,8 +452,11 @@ export function DataGrid({
                 }}
               >
                 <span className={styles.headName}>
+                  {pinned.includes(ci) && <Icon name="pin" size={10} />}
                   <span className="ellipsis">{c.name}</span>
                   {sorted && <Icon name={sort?.descending ? 'arrowDown' : 'arrowUp'} size={11} />}
+                  {masked.has(ci) && <Icon name="eyeOff" size={11} title="Masked: right-click to reveal" />}
+                  {foreignKeys?.has(ci) && <Icon name="link" size={11} title={foreignKeys.get(ci)!.title} />}
                 </span>
                 <span className={styles.headType}>{c.typeName}</span>
                 <span
@@ -351,40 +473,67 @@ export function DataGrid({
               </div>
             );
           })}
+          {searchOpen && (
+            <>
+              <div className={`${styles.searchCell} ${styles.cornerCell}`}>
+                <Icon name="search" size={11} />
+              </div>
+              {visible.map((ci) => {
+                const left = pinLeft.get(ci);
+                return (
+                  <div key={`search-${ci}`} className={styles.searchCell} style={left !== undefined ? { position: 'sticky', left, zIndex: 3 } : undefined}>
+                    <input
+                      className={styles.searchInput}
+                      aria-label={`Search ${columns[ci]?.name}`}
+                      placeholder="contains…"
+                      value={searches[ci] ?? ''}
+                      onChange={(e) => setSearches((s) => ({ ...s, [ci]: e.target.value }))}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
-        {rows.length === 0 ? (
-          <div className={styles.empty}>{emptyText}</div>
+        {shownRows.length === 0 ? (
+          <div className={styles.empty}>{searching && !onColumnSearch ? 'No loaded rows match the column search.' : emptyText}</div>
         ) : (
           <div className={styles.body} style={{ height: virtualizer.getTotalSize(), width: totalWidth }}>
-            {items.map((item) => (
+            {items.map((item) => {
+              const index = shownRows[item.index]!;
+              return (
               <GridRowView
-                key={rows[item.index]!.key}
-                index={item.index}
+                key={rows[index]!.key}
+                index={index}
                 top={item.start}
-                row={rows[item.index]!}
-                number={rowOffset + item.index + 1}
-                order={order}
+                row={rows[index]!}
+                number={rowOffset + index + 1}
+                order={visible}
+                pinLeft={pinLeft}
+                masked={masked}
+                foreignKeys={foreignKeys}
                 columns={columns}
                 template={template}
                 width={totalWidth}
-                selected={selection.has(item.index)}
-                activeCol={active?.row === item.index ? active.col : null}
-                editing={editing?.row === item.index ? editing : null}
+                selected={selection.has(index)}
+                activeCol={active?.row === index ? active.col : null}
+                editing={editing?.row === index ? editing : null}
                 onCellMouseDown={(col) => {
-                  setActive({ row: item.index, col });
+                  setActive({ row: index, col });
                   if (selection.size) setSelection(new Set());
                 }}
                 onCellDoubleClick={(col) => {
-                  const at = { row: item.index, col };
-                  if (!startEdit(at)) setInspect(at);
+                  const at = { row: index, col };
+                  if (masked.has(col) || !startEdit(at)) setInspect(at);
                 }}
                 onCellContextMenu={(e, col) => {
                   e.preventDefault();
-                  const at = { row: item.index, col };
+                  const at = { row: index, col };
                   setActive(at);
                   setMenu({ x: e.clientX, y: e.clientY, at });
                 }}
-                onNumberClick={(e) => onRowNumberClick(e, item.index)}
+                onNumberClick={(e) => onRowNumberClick(e, index)}
                 onEditChange={(value) => setEditing((ed) => (ed ? { ...ed, value } : ed))}
                 onEditCommit={commitEdit}
                 onEditCancel={() => {
@@ -396,13 +545,27 @@ export function DataGrid({
                   moveActive(0, 1);
                 }}
               />
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
       {menu && <Menu x={menu.x} y={menu.y} items={menuItems(menu.at)} onClose={() => setMenu(null)} label="Cell actions" />}
+      {headMenu && <Menu x={headMenu.x} y={headMenu.y} items={headActions(headMenu.col)} onClose={() => setHeadMenu(null)} label="Column actions" />}
       {inspect && inspected && (
-        <CellInspector column={columns[inspect.col]?.name ?? ''} typeName={columns[inspect.col]?.typeName ?? ''} cell={inspected} onClose={() => setInspect(null)} />
+        <CellInspector
+          column={columns[inspect.col]?.name ?? ''}
+          typeName={columns[inspect.col]?.typeName ?? ''}
+          cell={maskCell(inspected, inspect.col)}
+          load={onLoadCell && !masked.has(inspect.col) ? () => onLoadCell(inspect.row, inspect.col) : undefined}
+          onSaveFile={onSaveCell ? () => onSaveCell(inspect.row, inspect.col) : undefined}
+          onEdit={
+            editable && onEditCell && canEdit(columns[inspect.col], rows[inspect.row]) && !masked.has(inspect.col)
+              ? (value) => onEditCell(inspect.row, inspect.col, value)
+              : undefined
+          }
+          onClose={() => setInspect(null)}
+        />
       )}
     </>
   );
@@ -414,6 +577,9 @@ interface GridRowViewProps {
   row: GridRow;
   number: number;
   order: number[];
+  pinLeft: ReadonlyMap<number, number>;
+  masked: ReadonlySet<number>;
+  foreignKeys?: ReadonlyMap<number, ForeignKeyLink>;
   columns: GridColumn[];
   template: string;
   width: number;
@@ -443,18 +609,22 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
       data-status={p.row.status}
       style={{ top: p.top, gridTemplateColumns: p.template, width: p.width }}
     >
-      <div className={`${styles.cell} ${styles.rowNumber}`} role="rowheader" onClick={p.onNumberClick}>
+      <div className={`${styles.cell} ${styles.rowNumber}`} role="rowheader" onClick={p.onNumberClick} onMouseDown={(e) => e.preventDefault()}>
         {p.row.status ? marker[p.row.status] : p.row.edited?.size ? '●' : p.number}
       </div>
       {p.order.map((ci) => {
         const column = p.columns[ci]!;
         const cell = p.row.cells[ci] ?? ({ kind: 'null' } as Cell);
         const isEditing = p.editing?.col === ci;
+        const left = p.pinLeft.get(ci);
+        const fk = p.foreignKeys?.get(ci);
         return (
           <div
             key={ci}
             role="gridcell"
             className={styles.cell}
+            data-pinned={left !== undefined}
+            style={left !== undefined ? { position: 'sticky', left, zIndex: 1 } : undefined}
             data-numeric={column.numeric}
             data-active={p.activeCol === ci}
             data-edited={p.row.edited?.has(ci) ?? false}
@@ -482,8 +652,27 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
               />
             ) : p.row.defaults?.has(ci) ? (
               <span className={styles.defaultToken}>DEFAULT</span>
+            ) : p.masked.has(ci) && cell.kind !== 'null' ? (
+              <span className={styles.muted}>{MASK}</span>
             ) : (
-              <CellView cell={cell} />
+              <>
+                <CellView cell={cell} />
+                {fk && cell.kind !== 'null' && p.row.status !== 'new' && (
+                  <button
+                    type="button"
+                    className={styles.fkLink}
+                    aria-label={fk.title}
+                    title={fk.title}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fk.open(p.index);
+                    }}
+                  >
+                    <Icon name="external" size={10} />
+                  </button>
+                )}
+              </>
             )}
           </div>
         );

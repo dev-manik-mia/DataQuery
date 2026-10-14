@@ -14,4 +14,8 @@ writes: boolean, destructive: DestructiveReason | null,
 /**
  * Uses `$1` / `?` placeholders.
  */
-has_params: boolean, };
+has_params: boolean, 
+/**
+ * Values the statement needs: the highest `$n`, or the number of `?`.
+ */
+param_count: number, };

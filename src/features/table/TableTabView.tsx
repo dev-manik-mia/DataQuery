@@ -78,7 +78,14 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
       ) : !structure ? (
         <EmptyState title={<Spinner label="Loading" />}>Reading the catalog…</EmptyState>
       ) : tab.view === 'data' ? (
-        <DataView object={tab.object} structure={structure} onReloadStructure={reloadStructure} leading={switcher} />
+        <DataView
+          object={tab.object}
+          structure={structure}
+          onReloadStructure={reloadStructure}
+          leading={switcher}
+          matches={tab.matches ?? []}
+          onClearMatches={() => useWorkspace.getState().setTableMatches(tab.id, undefined)}
+        />
       ) : tab.view === 'structure' ? (
         <StructureView structure={structure} flavor={session.flavor} readOnly={session.server.read_only} onOpenSql={openSql} onChanged={reloadStructure} />
       ) : tab.view === 'dependencies' ? (

@@ -71,6 +71,8 @@ pub struct StatementInfo {
     pub destructive: Option<DestructiveReason>,
     /// Uses `$1` / `?` placeholders.
     pub has_params: bool,
+    /// Values the statement needs: the highest `$n`, or the number of `?`.
+    pub param_count: u32,
 }
 
 impl StatementInfo {
@@ -176,7 +178,21 @@ fn push_statement(src: &str, tokens: &[Token], utf16: &mut Utf16Index, out: &mut
         writes,
         destructive,
         has_params: sig.iter().any(|t| t.kind == TokenKind::Param),
+        param_count: param_count(src, &sig),
     });
+}
+
+fn param_count(src: &str, sig: &[Token]) -> u32 {
+    let params = sig.iter().filter(|t| t.kind == TokenKind::Param).map(|t| t.text(src));
+    let mut questions = 0;
+    let mut highest = 0;
+    for p in params {
+        match p.strip_prefix('$').and_then(|n| n.parse::<u32>().ok()) {
+            Some(n) => highest = highest.max(n),
+            None => questions += 1,
+        }
+    }
+    highest.max(questions)
 }
 
 fn classify(src: &str, sig: &[Token]) -> (StatementKind, bool, Option<DestructiveReason>) {
@@ -449,6 +465,8 @@ mod tests {
 
     #[test]
     fn params_flag() {
+        assert_eq!(one("select * from t where id = $2 or id = $1").param_count, 2);
+        assert_eq!(analyze("select ?, ?, '?'", MY).unwrap().param_count, 2);
         assert!(one("select * from t where id = $1").has_params);
         assert!(!one("select '$1'").has_params);
         assert!(analyze("select ?", MY).unwrap().has_params);

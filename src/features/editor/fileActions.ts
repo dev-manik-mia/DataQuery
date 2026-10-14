@@ -41,7 +41,17 @@ export async function saveTabToFile(tab: QueryTab, saveAs = false): Promise<bool
 export async function saveTabAsScript(tab: QueryTab, name: string): Promise<void> {
   const session = useWorkspace.getState().session;
   try {
-    const script = await api.saveScript({ id: tab.scriptId, name, sql: tab.sql, connection_id: session?.connection.id ?? null });
+    // Keep the folder, tags and pin of an existing script.
+    const existing = tab.scriptId ? (await api.listScripts()).find((s) => s.id === tab.scriptId) : undefined;
+    const script = await api.saveScript({
+      id: existing?.id ?? null,
+      name,
+      sql: tab.sql,
+      connection_id: existing?.connection_id ?? session?.connection.id ?? null,
+      folder: existing?.folder ?? null,
+      tags: existing?.tags ?? [],
+      pinned: existing?.pinned ?? false,
+    });
     useWorkspace.getState().markSaved(tab.id, { scriptId: script.id, title: script.name });
     useUi.getState().toast(`Saved script ${script.name}`, 'positive');
   } catch (e) {

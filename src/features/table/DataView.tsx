@@ -5,14 +5,19 @@ import type { RowCount } from '@/bindings/RowCount';
 import type { SortSpec } from '@/bindings/SortSpec';
 import type { TablePage } from '@/bindings/TablePage';
 import type { TableStructure } from '@/bindings/TableStructure';
-import { Button, Dialog, ErrorAlert, Icon, IconButton, Menu, type MenuEntry } from '@/components/ui';
+import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+
+import type { ColumnInfo } from '@/bindings/ColumnInfo';
+import type { ColumnSearch } from '@/bindings/ColumnSearch';
+import type { ColumnValue } from '@/bindings/ColumnValue';
+import { Button, Checkbox, Dialog, ErrorAlert, Icon, IconButton, Menu, TextField, type MenuEntry } from '@/components/ui';
 import { SqlViewer } from '@/features/editor/SqlViewer';
-import { DataGrid, type GridColumn, type GridRow } from '@/features/grid/DataGrid';
+import { DataGrid, type ForeignKeyLink, type GridColumn, type GridRow } from '@/features/grid/DataGrid';
 import { exportData } from '@/features/transfer/exportData';
-import { cellFromInput } from '@/lib/cells';
+import { cellFromInput, cellText } from '@/lib/cells';
 import { copyText } from '@/lib/clipboard';
 import { toAppError } from '@/lib/errors';
-import { formatCount, formatDuration, plural } from '@/lib/format';
+import { formatBytes, formatCount, formatDuration, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { objectLabel } from '@/lib/objects';
 import { useSettings } from '@/stores/settings';
@@ -45,9 +50,14 @@ interface DataViewProps {
   onReloadStructure: () => void;
   /** Rendered first in the toolbar (the Data/Structure/DDL switcher). */
   leading?: React.ReactNode;
+  /** Exact-match filter from foreign-key navigation. */
+  matches: ColumnValue[];
+  onClearMatches: () => void;
 }
 
-export function DataView({ object, structure, onReloadStructure, leading }: DataViewProps) {
+const MAX_UNDO = 100;
+
+export function DataView({ object, structure, onReloadStructure, leading, matches, onClearMatches }: DataViewProps) {
   const session = useWorkspace((s) => s.session)!;
   const sid = { sessionId: session.session_id };
   const pageSize = useSettings((s) => s.settings.page_size);
@@ -61,7 +71,24 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
   const [filter, setFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortSpec | null>(null);
   const [reload, setReload] = useState(0);
-  const [edits, setEdits] = useState<Edits>(NO_EDITS);
+  const [history, setHistory] = useState<{ edits: Edits; past: Edits[]; future: Edits[] }>({ edits: NO_EDITS, past: [], future: [] });
+  const edits = history.edits;
+  const undo = history;
+  const [searches, setSearches] = useState<ColumnSearch[]>([]);
+  const [bulk, setBulk] = useState<{ col: number; rows: number[] } | null>(null);
+  /** Every change to pending edits is undoable until they are saved or discarded. */
+  const setEdits = useCallback((next: Edits | ((e: Edits) => Edits)) => {
+    setHistory((h) => {
+      const value = typeof next === 'function' ? next(h.edits) : next;
+      if (value === h.edits) return h;
+      if (value === NO_EDITS) return { edits: value, past: [], future: [] };
+      return { edits: value, past: [...h.past, h.edits].slice(-MAX_UNDO), future: [] };
+    });
+  }, []);
+  const undoEdit = () =>
+    setHistory((h) => (h.past.length ? { edits: h.past[h.past.length - 1]!, past: h.past.slice(0, -1), future: [...h.future, h.edits] } : h));
+  const redoEdit = () =>
+    setHistory((h) => (h.future.length ? { edits: h.future[h.future.length - 1]!, past: [...h.past, h.edits], future: h.future.slice(0, -1) } : h));
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [preview, setPreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -84,7 +111,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
     setLoading(true);
     setError(null);
     api
-      .tablePage(sid, { object, filter, matches: [], searches: [], sort, offset, limit: pageSize })
+      .tablePage(sid, { object, filter, matches, searches, sort, offset, limit: pageSize })
       .then((p) => !stale && setPage(p))
       .catch((e) => !stale && setError(toAppError(e).info))
       .finally(() => !stale && setLoading(false));
@@ -92,20 +119,20 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
       stale = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [object, filter, sort, offset, pageSize, reload, session.session_id]);
+  }, [object, filter, matches, searches, sort, offset, pageSize, reload, session.session_id]);
 
   useEffect(() => {
     let stale = false;
     setCount(null);
     api
-      .rowCount(sid, object, { filter, matches: [], searches: [] })
+      .rowCount(sid, object, { filter, matches, searches })
       .then((c) => !stale && setCount(c))
       .catch(() => !stale && setCount(null));
     return () => {
       stale = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [object, filter, reload, session.session_id]);
+  }, [object, filter, matches, searches, reload, session.session_id]);
 
   /** Runs a navigation only after pending edits are saved or discarded. */
   const guardEdits = useCallback(
@@ -118,7 +145,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
       setSelection(new Set());
       go();
     },
-    [pending.total, ask],
+    [pending.total, ask, setEdits],
   );
 
   const columns = useMemo<GridColumn[]>(
@@ -231,6 +258,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
           { type: 'separator' },
           { label: 'Set NULL', onSelect: () => editCell(row, col, null) },
           { label: 'Set empty string', onSelect: () => editCell(row, col, '') },
+          ...(selection.size > 1 ? [{ label: `Set ${columns[col]!.name} for ${selection.size} rows…`, onSelect: () => setBulk({ col, rows: [...selection].sort((a, b) => a - b) }) }] : []),
           { label: 'Duplicate row', onSelect: () => duplicateSelected([row]) },
           {
             label: 'Delete row',
@@ -251,7 +279,89 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
   const first = page && page.rows.length ? page.offset + 1 : 0;
   const last = page ? page.offset + page.rows.length : 0;
   const pages = count ? Math.max(1, Math.ceil(count.count / pageSize)) : null;
-  const exportSource = { type: 'table' as const, object, filter, matches: [], searches: [], sort };
+  const exportSource = { type: 'table' as const, object, filter, matches, searches, sort };
+
+  /** Foreign-key columns link to the referenced row. */
+  const foreignKeys = useMemo(() => {
+    const links = new Map<number, ForeignKeyLink>();
+    for (const fk of structure.foreign_keys) {
+      const cols = fk.columns.map((c) => structure.columns.findIndex((x) => x.name === c));
+      if (cols.some((c) => c < 0)) continue;
+      for (const col of cols) {
+        links.set(col, {
+          title: `Open ${objectLabel(fk.target)} row`,
+          open: (index) => {
+            const cells = rows[index]?.cells;
+            if (!cells) return;
+            const values = cols.map((c, i) => ({ column: fk.target_columns[i] ?? '', value: cellText(cells[c] ?? { kind: 'null' }) }));
+            useWorkspace.getState().openTableTab(fk.target, 'data', values);
+          },
+        });
+      }
+    }
+    return links;
+  }, [structure, rows]);
+
+  /** Row key of an existing (saved) row, for fetching full values. */
+  const keyOf = (index: number): ColumnValue[] | null => {
+    if (index < insertCount || keyColumns.length === 0) return null;
+    const cells = pageRows[index - insertCount];
+    return cells ? keyColumns.map((c, i) => ({ column: c, value: cellText(cells[identity[i]!] ?? { kind: 'null' }) })) : null;
+  };
+
+  const loadCell = async (index: number, col: number) => {
+    const key = keyOf(index);
+    const column = structure.columns[col]?.name;
+    if (!key || !column) return rows[index]!.cells[col]!;
+    return api.cellValue(sid, object, key, column);
+  };
+
+  const saveCell = async (index: number, col: number) => {
+    const key = keyOf(index);
+    const column = structure.columns[col]?.name;
+    if (!key || !column) return toast('Only saved rows with a key can be saved to a file.');
+    const path = await saveDialog({ defaultPath: `${object.name}-${column}.bin` });
+    if (!path) return;
+    try {
+      const bytes = await api.saveCell(sid, object, key, column, path);
+      toast(`Saved ${formatBytes(bytes)}.`, 'positive');
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  /** Spreadsheet cells pasted at a position: existing rows are edited, extra rows become new rows. */
+  const paste = (at: { row: number; col: number }, values: string[][]) => {
+    if (!editable) return toast('This table cannot be edited.');
+    let skipped = 0;
+    {
+      let next = edits;
+      values.forEach((line, r) => {
+        const index = at.row + r;
+        let insertId: string | null = null;
+        if (index >= rows.length) {
+          next = addInsert(next);
+          insertId = next.inserts[0]!.id;
+        }
+        line.forEach((value, c) => {
+          const col = at.col + c;
+          const info = structure.columns[col];
+          if (!info?.editable) {
+            skipped += 1;
+            return;
+          }
+          if (insertId) next = setInsertCell(next, insertId, col, value);
+          else if (index < insertCount) next = setInsertCell(next, next.inserts[index]!.id, col, value);
+          else {
+            const cells = pageRows[index - insertCount]!;
+            next = setCell(next, rowKey(cells, identity), col, value, cells[col]);
+          }
+        });
+      });
+      setEdits(next);
+    }
+    toast(`Pasted ${values.length} row${values.length === 1 ? '' : 's'} as pending changes${skipped ? ` (${skipped} read-only cells skipped)` : ''}.`);
+  };
 
   return (
     <>
@@ -292,6 +402,12 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
         <span style={{ flex: 1 }} />
         {editable && (
           <>
+            <IconButton label="Undo edit" disabled={!undo.past.length} onClick={undoEdit}>
+              <Icon name="undo" size={12} />
+            </IconButton>
+            <IconButton label="Redo edit" disabled={!undo.future.length} onClick={redoEdit}>
+              <Icon name="redo" size={12} />
+            </IconButton>
             <Button size="sm" onClick={() => setEdits((e) => addInsert(e))}>
               + Row
             </Button>
@@ -307,9 +423,10 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
           size="sm"
           onClick={(e) =>
             openMenu(e, [
-              { label: 'Export CSV…', onSelect: () => void exportData(exportSource, 'csv', object.name) },
-              { label: 'Export JSON…', onSelect: () => void exportData(exportSource, 'json', object.name) },
-              ...(structure.object.kind === 'table' && session.capabilities.import_export ? [{ type: 'separator' as const }, { label: 'Import CSV…', onSelect: () => setImporting(true) }] : []),
+              { label: 'Export…', onSelect: () => exportData(exportSource, 'csv', object.name) },
+              ...(structure.object.kind === 'table' && session.capabilities.import_export && !session.server.read_only
+                ? [{ type: 'separator' as const }, { label: 'Import CSV or JSON…', onSelect: () => setImporting(true) }]
+                : []),
             ])
           }
         >
@@ -319,7 +436,16 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
           <Icon name="refresh" size={12} />
         </IconButton>
       </div>
-      {!editable && structure.object.kind === 'table' && (
+      {matches.length > 0 && (
+        <div className={styles.notice} role="status">
+          Showing rows where{' '}
+          <span className="mono">{matches.map((m) => `${m.column} = ${m.value === null ? 'NULL' : m.value}`).join(' AND ')}</span>
+          <Button size="xs" onClick={() => void guardEdits(onClearMatches)}>
+            Show all rows
+          </Button>
+        </div>
+      )}
+      {!editable && structure.object.kind === 'table' && !session.server.read_only && (
         <div className={styles.notice} role="status">
           This table has no primary key or NOT NULL unique key, so rows are read-only to avoid changing the wrong rows.
           {session.capabilities.grid_edit && structure.full_row_key.length > 0 && (
@@ -352,7 +478,19 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
         onSort={onSort}
         extraMenu={extraMenu}
         onDeleteRows={deleteSelected}
-        emptyText={loading ? 'Loading…' : filter ? 'No rows match the filter.' : 'This table is empty.'}
+        emptyText={loading ? 'Loading…' : filter || matches.length || searches.length ? 'No rows match the filter.' : 'This table is empty.'}
+        foreignKeys={foreignKeys}
+        onColumnSearch={(s) =>
+          void guardEdits(() => {
+            setOffset(0);
+            setSearches(Object.entries(s).filter(([, v]) => v.trim()).map(([column, contains]) => ({ column, contains: contains.trim() })));
+          })
+        }
+        onLoadCell={loadCell}
+        onSaveCell={(r, c) => void saveCell(r, c)}
+        onPaste={editable ? paste : undefined}
+        onUndo={editable ? undoEdit : undefined}
+        onRedo={editable ? redoEdit : undefined}
       />
       <div className={styles.footer}>
         <span>
@@ -447,6 +585,51 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
         />
       )}
       {menu && <Menu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {bulk && (
+        <BulkEditDialog
+          column={structure.columns[bulk.col]!}
+          count={bulk.rows.length}
+          onClose={() => setBulk(null)}
+          onApply={(value) => {
+            setEdits((e) =>
+              bulk.rows.reduce((acc, index) => {
+                const t = locate(index);
+                return t.type === 'insert' ? setInsertCell(acc, t.id, bulk.col, value) : setCell(acc, rowKey(t.cells, identity), bulk.col, value, t.cells[bulk.col]);
+              }, e),
+            );
+            setBulk(null);
+            toast(`Set ${structure.columns[bulk.col]!.name} on ${bulk.rows.length} rows as pending changes. Preview SQL before saving.`);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/** One value for one column across the selected rows; becomes pending changes. */
+function BulkEditDialog({ column, count, onClose, onApply }: { column: ColumnInfo; count: number; onClose: () => void; onApply: (value: Value) => void }) {
+  const [value, setValue] = useState('');
+  const [isNull, setIsNull] = useState(false);
+  return (
+    <Dialog
+      title={`Set ${column.name} for ${count} rows`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={() => onApply(isNull ? null : value)}>
+            Apply as pending changes
+          </Button>
+        </>
+      }
+    >
+      <TextField label={`${column.name} (${column.data_type})`} mono value={value} disabled={isNull} onChange={(e) => setValue(e.target.value)} autoFocus />
+      {column.nullable && (
+        <div style={{ marginTop: 8 }}>
+          <Checkbox label="NULL" checked={isNull} onChange={setIsNull} />
+        </div>
+      )}
+      <p className="ink-3" style={{ fontSize: 12, marginTop: 8 }}>Nothing is written until you save; Preview SQL shows every statement first.</p>
+    </Dialog>
   );
 }

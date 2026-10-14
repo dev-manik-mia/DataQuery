@@ -10,7 +10,11 @@ export const editorTheme = EditorView.theme({
     color: 'var(--ink)',
     fontSize: 'var(--editor-font-size, 13px)',
   },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '24px' },
+  '.cm-scroller': {
+    fontFamily: 'var(--editor-font-family, var(--font-mono))',
+    lineHeight: 'var(--editor-line-height, 1.6)',
+    fontVariantLigatures: 'var(--editor-ligatures, none)',
+  },
   '.cm-content': { padding: '8px 0', caretColor: 'var(--ink)' },
   '.cm-line': { padding: '0 14px' },
   '.cm-gutters': {

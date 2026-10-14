@@ -7,8 +7,9 @@ import { copyText, serializeRows, type CopyFormat } from '@/lib/clipboard';
 import { formatCount, formatDuration, formatTimer } from '@/lib/format';
 import { useSettings } from '@/stores/settings';
 import { useUi } from '@/stores/ui';
-import { useWorkspace, type QueryTab, type ResultSet, type RunMessage } from '@/stores/workspace';
+import { useWorkspace, type QueryTab, type ResultSet, type ResultsTab, type RunMessage } from '@/stores/workspace';
 
+import { PlanView } from './PlanView';
 import styles from './Results.module.css';
 
 /** Result tabs, Messages, bounded-fetch banner and running state for a query tab. */
@@ -20,8 +21,9 @@ export function ResultsPanel({ tab }: { tab: QueryTab }) {
   const result = typeof run.active === 'number' ? run.results[run.active] : undefined;
   const hasError = run.messages.some((m) => m.kind === 'error');
 
-  const items: TabItem<number | 'messages'>[] = [
+  const items: TabItem<ResultsTab>[] = [
     ...run.results.map((r, i) => ({ id: i, label: `Result ${i + 1}`, count: `${formatCount(r.rows.length)}${r.hasMore ? '+' : ''}` })),
+    ...(run.plan ? [{ id: 'plan' as const, label: 'Plan' }] : []),
     { id: 'messages', label: 'Messages', critical: hasError, count: run.messages.length ? run.messages.length : undefined },
   ];
 
@@ -31,14 +33,16 @@ export function ResultsPanel({ tab }: { tab: QueryTab }) {
       {run.status === 'running' && <RunningBar startedAt={run.startedAt} />}
       {run.status === 'running' && !result ? (
         <RunningSkeleton />
-      ) : run.active === 'messages' ? (
+      ) : run.active === 'plan' && run.plan ? (
+        <PlanView plan={run.plan} />
+      ) : run.active === 'messages' || run.active === 'plan' ? (
         <MessagesView messages={run.messages} idle={run.status === 'idle'} />
       ) : result ? (
         <ResultGrid result={result} />
       ) : (
         <div className={styles.idle}>Run a statement to see results.</div>
       )}
-      {result?.hasMore && run.active !== 'messages' && (
+      {result?.hasMore && typeof run.active === 'number' && (
         <div className={styles.banner} role="status">
           <span>
             Showing first {formatCount(result.rows.length)} rows.{' '}

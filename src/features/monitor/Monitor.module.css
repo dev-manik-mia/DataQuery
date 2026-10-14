@@ -1,0 +1,121 @@
+.page {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-5) var(--space-6);
+}
+
+.inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tileValue {
+  font-size: var(--text-title);
+  font-variant-numeric: tabular-nums;
+}
+
+.tileHelp {
+  color: var(--ink-3);
+  font-size: var(--text-caption);
+}
+
+.gauge {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--sunk);
+}
+
+.gaugeFill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--positive);
+}
+
+.gaugeFill[data-alert='true'] {
+  background: var(--critical);
+}
+
+.gaugeTick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: var(--ink-2);
+}
+
+.row,
+.lockRow,
+.sizeRow,
+.settingRow {
+  display: grid;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 6px var(--space-4);
+  border-top: 1px solid var(--line-2);
+  font-size: var(--text-ui);
+}
+
+.row {
+  grid-template-columns: 70px 150px 190px 80px minmax(0, 1fr) 170px;
+}
+
+.lockRow {
+  grid-template-columns: 70px 120px 200px minmax(0, 1fr) 90px;
+}
+
+.sizeRow {
+  grid-template-columns: minmax(0, 1fr) 90px 130px 140px 120px;
+}
+
+.settingRow {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.head {
+  color: var(--ink-3);
+  font-size: var(--text-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.row[data-blocked='true'] {
+  background: var(--caution-tint);
+}
+
+.row[data-blocker='true'] {
+  box-shadow: inset 3px 0 0 var(--critical);
+}
+
+.row [data-long='true'] {
+  color: var(--caution);
+}
+
+.blocked {
+  color: var(--caution);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}

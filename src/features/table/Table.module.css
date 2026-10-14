@@ -281,3 +281,10 @@
   color: var(--critical);
   font-family: var(--font-sans);
 }
+
+.errorReport {
+  max-height: 180px;
+  margin-top: 6px;
+  overflow: auto;
+  font-size: var(--text-caption);
+}

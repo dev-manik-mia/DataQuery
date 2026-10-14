@@ -39,3 +39,25 @@
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.txGroup {
+  display: flex;
+  gap: 6px;
+  padding-left: 8px;
+  margin-left: 4px;
+  border-left: 1px solid var(--line);
+}

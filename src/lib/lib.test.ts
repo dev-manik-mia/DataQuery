@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { StatementInfo } from '@/bindings/StatementInfo';
 
-import { binaryLabel, cellText, splitTemporal } from './cells';
+import { binaryLabel, cellText, hexDump, isSensitiveColumn, parseClipboardGrid, splitTemporal } from './cells';
 import { serializeRows } from './clipboard';
 import { formatCount, formatDuration, formatTimer } from './format';
 import { statementAt } from './sql';
@@ -73,5 +73,25 @@ describe('format', () => {
     expect(formatDuration(142)).toBe('142 ms');
     expect(formatDuration(1500)).toBe('1.50 s');
     expect(formatTimer(12_400)).toBe('00:12.4');
+  });
+});
+
+describe('grid helpers', () => {
+  it('parses spreadsheet paste with quotes, tabs and newlines', () => {
+    expect(parseClipboardGrid('a\tb\r\n1\t"x\ty"\n"multi\nline"\t"q""q"\n')).toEqual([
+      ['a', 'b'],
+      ['1', 'x\ty'],
+      ['multi\nline', 'q"q'],
+    ]);
+    expect(parseClipboardGrid('single')).toEqual([['single']]);
+  });
+
+  it('masks sensitive columns by name', () => {
+    expect(isSensitiveColumn('user_password_hash', ['password'])).toBe(true);
+    expect(isSensitiveColumn('email', ['password', 'token'])).toBe(false);
+  });
+
+  it('dumps bytes as hex and ascii', () => {
+    expect(hexDump('89504e470d0a1a0a41')).toBe(`00000000  ${'89 50 4e 47 0d 0a 1a 0a 41'.padEnd(47)}  .PNG....A`);
   });
 });

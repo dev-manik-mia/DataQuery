@@ -254,3 +254,80 @@
   font-style: italic;
   letter-spacing: 0.04em;
 }
+
+.headCell[data-pinned='true'],
+.cell[data-pinned='true'] {
+  box-shadow: inset -1px 0 0 var(--line);
+}
+
+.cell[data-pinned='true'] {
+  background: var(--surface);
+}
+
+.row[data-selected='true'] .cell[data-pinned='true'] {
+  background: var(--nav-active-bg);
+}
+
+.searchCell {
+  display: flex;
+  align-items: center;
+  padding: 3px 4px;
+  border-top: 1px solid var(--line-2);
+  border-right: 1px solid var(--line-2);
+  background: var(--bg);
+}
+
+.searchInput {
+  width: 100%;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.fkLink {
+  flex: none;
+  display: none;
+  margin-left: auto;
+  padding: 0 0 0 6px;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.cell:hover .fkLink,
+.cell[data-active='true'] .fkLink {
+  display: inline-flex;
+}
+
+.hexDump {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre;
+}
+
+.jsonEditor {
+  width: 100%;
+  min-height: 260px;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  resize: vertical;
+}
