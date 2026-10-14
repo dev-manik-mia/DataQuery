@@ -588,7 +588,7 @@ mod tests {
             q.sql,
             r#"SELECT "id", "total", "geo"::text AS "geo", "raw" FROM "public"."orders" WHERE (total > 5) ORDER BY "total" DESC LIMIT 51 OFFSET 100"#
         );
-        assert!(q.params.is_empty());
+        assert!(q.params.is_empty(), "{:?}", q.params);
         assert!(
             page_query(
                 &PostgresDialect,

@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(args, [b"SET".to_vec(), b"a b".to_vec(), b"it's".to_vec(), vec![0, 0xff, b'\n'], b"plain".to_vec()]);
         assert!(split_args(r#"GET "open"#).is_err());
         assert!(split_args(r#"GET "a"b"#).is_err());
-        assert!(split_args("   ").unwrap().is_empty());
+        assert!(split_args("   ").unwrap().is_empty(), "blank lines have no arguments");
     }
 
     #[test]

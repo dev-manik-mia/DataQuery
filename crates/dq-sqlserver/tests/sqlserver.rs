@@ -236,7 +236,7 @@ async fn cancel_and_timeout() {
     assert_eq!(err.kind, ErrorKind::Timeout, "{err:?}");
     // The session keeps working, on the same connection.
     let r = s.execute("SELECT @@SPID", &[], OPTS).await.unwrap();
-    assert!(!r.rows.is_empty());
+    assert!(!r.rows.is_empty(), "no rows");
 }
 
 #[tokio::test]
@@ -273,7 +273,7 @@ async fn errors_counts_and_batches() {
     assert_eq!(r.rows.len(), 2);
     let r = s.execute("SELECT 1 AS a; SELECT 2 AS b", &[], OPTS).await.unwrap();
     assert_eq!(r.columns[0].name, "a");
-    assert!(!r.notices.is_empty());
+    assert!(!r.notices.is_empty(), "no notices");
     run_all(&*s, "DROP TABLE dbo.it_affected;\nDROP TABLE dbo.it_affected_log").await;
 }
 
@@ -298,7 +298,10 @@ async fn structure_and_ddl() {
     );
     assert!(st.indexes.iter().any(|i| i.primary));
     assert!(st.size.is_some());
-    assert!(s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty());
+    assert!(
+        s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty(),
+        "a table without a key has no row identity"
+    );
     let samples = s.structure(&table("type_samples")).await.unwrap();
     let geo = samples.column("geo").unwrap();
     assert!(!geo.editable);

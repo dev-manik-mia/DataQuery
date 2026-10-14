@@ -236,7 +236,10 @@ async fn structure_ddl_dependencies_and_model() {
     assert!(st.constraints.iter().any(|c| c.kind == dq_core::schema::ConstraintKind::Check));
     assert!(st.indexes.iter().any(|i| i.name == "orders_status_idx"));
     assert_eq!(st.foreign_keys[0].target.name, "customers");
-    assert!(s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty());
+    assert!(
+        s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty(),
+        "a table without a key has no row identity"
+    );
     assert!(s.ddl(&table("orders")).await.unwrap().starts_with("CREATE TABLE orders"));
     let view = ObjectRef { kind: NodeKind::View, ..table("paid_orders") };
     assert!(s.ddl(&view).await.unwrap().contains("VIEW paid_orders"));

@@ -40,8 +40,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      # The same version as rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -152,8 +154,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.0
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:

@@ -115,18 +115,23 @@ struct Client {
 impl client::Handler for Client {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, offered: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+    /// The check is a synchronous known-hosts lookup, so the future is ready at once.
+    fn check_server_key(
+        &mut self,
+        offered: &PublicKeyOrCertificate,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
         let key = match offered {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
             PublicKeyOrCertificate::Certificate(cert) => PublicKey::new(cert.public_key().clone(), ""),
         };
-        match self.known.check(&self.host, self.port, &key) {
-            HostKeyCheck::Trusted => Ok(true),
+        let trusted = match self.known.check(&self.host, self.port, &key) {
+            HostKeyCheck::Trusted => true,
             other => {
                 *self.rejected.lock().expect("host key lock") = Some(other);
-                Ok(false)
+                false
             }
-        }
+        };
+        std::future::ready(Ok(trusted))
     }
 }
 

@@ -258,7 +258,10 @@ async fn structure_and_ddl() {
     assert_eq!(fk.definition, "FOREIGN KEY (customer_id) REFERENCES customers (id)");
     assert!(st.indexes.iter().any(|i| i.name == "orders_created_at_idx" && !i.unique));
     assert!(st.indexes.iter().any(|i| i.primary));
-    assert!(s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty());
+    assert!(
+        s.structure(&table("no_pk")).await.unwrap().row_identity.is_empty(),
+        "a table without a key has no row identity"
+    );
     // A NOT NULL unique key is accepted as row identity.
     let customers = s.structure(&table("customers")).await.unwrap();
     assert_eq!(customers.row_identity, ["id"]);
@@ -360,7 +363,7 @@ async fn tables_without_a_key_edit_only_after_opt_in() {
     let t = scratch(&*s, "it_no_key", "(a INT, b VARCHAR(10), doc JSON)").await;
     s.execute("INSERT INTO it_no_key VALUES (1, NULL, '{}'), (2, 'x', '{}'), (2, 'x', '{}')", &[], OPTS).await.unwrap();
     let st = ops::structure(&*s, &t).await.unwrap();
-    assert!(st.row_identity.is_empty());
+    assert!(st.row_identity.is_empty(), "{:?}", st.row_identity);
     // MySQL's JSON never equals a text parameter; MariaDB's JSON is LONGTEXT and does.
     let expected: &[&str] = if is_mariadb(&*s) { &["a", "b", "doc"] } else { &["a", "b"] };
     assert_eq!(st.full_row_key, expected);
@@ -557,7 +560,7 @@ async fn row_filters_bind_matches_and_searches() {
         ops::table_page(&*s, &TablePageRequest { object: object.clone(), rows, sort: None, offset: 0, limit: 5 })
             .await
             .unwrap();
-    assert!(!page.rows.is_empty());
+    assert!(!page.rows.is_empty(), "no rows");
     let none = RowFilter {
         searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "_aid".into() }],
         ..RowFilter::default()
@@ -652,7 +655,7 @@ async fn monitor_shows_blocking_and_cancels() {
     assert!(matches!(err.kind, ErrorKind::Cancelled | ErrorKind::Server), "{err:?}");
     holder.execute("ROLLBACK", &[], OPTS).await.unwrap();
     assert!(monitor.server_settings(Some("max_conn")).await.unwrap().iter().any(|s| s.name == "max_connections"));
-    assert!(!monitor.largest_tables(DB, 5).await.unwrap().is_empty());
+    assert!(!monitor.largest_tables(DB, 5).await.unwrap().is_empty(), "no largest tables");
 }
 
 async fn run_all(s: &dyn Session, sql: &str) {

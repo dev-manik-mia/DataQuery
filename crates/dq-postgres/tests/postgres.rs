@@ -226,7 +226,10 @@ async fn structure_and_ddl() {
     assert!(st.columns[0].primary_key && st.columns[0].generated && !st.columns[0].editable);
     assert!(st.constraints.iter().any(|c| c.name == "orders_customer_fk"));
     assert!(st.indexes.iter().any(|i| i.name == "orders_created_at_idx"));
-    assert!(s.structure(&table("public", "no_pk")).await.unwrap().row_identity.is_empty());
+    assert!(
+        s.structure(&table("public", "no_pk")).await.unwrap().row_identity.is_empty(),
+        "a table without a key has no row identity"
+    );
     // Unique NOT NULL key is accepted as row identity.
     let ddl = s.ddl(&table("public", "orders")).await.unwrap();
     assert!(
@@ -320,7 +323,7 @@ async fn tables_without_a_key_edit_only_after_opt_in() {
         .await
         .unwrap();
     let st = ops::structure(&*s, &t).await.unwrap();
-    assert!(st.row_identity.is_empty());
+    assert!(st.row_identity.is_empty(), "{:?}", st.row_identity);
     assert_eq!(st.full_row_key, ["a", "b"], "json has no equality operator");
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let fix_null =
@@ -487,7 +490,7 @@ async fn row_filters_bind_matches_and_searches() {
     )
     .await
     .unwrap();
-    assert!(!page.rows.is_empty());
+    assert!(!page.rows.is_empty(), "no rows");
     assert!(page.rows.iter().all(|r| text(&r[2]) == "paid"));
     let none = RowFilter {
         searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "%".into() }],
@@ -620,7 +623,7 @@ async fn monitor_shows_blocking_and_cancels() {
     assert_eq!(err.kind, ErrorKind::Cancelled);
     holder.execute("ROLLBACK", &[], OPTS).await.unwrap();
     assert!(monitor.server_settings(Some("max_conn")).await.unwrap().iter().any(|s| s.name == "max_connections"));
-    assert!(!monitor.largest_tables("dataquery_test", 5).await.unwrap().is_empty());
+    assert!(!monitor.largest_tables("dataquery_test", 5).await.unwrap().is_empty(), "no largest tables");
 }
 
 async fn run_all(s: &dyn Session, sql: &str) {

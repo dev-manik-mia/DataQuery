@@ -7,7 +7,7 @@ Feature status: [`feature_completed.md`](feature_completed.md) · Task list: [`t
 
 ## Getting started
 
-Requirements: Rust 1.88+, Node 22+, and Docker (for the test databases).
+Requirements: Rust 1.99.0 (pinned in `rust-toolchain.toml`; rustup installs it on the first build, and CI uses the same version), Node 22+, and Docker (for the test databases).
 
 ```sh
 npm install

@@ -118,7 +118,7 @@ async fn connects_and_reports_the_cluster() -> DbResult<()> {
     let info = ElasticsearchAdapter.test(&ConnectParams::new(cfg.clone(), Some("dataquery".into()))).await?;
     assert!(info.version.starts_with("Elasticsearch 8."), "{}", info.version);
     assert_eq!(info.user, "elastic");
-    assert!(!info.database.is_empty());
+    assert_ne!(info.database, "");
     let bad = ElasticsearchAdapter.test(&ConnectParams::new(cfg, Some("wrong".into()))).await.unwrap_err();
     assert_eq!(bad.kind, ErrorKind::Auth);
     Ok(())
@@ -285,7 +285,7 @@ async fn structure_ddl_and_plans() -> DbResult<()> {
     let profiled = s.explain(&search, &[], true, 30).await?;
     let root = profiled.plan.unwrap();
     assert_eq!(root.label, "Search");
-    assert!(!root.children[0].children.is_empty());
+    assert!(!root.children[0].children.is_empty(), "no children");
     assert!(profiled.analyzed);
     let validated = s.explain(&search, &[], false, 30).await?;
     let plan = validated.plan.unwrap();

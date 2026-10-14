@@ -1,0 +1,6 @@
+# One Rust version for local builds and CI, so both run the same clippy lints.
+# Upgrade deliberately: change it here and in .github/workflows/build.yml together.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

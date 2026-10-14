@@ -268,7 +268,10 @@ async fn structure_and_ddl() {
     assert!(st.indexes.iter().any(|i| i.primary));
     assert!(st.size.is_some());
     assert_eq!(st.foreign_keys[0].target.name, "CUSTOMERS");
-    assert!(s.structure(&table("NO_PK")).await.unwrap().row_identity.is_empty());
+    assert!(
+        s.structure(&table("NO_PK")).await.unwrap().row_identity.is_empty(),
+        "a table without a key has no row identity"
+    );
     let ddl = s.ddl(&table("ORDERS")).await.unwrap();
     assert!(ddl.contains("CREATE TABLE \"DATAQUERY\".\"ORDERS\""), "{ddl}");
     assert!(!ddl.contains("STORAGE("), "storage clauses are left out: {ddl}");
