@@ -92,6 +92,7 @@ fn opts(params: &ConnectParams, role: Role, tls: Option<SslOpts>, setup: Vec<Str
 /// Opens one connection, honouring the connect timeout and `prefer` fallback.
 /// Query connections of read-only profiles only allow read-only transactions.
 pub async fn open(params: &ConnectParams, role: Role, mut setup: Vec<String>) -> DbResult<Conn> {
+    dq_core::tls::install_crypto_provider();
     let config = &params.config;
     if config.read_only && role != Role::Catalog {
         setup.insert(0, READ_ONLY.to_owned());
@@ -143,6 +144,7 @@ pub fn catalog_setup(flavor: Flavor) -> Vec<String> {
 /// A small pool of read-only connections for the explorer, table pages and exports.
 /// `params` must be [`resolved`].
 pub fn catalog_pool(params: &ConnectParams, flavor: Flavor) -> mysql_async::Pool {
+    dq_core::tls::install_crypto_provider();
     let max = params.config.options.pool_size.max(1) as usize;
     let pool = PoolOpts::default().with_constraints(PoolConstraints::new(0, max).expect("valid pool constraints"));
     let tls = ssl_opts(params, params.config.ssl_mode);

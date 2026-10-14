@@ -21,6 +21,7 @@ pub mod result;
 pub mod schema;
 pub mod sql;
 pub mod table;
+pub mod tls;
 pub mod transfer;
 pub mod value;
 

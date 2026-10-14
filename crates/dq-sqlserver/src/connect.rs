@@ -1,6 +1,5 @@
 //! Opens SQL Server connections and reads server details.
 
-use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use dq_core::adapter::ConnectParams;
@@ -20,14 +19,6 @@ pub type Conn = Client<Compat<TcpStream>>;
 /// behaviour SSMS and most drivers default to.
 const SESSION_SETUP: &str = "SET TEXTSIZE 2147483647; SET ANSI_NULLS ON; SET QUOTED_IDENTIFIER ON; \
 SET ANSI_PADDING ON; SET ANSI_WARNINGS ON; SET CONCAT_NULL_YIELDS_NULL ON; SET ARITHABORT ON";
-
-/// Uses the same TLS implementation (ring) as the other adapters.
-fn install_crypto_provider() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
 
 fn config(params: &ConnectParams, database: Option<&str>) -> Config {
     let c = &params.config;
@@ -71,7 +62,7 @@ pub async fn open(params: &ConnectParams, database: Option<&str>) -> DbResult<Co
 }
 
 async fn open_inner(params: &ConnectParams, database: Option<&str>) -> DbResult<Conn> {
-    install_crypto_provider();
+    dq_core::tls::install_crypto_provider();
     let c = &params.config;
     let timeout = Duration::from_secs(u64::from(c.connect_timeout_secs));
     let err = |e: tiberius::error::Error| map_error(&e, params.password());
