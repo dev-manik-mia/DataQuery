@@ -46,6 +46,9 @@ fn sql_only(session: &dyn Session) -> DbResult<()> {
     if session.documents().is_some() {
         return Err(DbError::unsupported("Open this collection in the Documents view."));
     }
+    if session.keys().is_some() {
+        return Err(DbError::unsupported("Browse keys in the key browser."));
+    }
     Ok(())
 }
 
@@ -167,6 +170,10 @@ pub async fn export(
             let request = crate::document::FindRequest::new(object.clone(), crate::document::MAX_PAGE);
             (object.database.clone(), store.find_statement(&request)?, Vec::new(), object.clone())
         }
+        ExportSource::Keys { request } => {
+            let store = session.keys().ok_or_else(|| DbError::unsupported("This engine has no keys."))?;
+            return export_keys(store, request, format, options, path, control).await;
+        }
         ExportSource::Documents { request } => {
             let store = session.documents().ok_or_else(|| DbError::unsupported("This engine has no documents."))?;
             (request.object.database.clone(), store.find_statement(request)?, Vec::new(), request.object.clone())
@@ -209,6 +216,46 @@ pub async fn export(
     let bytes = sink.finish()?;
     control.progress(rows, bytes);
     Ok(ExportReport { rows, bytes, duration_ms: elapsed_ms(started) })
+}
+
+/// Streams the keys of a scan (key, type, TTL) to a file.
+async fn export_keys(
+    store: &dyn crate::keyvalue::KeyValueStore,
+    request: &crate::keyvalue::ScanRequest,
+    format: ExportFormat,
+    options: &ExportOptions,
+    path: &Path,
+    control: &TransferControl,
+) -> DbResult<ExportReport> {
+    let started = Instant::now();
+    let table = ObjectRef::new(NodeKind::Table, "", None, "redis_keys");
+    let target = SqlTarget { dialect: crate::sql::dialect::dialect_for(crate::sql::SqlFlavor::Postgres), table: &table };
+    let mut sink = transfer::file_sink(path, format, options, Some(target))?;
+    let mut started_sink = false;
+    let mut total = 0u64;
+    let result = store
+        .stream_keys(request, &mut |columns, batch| {
+            control.check()?;
+            if !started_sink {
+                sink.begin(columns)?;
+                started_sink = true;
+            }
+            total += batch.len() as u64;
+            sink.write(&batch)?;
+            control.progress(total, sink.bytes());
+            Ok(())
+        })
+        .await;
+    if let Err(e) = result {
+        drop(sink);
+        let _ = std::fs::remove_file(path);
+        return Err(e);
+    }
+    if !started_sink {
+        sink.begin(&[])?;
+    }
+    let bytes = sink.finish()?;
+    Ok(ExportReport { rows: total, bytes, duration_ms: elapsed_ms(started) })
 }
 
 /// Writes rows the UI already holds, through the same sinks as streamed exports.

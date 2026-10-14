@@ -7,6 +7,7 @@ pub mod connections;
 pub mod documents;
 pub mod explorer;
 pub mod history;
+pub mod keys;
 pub mod monitor;
 pub mod query;
 pub mod schema;

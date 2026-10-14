@@ -82,7 +82,7 @@ pub fn record_history(
 }
 
 /// Next transaction state after a statement ran (or failed).
-fn next_tx(current: TxStatus, sql: &str, flavor: SqlFlavor, failed: bool) -> TxStatus {
+pub(crate) fn next_tx(current: TxStatus, sql: &str, flavor: SqlFlavor, failed: bool) -> TxStatus {
     if failed {
         // PostgreSQL and DuckDB abort the whole transaction; the others keep it usable.
         return if current == TxStatus::Open && dialect_for(flavor).aborts_transaction_on_error() {
@@ -220,8 +220,8 @@ pub async fn transaction(state: State<'_, AppState>, session_id: String, action:
         (TxAction::Commit | TxAction::Rollback, TxStatus::Auto) => {
             return Err(DbError::invalid("No transaction is open."));
         }
-        (TxAction::Commit, TxStatus::Open) => "COMMIT",
-        (TxAction::Rollback, _) => "ROLLBACK",
+        (TxAction::Commit, TxStatus::Open) => open.session.dialect().commit_transaction(),
+        (TxAction::Rollback, _) => open.session.dialect().rollback_transaction(),
     };
     let settings = state.settings().await?;
     let result =

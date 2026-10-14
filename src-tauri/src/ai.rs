@@ -171,6 +171,7 @@ pub fn prepare(
         SqlFlavor::Snowflake => "Snowflake SQL",
         SqlFlavor::Mongodb => "MongoDB shell (mongosh) syntax, e.g. db.orders.find({ … })",
         SqlFlavor::Partiql => "DynamoDB PartiQL",
+        SqlFlavor::Redis => "Redis commands (one per line, redis-cli syntax)",
     };
     let (hint, task, mut sent) = match request {
         AiRequest::Sql { question } => {

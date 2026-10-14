@@ -105,6 +105,8 @@ pub enum ExportSource {
     },
     /// Documents matching a Documents-view request (document engines).
     Documents { request: crate::document::FindRequest },
+    /// Keys matching a key-browser scan (key, type, TTL), for key-value engines.
+    Keys { request: crate::keyvalue::ScanRequest },
     /// Rows already loaded in the grid, e.g. a selection. Rejected when any
     /// cell was shortened for display, so an export never silently loses data.
     Rows { columns: Vec<ColumnMeta>, rows: Vec<Row> },
