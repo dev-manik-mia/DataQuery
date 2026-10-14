@@ -14,9 +14,12 @@ use dq_core::edit::{ColumnValue, RowChange};
 use dq_core::engine::Engine;
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops;
+use dq_core::ops::ImportMapping;
 use dq_core::result::ExecOptions;
 use dq_core::table::{RowFilter, SortSpec, TablePageRequest};
-use dq_core::transfer::{CsvOptions, ExportFormat, ExportSource};
+use dq_core::transfer::{
+    CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
+};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
 use dq_mysql::MysqlAdapter;
@@ -396,11 +399,12 @@ async fn export_and_import_round_trip() -> DbResult<()> {
         rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() },
         sort: None,
     };
-    let report = ops::export(&*s, &source, ExportFormat::Csv, &csv).await?;
+    let report =
+        ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &TransferControl::none()).await?;
     assert_eq!(report.rows, 10);
     let json = dir.path().join("q.json");
     let q = ExportSource::Query { sql: "SELECT big, doc FROM type_samples ORDER BY id".into() };
-    ops::export(&*s, &q, ExportFormat::Json, &json).await?;
+    ops::export(&*s, &q, ExportFormat::Json, &ExportOptions::default(), &json, &TransferControl::none()).await?;
     let parsed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
     assert_eq!(parsed[0]["big"], "18446744073709551615");
     // MySQL marks JSON columns, so documents are embedded. MariaDB's JSON is
@@ -413,16 +417,75 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     assert_eq!(doc["name"], "Zoë ✓");
 
     let t = scratch(&*s, "it_import", "(id BIGINT PRIMARY KEY, status VARCHAR(20), total DECIMAL(12,2))").await;
-    let options = CsvOptions { delimiter: ",".into(), has_header: true, empty_as_null: true };
-    let mapping = vec![("id".to_owned(), 0), ("status".to_owned(), 2), ("total".to_owned(), 3)];
-    let imported = ops::import_csv(&*s, &t, &csv, &options, &mapping).await?;
-    assert_eq!(imported, 10);
-    // A bad row aborts the whole import (strict mode rejects the number).
+    let csv_source = |path: &std::path::Path| ImportSource::Csv {
+        path: path.to_string_lossy().into_owned(),
+        options: CsvOptions { empty_as_null: true, ..CsvOptions::default() },
+    };
+    let mapping = |pairs: &[(&str, usize)]| -> Vec<ImportMapping> {
+        pairs.iter().map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) }).collect()
+    };
+    let map = mapping(&[("id", 0), ("status", 2), ("total", 3)]);
+    let none = TransferControl::none();
+    let report = ops::import(&*s, &t, &csv_source(&csv), &map, &ImportOptions::default(), &none).await?;
+    assert_eq!((report.rows, report.error_count), (10, 0));
+    // Every bad row is reported with its number, and nothing is written.
     let bad = dir.path().join("bad.csv");
-    std::fs::write(&bad, "id,x,status,total\n100,,ok,1\n101,,ok,not-a-number\n").unwrap();
-    assert!(ops::import_csv(&*s, &t, &bad, &options, &mapping).await.is_err());
-    let r = s.execute("SELECT COUNT(*) FROM it_import", &[], OPTS).await?;
-    assert_eq!(text(&r.rows[0][0]), "10");
+    std::fs::write(&bad, "id,x,status,total\n100,,ok,1\n101,,ok,not-a-number\n,,ok,2\n103,,ok,3\n").unwrap();
+    let report = ops::import(&*s, &t, &csv_source(&bad), &map, &ImportOptions::default(), &none).await?;
+    assert!(report.stopped);
+    assert_eq!(report.rows, 0);
+    assert_eq!(report.errors.iter().map(|e| e.row).collect::<Vec<_>>(), [2, 3]);
+    assert!(report.errors[0].message.contains("total"));
+    // Skipping invalid rows imports the rest.
+    let skip = ImportOptions { skip_invalid: true, ..ImportOptions::default() };
+    let report = ops::import(&*s, &t, &csv_source(&bad), &map, &skip, &none).await?;
+    assert_eq!((report.rows, report.skipped), (2, 2));
+    // With a commit size, rows committed before a server error stay.
+    let dup = dir.path().join("dup.csv");
+    std::fs::write(&dup, "id,x,status,total\n200,,a,1\n201,,b,1\n200,,c,1\n").unwrap();
+    let chunks = ImportOptions { batch_rows: 1, commit_rows: 2, skip_invalid: false };
+    let report = ops::import(&*s, &t, &csv_source(&dup), &map, &chunks, &none).await?;
+    assert!(report.stopped && report.rows == 2, "{report:?}");
+    // JSON import maps by key and keeps exact numbers.
+    let json_in = dir.path().join("rows.json");
+    std::fs::write(
+        &json_in,
+        r#"[{"id": 300, "status": "json", "total": 12.50}, {"id": 301, "status": null, "total": "7"}]"#,
+    )
+    .unwrap();
+    let keys = ["id", "status", "total"]
+        .iter()
+        .map(|k| ImportMapping { column: (*k).into(), field: FieldRef::Key((*k).into()) })
+        .collect::<Vec<_>>();
+    let json_source = ImportSource::Json { path: json_in.to_string_lossy().into_owned() };
+    assert_eq!(ops::import(&*s, &t, &json_source, &keys, &ImportOptions::default(), &none).await?.rows, 2);
+    let r = s.execute("SELECT total FROM it_import WHERE id = 300", &[], OPTS).await?;
+    assert_eq!(text(&r.rows[0][0]), "12.50");
+    // SQL INSERT export runs back into the table it came from.
+    let sql_file = dir.path().join("rows.sql");
+    let rows_300 = ExportSource::Table {
+        object: t.clone(),
+        rows: RowFilter { filter: Some("id >= 300".into()), ..RowFilter::default() },
+        sort: None,
+    };
+    let options = ExportOptions { sql_batch_rows: 1, ..ExportOptions::default() };
+    ops::export(&*s, &rows_300, ExportFormat::SqlInsert, &options, &sql_file, &none).await?;
+    s.execute("DELETE FROM it_import WHERE id >= 300", &[], OPTS).await?;
+    let script = std::fs::read_to_string(&sql_file).unwrap();
+    for statement in dq_core::sql::split_statements(&script, s.dialect().flavor()) {
+        s.execute(statement.text(&script), &[], OPTS).await?;
+    }
+    let r = s.execute("SELECT count(*) FROM it_import WHERE id >= 300", &[], OPTS).await?;
+    assert_eq!(text(&r.rows[0][0]), "2");
+    // XLSX export and cancellation.
+    let xlsx = dir.path().join("orders.xlsx");
+    assert_eq!(ops::export(&*s, &source, ExportFormat::Xlsx, &ExportOptions::default(), &xlsx, &none).await?.rows, 10);
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let control = TransferControl::new(cancelled, |_, _| {});
+    let err =
+        ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &control).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Cancelled);
+    assert!(!csv.exists(), "a cancelled export leaves no partial file");
     s.execute("DROP TABLE it_import", &[], OPTS).await?;
     Ok(())
 }
