@@ -281,6 +281,7 @@ async fn columns(client: &Client, oid: u32) -> DbResult<Vec<ColumnInfo>> {
                 numeric: [20, 21, 23, 26, 700, 701, 790, 1700].contains(&type_oid),
                 editable: data_type != "bytea" && !always_generated,
                 generated: !identity.is_empty() || !generated_expr.is_empty(),
+                identity: !identity.is_empty(),
                 data_type,
                 nullable: r.get(2),
                 default: r.get(3),
@@ -348,7 +349,10 @@ async fn size(client: &Client, oid: u32, kind: NodeKind) -> DbResult<Option<Tabl
         return Ok(None);
     }
     let r = client
-        .query_one("SELECT pg_total_relation_size($1::oid), pg_relation_size($1::oid), pg_indexes_size($1::oid)", &[&oid])
+        .query_one(
+            "SELECT pg_total_relation_size($1::oid), pg_relation_size($1::oid), pg_indexes_size($1::oid)",
+            &[&oid],
+        )
         .await
         .map_err(pg)?;
     Ok(Some(TableSize { total_bytes: r.get(0), table_bytes: r.get(1), index_bytes: r.get(2) }))

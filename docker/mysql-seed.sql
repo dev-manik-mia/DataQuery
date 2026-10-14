@@ -60,3 +60,7 @@ INSERT INTO no_pk VALUES (1, 'x'), (1, 'x');
 CREATE DATABASE billing;
 CREATE TABLE billing.invoices (id INT AUTO_INCREMENT PRIMARY KEY, amount DECIMAL(12,2) NOT NULL);
 GRANT ALL PRIVILEGES ON billing.* TO 'dataquery'@'%';
+
+-- Monitoring (screen 07) reads every session and InnoDB lock waits.
+GRANT PROCESS ON *.* TO 'dataquery'@'%';
+GRANT SELECT ON performance_schema.* TO 'dataquery'@'%';

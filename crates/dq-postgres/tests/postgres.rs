@@ -514,3 +514,42 @@ async fn dependencies_and_schema_model() {
     assert!(model.foreign_keys.iter().any(|f| f.source.name == "orders" && f.target.name == "customers"));
     assert!(!model.truncated);
 }
+
+#[tokio::test]
+async fn monitor_shows_blocking_and_cancels() {
+    let cfg = require_db!();
+    let holder = session(&cfg).await;
+    let waiter = session(&cfg).await;
+    let watcher = session(&cfg).await;
+    scratch(&*holder, "it_monitor", "(id int PRIMARY KEY, v int)").await;
+    holder.execute("INSERT INTO public.it_monitor VALUES (1, 0)", &[], OPTS).await.unwrap();
+    let holder_pid = text(&holder.execute("SELECT pg_backend_pid()", &[], OPTS).await.unwrap().rows[0][0]);
+    let waiter_pid: i64 =
+        text(&waiter.execute("SELECT pg_backend_pid()", &[], OPTS).await.unwrap().rows[0][0]).parse().unwrap();
+    holder.execute("BEGIN", &[], OPTS).await.unwrap();
+    holder.execute("UPDATE public.it_monitor SET v = 1 WHERE id = 1", &[], OPTS).await.unwrap();
+    let blocked = tokio::spawn({
+        let waiter = waiter.clone();
+        async move { waiter.execute("UPDATE public.it_monitor SET v = 2 WHERE id = 1", &[], OPTS).await }
+    });
+    let monitor = watcher.monitor().expect("postgres monitors");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let snapshot = loop {
+        let snapshot = monitor.snapshot(30).await.unwrap();
+        if snapshot.blocked.unwrap_or(0) > 0 || Instant::now() > deadline {
+            break snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let waiting = snapshot.processes.iter().find(|p| p.pid == waiter_pid).expect("waiter listed");
+    assert_eq!(waiting.blocked_by, [holder_pid.parse::<i64>().unwrap()]);
+    assert!(snapshot.connections.unwrap().max > 0);
+    assert!(snapshot.locks.iter().any(|l| !l.granted && l.pid == waiter_pid));
+    assert_eq!(snapshot.replication.as_ref().unwrap().role, "primary");
+    assert!(monitor.kill(waiter_pid, false).await.unwrap());
+    let err = blocked.await.unwrap().unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Cancelled);
+    holder.execute("ROLLBACK", &[], OPTS).await.unwrap();
+    assert!(monitor.server_settings(Some("max_conn")).await.unwrap().iter().any(|s| s.name == "max_connections"));
+    assert!(!monitor.largest_tables("dataquery_test", 5).await.unwrap().is_empty());
+}

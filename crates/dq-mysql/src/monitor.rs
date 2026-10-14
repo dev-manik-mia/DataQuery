@@ -3,11 +3,11 @@
 //! REPLICATION CLIENT, performance_schema access); missing ones are reported.
 
 use async_trait::async_trait;
+use dq_core::adapter::Session;
 use dq_core::monitor::{
     Gauge, LockInfo, Monitor, MonitorSnapshot, ObjectSize, Replication, ServerProcess, ServerSetting, short_query,
 };
 use dq_core::node::{NodeKind, ObjectRef};
-use dq_core::adapter::Session;
 use dq_core::{DbError, DbResult};
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row};
@@ -149,8 +149,10 @@ impl Monitor for MySession {
         let mut conn = self.catalog_conn().await?;
         let used: Option<Row> = conn.query_first("SHOW GLOBAL STATUS LIKE 'Threads_connected'").await.map_err(my)?;
         let max: Option<Row> = conn.query_first("SELECT @@max_connections").await.map_err(my)?;
-        let connections =
-            used.and_then(|u| number(&u, 1)).zip(max.and_then(|m| number(&m, 0))).map(|(used, max)| Gauge { used, max });
+        let connections = used
+            .and_then(|u| number(&u, 1))
+            .zip(max.and_then(|m| number(&m, 0)))
+            .map(|(used, max)| Gauge { used, max });
         let mut unavailable = Vec::new();
         let mut processes = processes(&mut conn).await?;
         if !has_process_privilege(&mut conn).await {
@@ -183,7 +185,9 @@ impl Monitor for MySession {
             version: self.info().version.clone(),
             connections,
             active_queries: Some(processes.iter().filter(|p| p.active).count() as i64),
-            long_running: Some(processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64),
+            long_running: Some(
+                processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64
+            ),
             blocked: Some(processes.iter().filter(|p| !p.blocked_by.is_empty()).count() as i64),
             replication,
             processes,
@@ -195,7 +199,15 @@ impl Monitor for MySession {
     async fn server_settings(&self, search: Option<&str>) -> DbResult<Vec<ServerSetting>> {
         let mut conn = self.catalog_conn().await?;
         let pattern = search.map_or_else(|| "%".to_owned(), dq_core::sql::builder::like_contains);
-        let rows: Vec<Row> = conn.exec("SHOW GLOBAL VARIABLES LIKE ?", (pattern,)).await.map_err(my)?;
+        // `SHOW … LIKE ?` cannot be prepared; MySQL 8 moved the table to performance_schema.
+        let table = match self.flavor() {
+            Flavor::Mysql => "performance_schema.global_variables",
+            Flavor::Mariadb => "information_schema.GLOBAL_VARIABLES",
+        };
+        let sql = format!(
+            "SELECT LOWER(VARIABLE_NAME), VARIABLE_VALUE FROM {table} WHERE LOWER(VARIABLE_NAME) LIKE LOWER(?) ORDER BY 1"
+        );
+        let rows: Vec<Row> = conn.exec(sql, (pattern,)).await.map_err(my)?;
         Ok(rows
             .iter()
             .map(|r| ServerSetting {

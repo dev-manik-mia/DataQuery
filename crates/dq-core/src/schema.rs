@@ -16,6 +16,8 @@ pub struct ColumnInfo {
     pub primary_key: bool,
     /// Identity, auto-increment or generated: skipped on insert unless given.
     pub generated: bool,
+    /// Identity (PostgreSQL) or `AUTO_INCREMENT` (MySQL).
+    pub identity: bool,
     /// The grid can edit this column through a text round-trip.
     pub editable: bool,
     pub numeric: bool,

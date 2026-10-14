@@ -212,9 +212,9 @@ pub async fn row_estimate(conn: &mut Conn, object: &ObjectRef) -> DbResult<Optio
     Ok(relation(conn, object).await?.estimate)
 }
 
-pub async fn structure(conn: &mut Conn, object: &ObjectRef) -> DbResult<TableStructure> {
+pub async fn structure(conn: &mut Conn, object: &ObjectRef, mariadb: bool) -> DbResult<TableStructure> {
     let rel = relation(conn, object).await?;
-    let columns = columns(conn, object).await?;
+    let columns = columns(conn, object, mariadb).await?;
     let mut constraints = key_constraints(conn, object).await?;
     constraints.extend(check_constraints(conn, object).await);
     let index_columns = index_columns(conn, object).await?;
@@ -276,7 +276,23 @@ const BINARY_TYPES: &[&str] = &[
     "vector",
 ];
 
-async fn columns(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<ColumnInfo>> {
+/// `COLUMN_DEFAULT` as a SQL expression. MySQL reports literals unquoted and
+/// marks expressions `DEFAULT_GENERATED`; MariaDB already quotes literals and
+/// reports a NULL default as the text `NULL`.
+fn default_sql(raw: Option<String>, extra: &str, mariadb: bool) -> Option<String> {
+    let raw = raw?;
+    if mariadb {
+        return (raw != "NULL").then_some(raw);
+    }
+    if !extra.contains("default_generated") {
+        return Some(MysqlDialect.quote_literal(&raw));
+    }
+    let upper = raw.to_ascii_uppercase();
+    let bare = ["CURRENT_TIMESTAMP", "NOW(", "LOCALTIME", "CURRENT_DATE", "CURRENT_TIME"].iter().any(|k| upper.starts_with(k));
+    Some(if bare { raw } else { format!("({raw})") })
+}
+
+async fn columns(conn: &mut Conn, object: &ObjectRef, mariadb: bool) -> DbResult<Vec<ColumnInfo>> {
     let rows: Vec<Row> = conn
         .exec(
             "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, EXTRA, DATA_TYPE, COLUMN_COMMENT \
@@ -297,9 +313,10 @@ async fn columns(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<ColumnInfo
                 name: text(r, 0).unwrap_or_default(),
                 data_type: text(r, 1).unwrap_or_default(),
                 nullable: text(r, 2).as_deref() == Some("YES"),
-                default: text(r, 3),
+                default: default_sql(text(r, 3), &extra, mariadb),
                 primary_key: text(r, 4).as_deref() == Some("PRI"),
                 generated: always_generated || extra.contains("auto_increment"),
+                identity: extra.contains("auto_increment"),
                 editable: !always_generated && !BINARY_TYPES.contains(&base_type.as_str()),
                 numeric: NUMERIC_TYPES.contains(&base_type.as_str()),
                 comment: non_empty(text(r, 7)),

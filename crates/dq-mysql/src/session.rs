@@ -330,7 +330,7 @@ impl Session for MySession {
     }
 
     async fn structure(&self, object: &ObjectRef) -> DbResult<TableStructure> {
-        catalog::structure(&mut self.catalog().await?, object).await
+        catalog::structure(&mut self.catalog().await?, object, self.flavor == Flavor::Mariadb).await
     }
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {

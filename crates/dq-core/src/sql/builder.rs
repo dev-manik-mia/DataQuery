@@ -427,6 +427,7 @@ mod tests {
             default: None,
             primary_key: pk,
             generated: false,
+            identity: false,
             editable: ty != "bytea",
             numeric: false,
             comment: None,

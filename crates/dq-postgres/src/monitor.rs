@@ -125,16 +125,16 @@ impl Monitor for PgSession {
             }
         };
         if processes.iter().any(|p| p.query.is_none() && p.state.is_some()) {
-            unavailable.push(
-                "Query text of other roles' sessions needs the pg_read_all_stats role.".to_owned(),
-            );
+            unavailable.push("Query text of other roles' sessions needs the pg_read_all_stats role.".to_owned());
         }
         let long_ms = i64::from(long_running_secs) * 1000;
         Ok(MonitorSnapshot {
             version: self.info_version(),
             connections: Some(Gauge { used: gauge.get(0), max: gauge.get(1) }),
             active_queries: Some(processes.iter().filter(|p| p.active).count() as i64),
-            long_running: Some(processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64),
+            long_running: Some(
+                processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64
+            ),
             blocked: Some(processes.iter().filter(|p| !p.blocked_by.is_empty()).count() as i64),
             replication,
             processes,

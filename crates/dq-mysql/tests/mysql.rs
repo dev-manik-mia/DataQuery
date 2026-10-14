@@ -547,3 +547,47 @@ async fn explorer_lists_routines_indexes_and_triggers() {
     let deps = s.dependencies(&table("customers")).await.unwrap();
     assert!(deps.used_by.iter().any(|d| d.object.name == "orders"));
 }
+
+#[tokio::test]
+async fn monitor_shows_blocking_and_cancels() {
+    let cfg = require_db!();
+    let holder = session(&cfg).await;
+    let waiter = session(&cfg).await;
+    let watcher = session(&cfg).await;
+    scratch(&*holder, "it_monitor", "(id INT PRIMARY KEY, v INT)").await;
+    holder.execute("INSERT INTO it_monitor VALUES (1, 0)", &[], OPTS).await.unwrap();
+    let waiter_pid: i64 =
+        text(&waiter.execute("SELECT CONNECTION_ID()", &[], OPTS).await.unwrap().rows[0][0]).parse().unwrap();
+    holder.execute("BEGIN", &[], OPTS).await.unwrap();
+    holder.execute("UPDATE it_monitor SET v = 1 WHERE id = 1", &[], OPTS).await.unwrap();
+    let blocked = tokio::spawn({
+        let waiter = waiter.clone();
+        async move { waiter.execute("UPDATE it_monitor SET v = 2 WHERE id = 1", &[], OPTS).await }
+    });
+    let monitor = watcher.monitor().expect("mysql monitors");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let snapshot = loop {
+        let snapshot = monitor.snapshot(30).await.unwrap();
+        let blocked = snapshot.processes.iter().any(|p| p.pid == waiter_pid && !p.blocked_by.is_empty());
+        let no_lock_view = snapshot.unavailable.iter().any(|u| u.starts_with("Lock waits"));
+        if blocked || no_lock_view || Instant::now() > deadline {
+            break snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let waiting = snapshot.processes.iter().find(|p| p.pid == waiter_pid).expect("waiter listed");
+    assert!(waiting.query.as_deref().unwrap_or_default().contains("UPDATE it_monitor"));
+    let holder_pid: i64 =
+        text(&holder.execute("SELECT CONNECTION_ID()", &[], OPTS).await.unwrap().rows[0][0]).parse().unwrap();
+    if !snapshot.unavailable.iter().any(|u| u.starts_with("Lock waits")) {
+        assert_eq!(waiting.blocked_by, [holder_pid], "{:?}", snapshot.unavailable);
+        assert_eq!(snapshot.blocked, Some(1));
+    }
+    assert!(snapshot.connections.unwrap().max > 0);
+    assert!(monitor.kill(waiter_pid, false).await.unwrap());
+    let err = blocked.await.unwrap().unwrap_err();
+    assert!(matches!(err.kind, ErrorKind::Cancelled | ErrorKind::Server), "{err:?}");
+    holder.execute("ROLLBACK", &[], OPTS).await.unwrap();
+    assert!(monitor.server_settings(Some("max_conn")).await.unwrap().iter().any(|s| s.name == "max_connections"));
+    assert!(!monitor.largest_tables(DB, 5).await.unwrap().is_empty());
+}

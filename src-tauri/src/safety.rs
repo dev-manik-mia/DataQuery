@@ -73,14 +73,15 @@ pub fn required(connection: &SavedConnection, settings: &Settings, intent: &Inte
 }
 
 /// The confirmation for cancelling a statement or terminating a session from Monitoring.
-pub fn kill_request(connection: &SavedConnection, pid: i64, user: Option<&str>, terminate: bool) -> ConfirmationRequest {
+pub fn kill_request(
+    connection: &SavedConnection,
+    pid: i64,
+    user: Option<&str>,
+    terminate: bool,
+) -> ConfirmationRequest {
     let production = connection.environment == Environment::Production;
     let what = if terminate { "Terminate" } else { "Cancel" };
-    let mut reasons = vec![format!(
-        "pid {pid} · user {} · connection {}",
-        user.unwrap_or("unknown"),
-        connection.name
-    )];
+    let mut reasons = vec![format!("pid {pid} · user {} · connection {}", user.unwrap_or("unknown"), connection.name)];
     reasons.push(if terminate {
         "Terminating ends the session; its open transaction is rolled back.".to_owned()
     } else {
@@ -97,7 +98,10 @@ pub fn kill_request(connection: &SavedConnection, pid: i64, user: Option<&str>, 
 }
 
 /// Checks a confirmation against a request that must always be confirmed.
-pub fn confirm(request: ConfirmationRequest, confirmation: Option<&Confirmation>) -> DbResult<Option<ConfirmationRequest>> {
+pub fn confirm(
+    request: ConfirmationRequest,
+    confirmation: Option<&Confirmation>,
+) -> DbResult<Option<ConfirmationRequest>> {
     let Some(confirmation) = confirmation.filter(|c| c.acknowledged) else {
         return Ok(Some(request));
     };
