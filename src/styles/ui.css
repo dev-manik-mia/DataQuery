@@ -240,7 +240,9 @@ textarea.dq-input {
 /* ------------------------------------------------------------- Segmented */
 .dq-seg {
   display: inline-flex;
-  align-self: flex-start;
+  /* Never stretched by a column layout, and centred like any control in a row. */
+  width: max-content;
+  max-width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
@@ -283,6 +285,22 @@ textarea.dq-input {
 
 .dq-seg__count {
   font-weight: 500;
+}
+
+/* Toolbars: buttons, segmented controls and icon buttons share the small input
+   height, so they line up with the filter and search boxes beside them. */
+[role='toolbar'] .dq-btn--sm,
+[role='toolbar'] .dq-seg {
+  height: var(--input-h-sm);
+}
+
+[role='toolbar'] .dq-seg__opt {
+  height: 100%;
+}
+
+[role='toolbar'] .dq-icon-btn {
+  width: var(--input-h-sm);
+  height: var(--input-h-sm);
 }
 
 /* ------------------------------------------------------- Chip and badge */
