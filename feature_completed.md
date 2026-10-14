@@ -39,7 +39,7 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | Cassandra 5.0 and ScyllaDB 2025.1 integration (each test runs on both) | 13 | `npm run db:up:wide` then `npm run test:integration:wide` |
 | Elasticsearch 8.15 integration | 9 | `npm run db:up:search` then `npm run test:integration:search` |
 | Neo4j 5.26 community integration (HTTP Query API) | 11 | 〃 |
-| SSH tunnel integration (OpenSSH bastion → PostgreSQL) | 3 | 〃 (port 52222) |
+| SSH tunnel integration (OpenSSH bastion → PostgreSQL, password and .pem keys) | 4 | 〃 (port 52222) |
 | Frontend unit tests (Vitest) | 23 | `npm test` |
 | `cargo fmt --check`, `clippy -D warnings` (pedantic), `tsc --noEmit`, `eslint` | clean | `npm run check` |
 
@@ -79,8 +79,8 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | Non-secret metadata in local SQLite, never passwords | MVP | ✅ | |
 | TLS verify-full by default, no silent bypass | MVP | ✅ | MySQL `prefer` falls back to plain only if the server has no TLS |
 | Import from URL (`postgres://`, `mysql://`, `mariadb://`) | P0 | ✅ | `mongodb+srv://` reports "planned" (MongoDB is P2) |
-| Advanced TLS (CA / client cert files) | P1 | ✅ | Both adapters; not tested against a TLS server in Docker |
-| SSH tunnels, jump hosts, host-key verification | P1 | ✅ | Password, key file (+passphrase), agent; ~/.ssh/known_hosts + app known_hosts; trust by fingerprint; tested |
+| Advanced TLS (CA / client cert files) | P1 | ✅ | `.pem` CA bundles, client certificate + key as two files or one combined `.pem` (every engine); files are checked before connecting (missing key, encrypted key, no certificate get a clear message); not tested against a TLS server in Docker |
+| SSH tunnels, jump hosts, host-key verification | P1 | ✅ | Password, key file (+passphrase), agent; key files may be OpenSSH or `.pem` (AWS EC2 RSA `BEGIN RSA PRIVATE KEY`, PKCS#8, SEC1 EC, Ed25519; BOM / CRLF tolerated; clear messages for PuTTY `.ppk`, public keys and old DES-encrypted keys); ~/.ssh/known_hosts + app known_hosts; trust by fingerprint; tested with password and `.pem` keys |
 | Read-only profiles | P1 | ✅ | Session-level read-only transactions + backend refusal of writes; tested |
 | Keepalive / retry / idle timeout / pool size | P1 | ✅ | Per connection; idle sessions closed and can be reconnected |
 | Connection export/import | P1 | ✅ | JSON without secrets |

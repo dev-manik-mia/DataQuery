@@ -201,6 +201,15 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 19. Connection form: `.pem` files
+
+- [x] T19.1 SSH private keys from `.pem` files (`dq-ssh/key.rs`): AWS EC2 PKCS#1 RSA, PKCS#8 (plain and encrypted), SEC1 EC, OpenSSH; byte-order mark, Windows line ends and indentation tolerated; extra blocks ignored; a passphrase saved for an unencrypted key is ignored; PuTTY `.ppk`, public keys, certificates and old DES-encrypted keys get a message that says what to do. The key picker offers `.pem`/`.key` files.
+- [x] T19.2 TLS client certificate and key in one `.pem`: `TlsFiles::client_pair` (key file optional) used by every adapter; the shared `dq_core::tls::client_identity_pem` replaces three copies in the HTTP adapters.
+- [x] T19.3 `dq_core::tls::check_files` before connecting: CA bundle holds certificates, client certificate holds a certificate, a private key exists (in the key file or the combined `.pem`) and is not encrypted.
+- [x] T19.4 Tests: key format fixtures (`dq-ssh/src/testdata`), combined-`.pem` fixture parsed like the rustls drivers, and SSH tunnels authenticated with RSA, EC and encrypted `.pem` keys against the bastion (its image now trusts the fixture keys).
+
+---
+
 ## Verification
 
 | Area | How it was verified |
