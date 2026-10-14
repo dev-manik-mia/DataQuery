@@ -181,8 +181,19 @@
 .keyButton {
   justify-self: start;
   min-width: 80px;
-  cursor: pointer;
+  padding: 2px 8px;
   border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--sunk);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+
+.keyButton:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-o);
 }
 
 .keyButton[data-recording='true'] {
