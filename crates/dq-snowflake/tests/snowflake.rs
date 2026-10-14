@@ -1,5 +1,5 @@
 //! Integration tests against fakesnow, a Snowflake emulator that speaks the
-//! Snowflake REST protocol (on DuckDB). They check the protocol, result
+//! Snowflake REST protocol (on `DuckDB`). They check the protocol, result
 //! decoding and the catalog; a real Snowflake account was not available.
 //!
 //! Start it with `docker compose -p dataquery up -d fakesnow` and run

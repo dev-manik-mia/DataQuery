@@ -235,7 +235,7 @@ impl Rows {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| serde_json::from_str::<Value>(v).ok())
             .and_then(|v| {
-                v.get("written").and_then(|w| w.as_str().and_then(|s| s.parse().ok()).or_else(|| w.as_u64()))
+                v.get("written_rows").and_then(|w| w.as_str().and_then(|s| s.parse().ok()).or_else(|| w.as_u64()))
             });
         let mut rows = Self {
             body: response.bytes_stream().boxed(),
