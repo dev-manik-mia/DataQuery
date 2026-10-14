@@ -7,6 +7,7 @@ import type { SchemaChange } from '@/bindings/SchemaChange';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { TableStructure } from '@/bindings/TableStructure';
 import { Button, Checkbox, IconButton, Icon, SelectField, TextField } from '@/components/ui';
+import { hasSchemas } from '@/lib/engines';
 
 import { SchemaChangeDialog } from './SchemaChangeDialog';
 
@@ -14,7 +15,12 @@ import { SchemaChangeDialog } from './SchemaChangeDialog';
 export const TYPE_SUGGESTIONS: Record<SqlFlavor, string[]> = {
   postgres: ['bigint', 'integer', 'smallint', 'numeric(12,2)', 'double precision', 'boolean', 'text', 'varchar(255)', 'uuid', 'date', 'timestamp', 'timestamptz', 'jsonb', 'bytea', 'text[]', 'inet', 'interval'],
   mysql: ['bigint', 'int', 'smallint', 'tinyint(1)', 'decimal(12,2)', 'double', 'varchar(255)', 'text', 'char(36)', 'date', 'datetime', 'timestamp', 'json', 'blob', "enum('a','b')"],
+  sqlserver: ['bigint', 'int', 'smallint', 'bit', 'decimal(12,2)', 'float', 'money', 'nvarchar(255)', 'nvarchar(max)', 'varchar(255)', 'uniqueidentifier', 'date', 'datetime2(3)', 'datetimeoffset(3)', 'time', 'varbinary(max)'],
+  oracle: ['NUMBER(19)', 'NUMBER(10)', 'NUMBER(12,2)', 'BINARY_DOUBLE', 'VARCHAR2(255 CHAR)', 'NVARCHAR2(255)', 'CHAR(1)', 'CLOB', 'DATE', 'TIMESTAMP(6)', 'TIMESTAMP(6) WITH TIME ZONE', 'RAW(16)', 'BLOB', 'JSON'],
 };
+
+/** What the engine calls a column that numbers itself. */
+const IDENTITY_LABEL: Record<SqlFlavor, string> = { postgres: 'Identity', mysql: 'AUTO_INCREMENT', sqlserver: 'IDENTITY', oracle: 'Identity' };
 
 function TypeList({ flavor }: { flavor: SqlFlavor }) {
   return (
@@ -65,7 +71,7 @@ export function CreateTableDialog({ container, flavor, onClose, onApplied }: { c
         <span className="dq-field__label">Default</span>
         <span className="dq-field__label">Null</span>
         <span className="dq-field__label">PK</span>
-        <span className="dq-field__label">{flavor === 'mysql' ? 'Auto inc.' : 'Identity'}</span>
+        <span className="dq-field__label">{flavor === 'mysql' ? 'Auto inc.' : IDENTITY_LABEL[flavor]}</span>
         <span />
         {columns.map((c, i) => (
           <div key={i} style={{ display: 'contents' }}>
@@ -143,7 +149,7 @@ export function StructureEditDialog({ edit, structure, flavor, onClose, onApplie
     const parts = target.trim().split('.');
     if (!target.trim() || parts.length > 2) return null;
     const [first, second] = parts;
-    return second ? { kind: 'table', database: table.database, schema: flavor === 'postgres' ? first! : null, name: second } : { kind: 'table', database: table.database, schema: table.schema, name: first! };
+    return second ? { kind: 'table', database: table.database, schema: hasSchemas(flavor) ? first! : null, name: second } : { kind: 'table', database: table.database, schema: table.schema, name: first! };
   };
 
   const changes: SchemaChange[] | string = (() => {
@@ -226,12 +232,13 @@ export function StructureEditDialog({ edit, structure, flavor, onClose, onApplie
           <TextField label="Default" mono placeholder="none" hint="A SQL expression, e.g. 'pending' or now()." value={defaultExpr} onChange={(e) => setDefault(e.target.value)} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 20 }}>
             <Checkbox label="Allows NULL" checked={nullable} onChange={setNullable} />
-            {edit.kind === 'add-column' && <Checkbox label={flavor === 'mysql' ? 'AUTO_INCREMENT' : 'Identity'} checked={identity} onChange={setIdentity} />}
+            {edit.kind === 'add-column' && <Checkbox label={IDENTITY_LABEL[flavor]} checked={identity} onChange={setIdentity} />}
           </div>
         </div>
       )}
       {(edit.kind === 'rename-column' || edit.kind === 'rename-table') && nameField('New name')}
       {edit.kind === 'drop-table' && flavor === 'postgres' && <Checkbox label="CASCADE (also drop views and foreign keys that depend on it)" checked={cascade} onChange={setCascade} />}
+      {edit.kind === 'drop-table' && flavor === 'oracle' && <Checkbox label="CASCADE CONSTRAINTS (also drop foreign keys that reference it)" checked={cascade} onChange={setCascade} />}
       {edit.kind === 'add-index' && (
         <>
           {nameField('Index name')}
@@ -247,7 +254,7 @@ export function StructureEditDialog({ edit, structure, flavor, onClose, onApplie
           {nameField('Constraint name')}
           <ColumnPicker structure={structure} value={columns} onChange={setColumns} label="Columns" />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
-            <TextField label="Referenced table" mono placeholder={flavor === 'postgres' ? 'schema.table' : 'table'} value={target} onChange={(e) => setTarget(e.target.value)} />
+            <TextField label="Referenced table" mono placeholder={hasSchemas(flavor) ? 'schema.table' : 'table'} value={target} onChange={(e) => setTarget(e.target.value)} />
             <TextField label="Referenced columns" mono placeholder="id" hint="Comma-separated, in the same order." value={targetColumns} onChange={(e) => setTargetColumns(e.target.value)} />
             <SelectField label="On delete" value={onDelete} onChange={(e) => setOnDelete(e.target.value)} options={FK_ACTIONS.map((a) => ({ value: a, label: a || 'Default (no action)' }))} />
             <SelectField label="On update" value={onUpdate} onChange={(e) => setOnUpdate(e.target.value)} options={FK_ACTIONS.map((a) => ({ value: a, label: a || 'Default (no action)' }))} />

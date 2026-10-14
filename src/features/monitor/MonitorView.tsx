@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { DbError } from '@/bindings/DbError';
+import type { Engine } from '@/bindings/Engine';
 import type { MonitorSnapshot } from '@/bindings/MonitorSnapshot';
 import type { ObjectSize } from '@/bindings/ObjectSize';
 import type { ServerProcess } from '@/bindings/ServerProcess';
@@ -61,6 +62,14 @@ function Tile({
 type Panel = 'activity' | 'locks' | 'sizes' | 'settings';
 
 /** Server activity, running queries, locks, sizes and settings (screen 07). */
+/** Where each engine's process list comes from. */
+const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
+  postgres: 'Running queries from pg_stat_activity',
+  cockroachdb: 'Sessions from crdb_internal.cluster_sessions',
+  sqlserver: 'Sessions from sys.dm_exec_sessions',
+  oracle: 'Sessions from V$SESSION',
+};
+
 export function MonitorView({ active }: { active: boolean }) {
   const session = useWorkspace((s) => s.session)!;
   const sid = { sessionId: session.session_id };
@@ -222,7 +231,7 @@ export function MonitorView({ active }: { active: boolean }) {
             />
             {panel === 'activity' && (
               <Card
-                title={session.flavor === 'postgres' ? 'Running queries from pg_stat_activity' : 'Process list'}
+                title={PROCESS_SOURCE[session.server.engine] ?? 'Process list'}
                 flush
                 actions={<Checkbox label="Show idle sessions" checked={idle} onChange={setIdle} />}
                 footer="Cancel and terminate open a confirmation naming the pid, user and connection. What is shown depends on server version and the account's privileges."

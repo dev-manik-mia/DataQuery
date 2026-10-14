@@ -15,7 +15,7 @@ import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
 import { Alert, Button, EngineMark, ErrorAlert, FieldShell, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, insecureReason, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, databaseLabel, insecureReason, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -287,7 +287,13 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             <TextField label="Host" mono value={state.host} error={err('host')} onChange={(e) => set('host', e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
-          <TextField label="Database" mono value={state.database} onChange={(e) => set('database', e.target.value)} />
+          <TextField
+            label={databaseLabel(engine)}
+            mono
+            value={state.database}
+            hint={engine === 'oracle' ? 'The service of the pluggable database, e.g. FREEPDB1 or ORCLPDB1. Needs Oracle Instant Client.' : undefined}
+            onChange={(e) => set('database', e.target.value)}
+          />
           <TextField label="Username" mono value={state.username} error={err('username')} onChange={(e) => set('username', e.target.value)} />
           {state.auth.method === 'password' && (
           <div className={styles.full} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

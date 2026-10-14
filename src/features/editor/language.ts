@@ -1,10 +1,13 @@
 import { snippetCompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
-import { MySQL, PostgreSQL, sql, type SQLNamespace } from '@codemirror/lang-sql';
+import { MSSQL, MySQL, PLSQL, PostgreSQL, sql, type SQLDialect, type SQLNamespace } from '@codemirror/lang-sql';
 import { EditorState } from '@codemirror/state';
 
 import type { SchemaModel } from '@/bindings/SchemaModel';
 import type { Snippet } from '@/bindings/Snippet';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
+import { defaultSchema } from '@/lib/engines';
+
+const DIALECTS: Record<SqlFlavor, SQLDialect> = { postgres: PostgreSQL, mysql: MySQL, sqlserver: MSSQL, oracle: PLSQL };
 
 /**
  * The completion namespace: `schema.table` (and bare `table` for the default
@@ -39,9 +42,9 @@ export function snippetSource(snippets: Snippet[]): CompletionSource {
 /** CodeMirror SQL language for a dialect, with schema-aware and snippet completion. */
 export function sqlLanguage(flavor: SqlFlavor, model: SchemaModel | null = null, snippets: Snippet[] = []) {
   const language = sql({
-    dialect: flavor === 'mysql' ? MySQL : PostgreSQL,
+    dialect: DIALECTS[flavor],
     schema: completionSchema(model),
-    defaultSchema: flavor === 'postgres' ? 'public' : undefined,
+    defaultSchema: defaultSchema(flavor) ?? undefined,
     upperCaseKeywords: true,
   });
   return [language, EditorState.languageData.of(() => [{ autocomplete: snippetSource(snippets) }])];

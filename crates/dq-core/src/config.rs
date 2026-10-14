@@ -349,13 +349,18 @@ pub struct ParsedUrl {
     pub name_suggestion: String,
 }
 
-/// Parses `postgres://`, `postgresql://`, `mysql://` and `mariadb://` URLs.
+/// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
+/// `mariadb://`, `sqlserver://` (or `mssql://`) and `oracle://` URLs. For
+/// Oracle the path is the service name.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let url = Url::parse(input.trim()).map_err(|_| DbError::invalid("This is not a valid connection URL."))?;
     let engine = match url.scheme() {
         "postgres" | "postgresql" => Engine::Postgres,
+        "cockroachdb" | "cockroach" => Engine::Cockroachdb,
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
+        "sqlserver" | "mssql" => Engine::Sqlserver,
+        "oracle" => Engine::Oracle,
         "mongodb" | "mongodb+srv" => {
             return Err(DbError::unsupported("MongoDB connections are planned (P2)."));
         }
@@ -372,8 +377,14 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let mut ssl_mode = SslMode::default();
     let mut connect_timeout_secs = 10;
     let mut tls_files = TlsFiles::default();
+    // SQL Server spells TLS as `encrypt` and `trustServerCertificate`.
+    let mut encrypt: Option<bool> = None;
+    let mut trust_server_certificate = false;
     for (key, value) in url.query_pairs() {
+        let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "strict" | "mandatory");
         match key.as_ref() {
+            "encrypt" => encrypt = Some(truthy),
+            "trustServerCertificate" | "trustservercertificate" => trust_server_certificate = truthy,
             "sslmode" | "ssl-mode" | "ssl_mode" => {
                 ssl_mode =
                     SslMode::parse(&value).ok_or_else(|| DbError::invalid(format!("Unknown sslmode `{value}`.")))?;
@@ -387,6 +398,11 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
             }
             _ => {}
         }
+    }
+    match encrypt {
+        Some(false) => ssl_mode = SslMode::Disable,
+        _ if trust_server_certificate => ssl_mode = SslMode::Require,
+        _ => {}
     }
     let config = ConnConfig {
         engine,
@@ -425,6 +441,18 @@ mod tests {
         assert_eq!(p.config.port, 3306);
         assert_eq!(p.config.ssl_mode, SslMode::VerifyFull);
         assert_eq!(p.password, None);
+    }
+
+    #[test]
+    fn parses_sqlserver_oracle_and_cockroach_urls() {
+        let p = parse_connection_url("sqlserver://sa:secret@sql.local/sales?trustServerCertificate=true").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Sqlserver, 1433, SslMode::Require));
+        let p = parse_connection_url("mssql://sa@sql.local:14330/sales?encrypt=false").unwrap();
+        assert_eq!((p.config.port, p.config.ssl_mode), (14330, SslMode::Disable));
+        let p = parse_connection_url("oracle://app:pw@ora.local/ORCLPDB1").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Oracle, 1521, "ORCLPDB1"));
+        let p = parse_connection_url("cockroachdb://root@crdb.local/defaultdb?sslmode=disable").unwrap();
+        assert_eq!((p.config.engine, p.config.port), (Engine::Cockroachdb, 26257));
     }
 
     #[test]

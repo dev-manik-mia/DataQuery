@@ -6,7 +6,7 @@ import { toAppError } from '@/lib/errors';
 import { api } from '@/lib/ipc';
 import { useUi } from '@/stores/ui';
 
-/** Parses `postgres://…` or `mysql://…` into the form. The password goes to the keychain on save, never the URL. */
+/** Parses `postgres://…`, `mysql://…`, `sqlserver://…`, `oracle://…` and similar URLs into the form. The password goes to the keychain on save, never the URL. */
 export function ImportUrlDialog({ onClose }: { onClose: () => void }) {
   const navigate = useUi((s) => s.navigate);
   const [url, setUrl] = useState('');
@@ -52,7 +52,7 @@ export function ImportUrlDialog({ onClose }: { onClose: () => void }) {
           type="password"
           autoFocus
           placeholder="postgres://user:password@host:5432/database"
-          hint="postgres://, mysql:// or mariadb://. The URL is not stored. A password in it is moved to the system keychain when you save."
+          hint="postgres://, cockroachdb://, mysql://, mariadb://, sqlserver:// or oracle://. The URL is not stored. A password in it is moved to the system keychain when you save."
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />

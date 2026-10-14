@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import { Button, Checkbox, Dialog } from '@/components/ui';
+import { placeholderLabel } from '@/lib/engines';
 
 interface ParamsDialogProps {
   count: number;
@@ -12,7 +13,7 @@ interface ParamsDialogProps {
   onClose: () => void;
 }
 
-/** Values for `$1…$n` (PostgreSQL) or `?` (MySQL). They are sent as bound parameters, never pasted into the SQL. */
+/** Values for `$1…$n` (PostgreSQL), `?` (MySQL), `@P1…` (SQL Server) or `:1…` (Oracle). They are sent as bound parameters, never pasted into the SQL. */
 export function ParamsDialog({ count, flavor, initial, sql, onRun, onClose }: ParamsDialogProps) {
   const [values, setValues] = useState(() => Array.from({ length: count }, (_, i) => initial[i] ?? ''));
   const [nulls, setNulls] = useState(() => Array.from({ length: count }, () => false));
@@ -45,7 +46,7 @@ export function ParamsDialog({ count, flavor, initial, sql, onRun, onClose }: Pa
         {values.map((v, i) => (
           <div key={i} style={{ display: 'contents' }}>
             <label className="mono" htmlFor={`dq-param-${i}`}>
-              {flavor === 'postgres' ? `$${i + 1}` : `?${i + 1}`}
+              {placeholderLabel(flavor, i + 1)}
             </label>
             <input
               id={`dq-param-${i}`}

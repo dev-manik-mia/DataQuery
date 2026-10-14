@@ -6,7 +6,7 @@ import type { SchemaDiff } from '@/bindings/SchemaDiff';
 import { Alert, Button, Card, EmptyState, ErrorAlert, PageHead, SelectField, TextField } from '@/components/ui';
 import { SqlViewer } from '@/features/editor/SqlViewer';
 import { copyText } from '@/lib/clipboard';
-import { flavorOf } from '@/lib/engines';
+import { defaultSchema, flavorOf, hasSchemas } from '@/lib/engines';
 import { toAppError } from '@/lib/errors';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
@@ -18,7 +18,7 @@ import styles from './Schema.module.css';
 function SidePicker({ label, value, onChange }: { label: string; value: DiffSide; onChange: (v: DiffSide) => void }) {
   const connections = useConnections((s) => s.connections);
   const connection = connections.find((c) => c.id === value.connection_id);
-  const schemas = connection && flavorOf(connection.config.engine) === 'postgres';
+  const schemas = connection && hasSchemas(flavorOf(connection.config.engine));
   return (
     <Card title={label}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -27,7 +27,7 @@ function SidePicker({ label, value, onChange }: { label: string; value: DiffSide
           value={value.connection_id}
           onChange={(e) => {
             const c = connections.find((x) => x.id === e.target.value);
-            onChange({ connection_id: e.target.value, database: c?.config.database ?? '', schema: c && flavorOf(c.config.engine) === 'postgres' ? 'public' : null });
+            onChange({ connection_id: e.target.value, database: c?.config.database ?? '', schema: c ? defaultSchema(flavorOf(c.config.engine), c.config.username) : null });
           }}
           options={[{ value: '', label: 'Choose…' }, ...connections.map((c) => ({ value: c.id, label: `${c.name} (${c.environment})` }))]}
         />

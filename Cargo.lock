@@ -1158,6 +1158,7 @@ version = "0.1.0"
 dependencies = [
  "dq-core",
  "dq-mysql",
+ "dq-oracle",
  "dq-postgres",
  "dq-sqlserver",
  "dq-ssh",
