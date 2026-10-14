@@ -113,7 +113,17 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             | "COMMENT" | "AUDIT" | "NOAUDIT" | "ANALYZE" | "PURGE" | "FLASHBACK" => TxEffect::End,
             _ => TxEffect::None,
         },
-        SqlFlavor::Postgres | SqlFlavor::Mysql => match word(0) {
+        SqlFlavor::Snowflake => match word(0) {
+            "BEGIN" if matches!(word(1), "" | ";" | "TRANSACTION" | "WORK" | "NAME") => TxEffect::Begin,
+            "START" if word(1) == "TRANSACTION" => TxEffect::Begin,
+            // DDL commits the open transaction.
+            "COMMIT" | "ROLLBACK" | "CREATE" | "ALTER" | "DROP" | "UNDROP" | "GRANT" | "REVOKE" | "COMMENT" => {
+                TxEffect::End
+            }
+            _ => TxEffect::None,
+        },
+        SqlFlavor::Clickhouse => TxEffect::None,
+        SqlFlavor::Postgres | SqlFlavor::Mysql | SqlFlavor::Duckdb => match word(0) {
             "BEGIN" | "START" => TxEffect::Begin,
             "COMMIT" | "END" | "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
             "ROLLBACK" if word(1) == "TO" || (word(2) == "TO" && matches!(word(1), "WORK" | "TRANSACTION")) => {
@@ -184,11 +194,13 @@ struct Block {
     depth: u32,
     /// A routine or PL/SQL unit: only `GO` / `/` ends it.
     routine: bool,
+    /// A Snowflake Scripting `DECLARE` section, open until its block's `END`.
+    declare: bool,
 }
 
 impl Block {
     fn inside(&self) -> bool {
-        self.routine || self.depth > 0
+        self.routine || self.depth > 0 || self.declare
     }
 
     fn observe(&mut self, src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) {
@@ -196,6 +208,10 @@ impl Block {
         if self.head.len() < 6 {
             self.head.push(word.clone());
             self.routine = self.routine || starts_routine(&self.head, flavor);
+        }
+        if flavor == SqlFlavor::Snowflake {
+            self.observe_scripting(src, tokens, i, &word);
+            return;
         }
         if flavor != SqlFlavor::Sqlserver {
             return;
@@ -216,6 +232,32 @@ impl Block {
             }
             "CASE" => self.depth += 1,
             "END" if next.as_deref() != Some("CONVERSATION") => self.depth = self.depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+}
+
+impl Block {
+    /// Snowflake Scripting: `DECLARE … BEGIN … END` and `BEGIN … END` blocks.
+    /// `BEGIN` alone or with `TRANSACTION` / `WORK` / `NAME` starts a transaction instead.
+    fn observe_scripting(&mut self, src: &str, tokens: &[Token], i: usize, word: &str) {
+        let next = tokens[i + 1..].iter().find(|t| !t.is_trivia());
+        let next_word = next.filter(|t| t.kind == TokenKind::Word).map(|t| t.text(src).to_ascii_uppercase());
+        match word {
+            "DECLARE" if self.head.len() == 1 => self.declare = true,
+            "BEGIN"
+                if next.is_some_and(|t| t.kind != TokenKind::Semicolon)
+                    && !matches!(next_word.as_deref(), Some("TRANSACTION" | "WORK" | "NAME")) =>
+            {
+                self.depth += 1;
+            }
+            "CASE" => self.depth += 1,
+            "END" if !matches!(next_word.as_deref(), Some("IF" | "FOR" | "LOOP" | "WHILE" | "REPEAT")) => {
+                self.depth = self.depth.saturating_sub(1);
+                if self.depth == 0 {
+                    self.declare = false;
+                }
+            }
             _ => {}
         }
     }
@@ -246,7 +288,11 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
     let separator = match flavor {
         SqlFlavor::Sqlserver => tokens[i].kind == TokenKind::Word && text.eq_ignore_ascii_case("GO"),
         SqlFlavor::Oracle => tokens[i].kind == TokenKind::Punct && text == "/",
-        SqlFlavor::Postgres | SqlFlavor::Mysql => false,
+        SqlFlavor::Postgres
+        | SqlFlavor::Mysql
+        | SqlFlavor::Clickhouse
+        | SqlFlavor::Duckdb
+        | SqlFlavor::Snowflake => false,
     };
     if !separator {
         return false;
@@ -300,11 +346,32 @@ fn push_statement(
     });
 }
 
+/// Distinct `ClickHouse` `{name:Type}` parameters, in order of first appearance.
+pub fn named_params(sql: &str, flavor: SqlFlavor) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for t in tokenize(sql, flavor).iter().filter(|t| t.kind == TokenKind::Param) {
+        let text = t.text(sql);
+        if let Some(name) = text.strip_prefix('{').and_then(|r| r.split(':').next()) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names
+}
+
 fn param_count(src: &str, sig: &[Token]) -> u32 {
     let params = sig.iter().filter(|t| t.kind == TokenKind::Param).map(|t| t.text(src));
     let mut questions = 0;
     let mut highest = 0;
+    let mut names: Vec<&str> = Vec::new();
     for p in params {
+        if let Some(name) = p.strip_prefix('{').and_then(|r| r.split(':').next()) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+            continue;
+        }
         let numbered =
             p.strip_prefix('$').or_else(|| p.strip_prefix(':')).or_else(|| p.get(2..).filter(|_| p.starts_with('@')));
         match numbered.and_then(|n| n.parse::<u32>().ok()) {
@@ -312,7 +379,7 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
             None => questions += 1,
         }
     }
-    highest.max(questions)
+    highest.max(questions).max(names.len() as u32)
 }
 
 fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool, Option<DestructiveReason>) {
@@ -329,6 +396,12 @@ fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool
         (SqlFlavor::Sqlserver, "SAVE") => kind = StatementKind::Transaction,
         (SqlFlavor::Sqlserver, "END") => kind = StatementKind::Other,
         (SqlFlavor::Oracle, "BEGIN" | "DECLARE") => kind = StatementKind::Call,
+        (SqlFlavor::Snowflake, "DECLARE") => kind = StatementKind::Call,
+        (SqlFlavor::Snowflake, "BEGIN")
+            if word(1).is_some_and(|w| !matches!(w.as_str(), "TRANSACTION" | "WORK" | "NAME")) =>
+        {
+            kind = StatementKind::Call;
+        }
         (SqlFlavor::Oracle, "SET") if word(1).as_deref() == Some("TRANSACTION") => kind = StatementKind::Transaction,
         _ => {}
     }
@@ -653,5 +726,23 @@ mod tests {
         assert_eq!(transaction_effect("CREATE TABLE x (a NUMBER)", ORA), TxEffect::End);
         assert_eq!(transaction_effect("SET TRANSACTION READ WRITE", ORA), TxEffect::Begin);
         assert_eq!(transaction_effect("rollback to savepoint a", ORA), TxEffect::RollbackToSavepoint);
+    }
+
+    #[test]
+    fn snowflake_scripting_and_clickhouse_params() {
+        const SF: SqlFlavor = SqlFlavor::Snowflake;
+        let src = "BEGIN;\nDECLARE n INT;\nBEGIN\n  n := 1;\n  IF (n = 1) THEN RETURN n; END IF;\nEND;\nSELECT 1;\nCOMMIT";
+        assert_eq!(
+            texts(src, SF),
+            vec!["BEGIN", "DECLARE n INT;\nBEGIN\n  n := 1;\n  IF (n = 1) THEN RETURN n; END IF;\nEND", "SELECT 1", "COMMIT"]
+        );
+        assert_eq!(transaction_effect("BEGIN", SF), TxEffect::Begin);
+        assert_eq!(transaction_effect("CREATE TABLE t (a INT)", SF), TxEffect::End);
+        assert_eq!(analyze("SELECT ?, :2", SF).unwrap().param_count, 2);
+        const CH: SqlFlavor = SqlFlavor::Clickhouse;
+        let sql = "SELECT * FROM t WHERE a = {a:UInt64} AND b = {b:String} OR a = {a:UInt64}";
+        assert_eq!(analyze(sql, CH).unwrap().param_count, 2);
+        assert_eq!(named_params(sql, CH), ["a", "b"]);
+        assert_eq!(transaction_effect("BEGIN TRANSACTION", SqlFlavor::Duckdb), TxEffect::Begin);
     }
 }

@@ -70,11 +70,12 @@ impl Lexer<'_> {
         let c = self.bytes[self.pos];
         let flavor = self.flavor;
         let (pg, my, ms, ora) = (
-            flavor == SqlFlavor::Postgres,
+            flavor.postgres_like(),
             flavor == SqlFlavor::Mysql,
             flavor == SqlFlavor::Sqlserver,
             flavor == SqlFlavor::Oracle,
         );
+        let (ch, sf, duck) = (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
         match c {
             b' ' | b'\t' | b'\n' | b'\r' | 0x0c => {
                 while matches!(self.peek(0), Some(b' ' | b'\t' | b'\n' | b'\r' | 0x0c)) {
@@ -86,12 +87,15 @@ impl Lexer<'_> {
             b'-' if self.peek(1) == Some(b'-') && (!my || self.peek(2).is_none_or(|c| c.is_ascii_whitespace())) => {
                 self.line_comment()
             }
-            b'#' if my => self.line_comment(),
+            b'#' if my || ch => self.line_comment(),
+            b'/' if sf && self.peek(1) == Some(b'/') => self.line_comment(),
             b'/' if self.peek(1) == Some(b'*') => self.block_comment(pg || ms),
-            b'\'' => self.quoted(b'\'', my),
+            // MySQL, ClickHouse and Snowflake read backslash escapes in strings.
+            b'\'' => self.quoted(b'\'', my || ch || sf),
             b'"' if my => self.quoted(b'"', true),
-            b'"' => self.quoted(b'"', false).ident(),
-            b'`' if my => self.quoted(b'`', false).ident(),
+            b'"' => self.quoted(b'"', ch).ident(),
+            b'`' if my || ch => self.quoted(b'`', ch).ident(),
+            b'{' if ch => self.braced_param(),
             b'[' if ms => self.quoted_until(b']'),
             b'e' | b'E' if pg && self.peek(1) == Some(b'\'') => {
                 self.pos += 1;
@@ -101,10 +105,10 @@ impl Lexer<'_> {
             b'n' | b'N' if ora && matches!(self.peek(1), Some(b'q' | b'Q')) && self.peek(2) == Some(b'\'') => {
                 self.q_quote(2)
             }
-            b'$' if pg => self.dollar(),
-            b'?' if my => self.single(TokenKind::Param),
+            b'$' if pg || (sf && self.peek(1) == Some(b'$')) => self.dollar(),
+            b'?' if my || duck || sf => self.single(TokenKind::Param),
             b'@' if ms => self.at_sign(),
-            b':' if ora && self.peek(1).is_some_and(|c| c.is_ascii_digit()) => {
+            b':' if (ora || sf) && self.peek(1).is_some_and(|c| c.is_ascii_digit()) => {
                 self.pos += 1;
                 while self.peek(0).is_some_and(|c| c.is_ascii_digit()) {
                     self.pos += 1;
@@ -152,6 +156,19 @@ impl Lexer<'_> {
             && text.as_bytes()[0].eq_ignore_ascii_case(&b'p')
             && text.bytes().skip(1).all(|c| c.is_ascii_digit());
         if param { TokenKind::Param } else { TokenKind::Word }
+    }
+
+    /// `ClickHouse` query parameter `{name:Type}`; any other `{` is punctuation.
+    fn braced_param(&mut self) -> TokenKind {
+        let rest = &self.src[self.pos + 1..];
+        let name_len = rest.bytes().take_while(|&c| c.is_ascii_alphanumeric() || c == b'_').count();
+        if name_len > 0 && rest.as_bytes().get(name_len) == Some(&b':') {
+            if let Some(end) = rest.find('}') {
+                self.pos += end + 2;
+                return TokenKind::Param;
+            }
+        }
+        self.single(TokenKind::Punct)
     }
 
     /// `[name]` with `]]` as an escaped bracket (T-SQL).
@@ -316,16 +333,23 @@ mod tests {
         assert!(kinds("select @P2, @x", SqlFlavor::Sqlserver).contains(&(TokenKind::Param, "@P2")));
         assert!(kinds("select @P2, @x", SqlFlavor::Sqlserver).contains(&(TokenKind::Word, "@x")));
         assert!(kinds("select :1 from dual", SqlFlavor::Oracle).contains(&(TokenKind::Param, ":1")));
+        assert!(kinds("select {id:UInt64}, {x}", SqlFlavor::Clickhouse).contains(&(TokenKind::Param, "{id:UInt64}")));
+        assert!(kinds("select 'a\\';' # c ;", SqlFlavor::Clickhouse).iter().all(|(k, _)| *k != TokenKind::Semicolon));
+        assert!(kinds("select $$ ; $$, ? // c ;", SqlFlavor::Snowflake).iter().all(|(k, _)| *k != TokenKind::Semicolon));
+        assert!(kinds("select ?, $1", SqlFlavor::Duckdb).contains(&(TokenKind::Param, "$1")));
         assert!(!kinds(":new.id", SqlFlavor::Oracle).iter().any(|(k, _)| *k == TokenKind::Param));
     }
 
     #[test]
     fn unterminated_input_does_not_panic() {
-        for src in ["'abc", "\"abc", "$x$ abc", "/* abc", "E'\\", "`abc"] {
+        for src in ["'abc", "\"abc", "$x$ abc", "/* abc", "E'\\", "`abc", "{a:", "$$ x"] {
             let _ = tokenize(src, SqlFlavor::Postgres);
             let _ = tokenize(src, SqlFlavor::Mysql);
             let _ = tokenize(src, SqlFlavor::Sqlserver);
             let _ = tokenize(src, SqlFlavor::Oracle);
+            let _ = tokenize(src, SqlFlavor::Clickhouse);
+            let _ = tokenize(src, SqlFlavor::Duckdb);
+            let _ = tokenize(src, SqlFlavor::Snowflake);
         }
     }
 

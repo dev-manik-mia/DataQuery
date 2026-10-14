@@ -166,6 +166,9 @@ pub fn prepare(
         SqlFlavor::Mysql => "MySQL/MariaDB",
         SqlFlavor::Sqlserver => "SQL Server T-SQL",
         SqlFlavor::Oracle => "Oracle SQL",
+        SqlFlavor::Clickhouse => "ClickHouse SQL",
+        SqlFlavor::Duckdb => "DuckDB SQL",
+        SqlFlavor::Snowflake => "Snowflake SQL",
     };
     let (hint, task, mut sent) = match request {
         AiRequest::Sql { question } => {

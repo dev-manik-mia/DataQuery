@@ -1,5 +1,7 @@
 //! Connection settings. Secrets are never part of these types.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use url::Url;
@@ -231,6 +233,10 @@ pub struct ConnConfig {
     pub options: ConnOptions,
     #[serde(default)]
     pub auth: AuthMethod,
+    /// Engine-specific settings, e.g. Snowflake's `warehouse` and `role`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[ts(type = "Record<string, string>")]
+    pub properties: BTreeMap<String, String>,
 }
 
 impl Default for ConnConfig {
@@ -248,6 +254,7 @@ impl Default for ConnConfig {
             read_only: false,
             options: ConnOptions::default(),
             auth: AuthMethod::default(),
+            properties: BTreeMap::new(),
         }
     }
 }
@@ -274,8 +281,45 @@ fn validate_path(path: &str, what: &str) -> DbResult<()> {
 impl ConnConfig {
     pub const MAX_TIMEOUT_SECS: u32 = 300;
 
+    /// A property, trimmed; `None` when unset or blank.
+    pub fn property(&self, key: &str) -> Option<&str> {
+        self.properties.get(key).map(|v| v.trim()).filter(|v| !v.is_empty())
+    }
+
+    /// Validates a file-based connection: an absolute database path, or `:memory:`.
+    fn validate_file(&self) -> DbResult<()> {
+        let path = self.database.trim();
+        if path.is_empty() {
+            return Err(DbError::invalid("Choose a database file, or enter :memory: for a temporary database."));
+        }
+        if path != ":memory:" {
+            validate_path(path, "The database file")?;
+        }
+        if self.ssh.is_some() {
+            return Err(DbError::invalid("A local database file cannot use an SSH tunnel."));
+        }
+        Ok(())
+    }
+
+    fn validate_properties(&self) -> DbResult<()> {
+        for (key, value) in &self.properties {
+            let key_ok = !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !key_ok || value.len() > 512 || value.chars().any(char::is_control) {
+                return Err(DbError::invalid(format!("The setting `{key}` is not valid.")));
+            }
+        }
+        Ok(())
+    }
+
     /// Validates every field before an adapter sees it.
     pub fn validate(&self) -> DbResult<()> {
+        self.validate_properties()?;
+        if self.engine.is_file_based() {
+            if self.connect_timeout_secs == 0 || self.connect_timeout_secs > Self::MAX_TIMEOUT_SECS {
+                return Err(DbError::invalid("Connect timeout must be between 1 and 300 seconds."));
+            }
+            return self.validate_file();
+        }
         validate_host(&self.host, "Host")?;
         if self.port == 0 {
             return Err(DbError::invalid("Port must be between 1 and 65535."));
@@ -314,6 +358,9 @@ impl ConnConfig {
 
     /// True when TLS is off or the certificate is not verified on a host that is not this machine.
     pub fn insecure_reason(&self) -> Option<&'static str> {
+        if self.engine.is_file_based() {
+            return None;
+        }
         let local = matches!(self.host.as_str(), "localhost" | "127.0.0.1" | "::1") && self.ssh.is_none();
         if local {
             return None;
@@ -453,6 +500,20 @@ mod tests {
         assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Oracle, 1521, "ORCLPDB1"));
         let p = parse_connection_url("cockroachdb://root@crdb.local/defaultdb?sslmode=disable").unwrap();
         assert_eq!((p.config.engine, p.config.port), (Engine::Cockroachdb, 26257));
+    }
+
+    #[test]
+    fn file_databases_need_a_path_not_a_host() {
+        let mut c = ConnConfig { engine: Engine::Duckdb, host: String::new(), username: String::new(), ..ConnConfig::default() };
+        assert!(c.validate().is_err());
+        c.database = ":memory:".into();
+        assert!(c.validate().is_ok());
+        c.database = "relative.duckdb".into();
+        assert!(c.validate().is_err());
+        c.database = "/tmp/sales.duckdb".into();
+        assert!(c.validate().is_ok() && c.insecure_reason().is_none());
+        c.properties.insert("bad key".into(), "x".into());
+        assert!(c.validate().is_err());
     }
 
     #[test]

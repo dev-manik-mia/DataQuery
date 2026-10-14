@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use dq_core::explain::ExplainResult;
 use dq_core::result::{ExecOptions, RowsPage, StatementResult};
+use dq_core::sql::dialect::dialect_for;
 use dq_core::sql::{
     SqlFlavor, StatementInfo, StatementKind, TxEffect, redact_literals, split_statements, transaction_effect,
 };
@@ -83,8 +84,12 @@ pub fn record_history(
 /// Next transaction state after a statement ran (or failed).
 fn next_tx(current: TxStatus, sql: &str, flavor: SqlFlavor, failed: bool) -> TxStatus {
     if failed {
-        // PostgreSQL aborts the whole transaction; MySQL keeps it usable.
-        return if current == TxStatus::Open && flavor == SqlFlavor::Postgres { TxStatus::Failed } else { current };
+        // PostgreSQL and DuckDB abort the whole transaction; the others keep it usable.
+        return if current == TxStatus::Open && dialect_for(flavor).aborts_transaction_on_error() {
+            TxStatus::Failed
+        } else {
+            current
+        };
     }
     match transaction_effect(sql, flavor) {
         TxEffect::Begin => TxStatus::Open,

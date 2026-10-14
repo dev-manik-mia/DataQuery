@@ -139,7 +139,7 @@ impl SchemaChange {
     /// The change needs the table's current structure (MySQL `MODIFY COLUMN`,
     /// SQL Server `ALTER COLUMN`, which restate the type).
     pub fn needs_structure(&self, flavor: SqlFlavor) -> bool {
-        matches!(flavor, SqlFlavor::Mysql | SqlFlavor::Sqlserver)
+        matches!(flavor, SqlFlavor::Mysql | SqlFlavor::Sqlserver | SqlFlavor::Clickhouse)
             && matches!(self, Self::AlterColumn { data_type, nullable, .. } if data_type.is_some() || nullable.is_some())
     }
 }
@@ -202,17 +202,28 @@ fn column_list(d: &dyn Dialect, columns: &[String]) -> DbResult<String> {
     Ok(columns.iter().map(|c| d.quote_ident(c)).collect::<Vec<_>>().join(", "))
 }
 
+/// `ClickHouse` spells nullability in the type: `Nullable(T)`.
+fn clickhouse_type(data_type: &str, nullable: bool) -> String {
+    if nullable && !data_type.starts_with("Nullable(") { format!("Nullable({data_type})") } else { data_type.to_owned() }
+}
+
 fn column_def(d: &dyn Dialect, c: &ColumnDef) -> DbResult<String> {
     name(&c.name, "Column names")?;
-    let mut out = format!("{} {}", d.quote_ident(&c.name), validate_type(d, &c.data_type)?);
+    let data_type = validate_type(d, &c.data_type)?;
+    let clickhouse = d.flavor() == SqlFlavor::Clickhouse;
+    let data_type = if clickhouse { clickhouse_type(&data_type, c.nullable) } else { data_type };
+    let mut out = format!("{} {data_type}", d.quote_ident(&c.name));
     if c.identity {
-        out.push_str(d.identity_clause());
+        let identity = d
+            .identity_clause()
+            .ok_or_else(|| DbError::unsupported("This engine has no identity columns; use a sequence or a default."))?;
+        out.push_str(identity);
     }
     // Oracle needs DEFAULT before constraints; every engine accepts that order.
     if let Some(default) = c.default.as_deref().filter(|d| !d.trim().is_empty()) {
         let _ = write!(out, " DEFAULT {}", expression(d, default, "default")?);
     }
-    if !c.nullable {
+    if !c.nullable && !clickhouse {
         out.push_str(" NOT NULL");
     }
     Ok(out)
@@ -340,6 +351,65 @@ fn alter_column(
             }
             out
         }
+        SqlFlavor::Duckdb => {
+            // One change per statement: DuckDB alters a column one property at a time.
+            let mut out = Vec::new();
+            if let Some(t) = data_type {
+                let t = validate_type(d, t)?;
+                out.push(alter(format!("ALTER COLUMN {col} TYPE {t}")));
+            }
+            if let Some(n) = nullable {
+                out.push(alter(format!("ALTER COLUMN {col} {} NOT NULL", if n { "DROP" } else { "SET" })));
+            }
+            match default {
+                Some(DefaultChange::Set { expression: e }) => {
+                    out.push(alter(format!("ALTER COLUMN {col} SET DEFAULT {}", default_sql(e)?)));
+                }
+                Some(DefaultChange::Drop) => out.push(alter(format!("ALTER COLUMN {col} DROP DEFAULT"))),
+                None => {}
+            }
+            out
+        }
+        SqlFlavor::Snowflake => {
+            let mut out = Vec::new();
+            if let Some(t) = data_type {
+                out.push(alter(format!("ALTER COLUMN {col} SET DATA TYPE {}", validate_type(d, t)?)));
+            }
+            if let Some(n) = nullable {
+                out.push(alter(format!("ALTER COLUMN {col} {} NOT NULL", if n { "DROP" } else { "SET" })));
+            }
+            match default {
+                Some(DefaultChange::Set { .. }) => {
+                    return Err(DbError::unsupported(
+                        "Snowflake can only add a default when the column is created (or set a sequence default).",
+                    ));
+                }
+                Some(DefaultChange::Drop) => out.push(alter(format!("ALTER COLUMN {col} DROP DEFAULT"))),
+                None => {}
+            }
+            out
+        }
+        SqlFlavor::Clickhouse => {
+            let mut out = Vec::new();
+            if data_type.is_some() || nullable.is_some() {
+                let current = current()?;
+                let t = match data_type {
+                    Some(t) => validate_type(d, t)?,
+                    None => current.data_type.clone(),
+                };
+                let base = t.strip_prefix("Nullable(").and_then(|r| r.strip_suffix(')')).unwrap_or(&t).to_owned();
+                let nullable = nullable.unwrap_or(current.nullable);
+                out.push(alter(format!("MODIFY COLUMN {col} {}", clickhouse_type(&base, nullable))));
+            }
+            match default {
+                Some(DefaultChange::Set { expression: e }) => {
+                    out.push(alter(format!("MODIFY COLUMN {col} DEFAULT {}", default_sql(e)?)));
+                }
+                Some(DefaultChange::Drop) => out.push(alter(format!("MODIFY COLUMN {col} REMOVE DEFAULT"))),
+                None => {}
+            }
+            out
+        }
         SqlFlavor::Oracle => {
             let mut spec = col.clone();
             if let Some(t) = data_type {
@@ -377,14 +447,20 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 return Err(DbError::invalid("Add at least one column."));
             }
             let mut lines = columns.iter().map(|c| column_def(d, c)).collect::<DbResult<Vec<_>>>()?;
-            if !primary_key.is_empty() {
-                lines.push(format!("PRIMARY KEY ({})", column_list(d, primary_key)?));
+            if flavor == SqlFlavor::Clickhouse {
+                // MergeTree stores rows sorted by the key; without one, in insertion order.
+                let order = if primary_key.is_empty() { "tuple()".to_owned() } else { format!("({})", column_list(d, primary_key)?) };
+                vec![format!("CREATE TABLE {table} (\n  {}\n) ENGINE = MergeTree ORDER BY {order}", lines.join(",\n  "))]
+            } else {
+                if !primary_key.is_empty() {
+                    lines.push(format!("PRIMARY KEY ({})", column_list(d, primary_key)?));
+                }
+                vec![format!("CREATE TABLE {table} (\n  {}\n)", lines.join(",\n  "))]
             }
-            vec![format!("CREATE TABLE {table} (\n  {}\n)", lines.join(",\n  "))]
         }
         SchemaChange::DropTable { cascade, .. } => {
             let cascade = match flavor {
-                SqlFlavor::Postgres if *cascade => " CASCADE",
+                SqlFlavor::Postgres | SqlFlavor::Duckdb | SqlFlavor::Snowflake if *cascade => " CASCADE",
                 SqlFlavor::Oracle if *cascade => " CASCADE CONSTRAINTS",
                 _ => "",
             };
@@ -393,11 +469,16 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
         SchemaChange::RenameTable { table: t, new_name } => {
             name(new_name, "The new name")?;
             match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Oracle => {
+                SqlFlavor::Postgres | SqlFlavor::Oracle | SqlFlavor::Duckdb => {
                     vec![alter(format!("RENAME TO {}", d.quote_ident(new_name)))]
                 }
+                // An unqualified new name would move the table to the current schema.
+                SqlFlavor::Snowflake => {
+                    let target = ObjectRef { name: new_name.clone(), ..t.clone() };
+                    vec![alter(format!("RENAME TO {}", d.quoted_name(&target)))]
+                }
                 SqlFlavor::Sqlserver => vec![sp_rename(table.clone(), new_name, "")],
-                SqlFlavor::Mysql => {
+                SqlFlavor::Mysql | SqlFlavor::Clickhouse => {
                     let target = ObjectRef { name: new_name.clone(), ..t.clone() };
                     vec![format!("RENAME TABLE {table} TO {}", d.quoted_name(&target))]
                 }
@@ -408,7 +489,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
             vec![alter(match flavor {
                 SqlFlavor::Sqlserver => format!("ADD {def}"),
                 SqlFlavor::Oracle => format!("ADD ({def})"),
-                SqlFlavor::Postgres | SqlFlavor::Mysql => format!("ADD COLUMN {def}"),
+                SqlFlavor::Postgres
+                | SqlFlavor::Mysql
+                | SqlFlavor::Clickhouse
+                | SqlFlavor::Duckdb
+                | SqlFlavor::Snowflake => format!("ADD COLUMN {def}"),
             })]
         }
         SchemaChange::DropColumn { column, .. } => {
@@ -430,6 +515,16 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 return Err(DbError::invalid("Nothing to change."));
             }
             alter_column(d, t, column, data_type.as_deref(), *nullable, default.as_ref(), structure)?
+        }
+        SchemaChange::CreateIndex { .. } | SchemaChange::DropIndex { .. }
+            if matches!(flavor, SqlFlavor::Clickhouse | SqlFlavor::Snowflake) =>
+        {
+            return Err(DbError::unsupported(
+                "This engine has no ordinary indexes (ClickHouse sorts by its ORDER BY key; Snowflake clusters automatically).",
+            ));
+        }
+        SchemaChange::AddForeignKey { .. } | SchemaChange::AddUnique { .. } if flavor == SqlFlavor::Clickhouse => {
+            return Err(DbError::unsupported("ClickHouse has no foreign keys or unique constraints."));
         }
         SchemaChange::CreateIndex { name: n, columns, unique, .. } => {
             name(n, "The index name")?;
@@ -453,12 +548,14 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
         SchemaChange::DropIndex { table: t, name: n } => {
             name(n, "The index name")?;
             match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Oracle => {
+                SqlFlavor::Postgres | SqlFlavor::Oracle | SqlFlavor::Duckdb | SqlFlavor::Snowflake => {
                     let index = ObjectRef { name: n.clone(), ..t.clone() };
                     vec![format!("DROP INDEX {}", d.quoted_name(&index))]
                 }
                 SqlFlavor::Mysql if n == "PRIMARY" => vec![alter("DROP PRIMARY KEY".into())],
-                SqlFlavor::Mysql | SqlFlavor::Sqlserver => vec![format!("DROP INDEX {} ON {table}", d.quote_ident(n))],
+                SqlFlavor::Mysql | SqlFlavor::Sqlserver | SqlFlavor::Clickhouse => {
+                    vec![format!("DROP INDEX {} ON {table}", d.quote_ident(n))]
+                }
             }
         }
         SchemaChange::AddForeignKey { name: n, columns, target, target_columns, on_delete, on_update, .. } => {
@@ -607,6 +704,40 @@ mod tests {
         assert_eq!(
             statements(&OracleDialect, &drop, None).unwrap(),
             ["DROP TABLE \"APP\".\"ORDERS\" CASCADE CONSTRAINTS"]
+        );
+    }
+
+    #[test]
+    fn clickhouse_duckdb_and_snowflake_changes() {
+        use crate::sql::dialect::{ClickhouseDialect, DuckdbDialect, SnowflakeDialect};
+        let ch = ObjectRef::new(NodeKind::Table, "logs", None, "events");
+        let create = SchemaChange::CreateTable {
+            table: ch.clone(),
+            columns: vec![ColumnDef { nullable: false, ..col("id", "UInt64") }, col("note", "String")],
+            primary_key: vec!["id".into()],
+        };
+        assert_eq!(
+            statements(&ClickhouseDialect, &create, None).unwrap(),
+            ["CREATE TABLE `logs`.`events` (\n  `id` UInt64,\n  `note` Nullable(String)\n) ENGINE = MergeTree ORDER BY (`id`)"]
+        );
+        let index = SchemaChange::CreateIndex { table: ch, name: "i".into(), columns: vec![], unique: false };
+        assert!(statements(&ClickhouseDialect, &index, None).is_err());
+        let duck = ObjectRef::new(NodeKind::Table, "sales", Some("main".into()), "orders");
+        let identity = SchemaChange::AddColumn { table: duck.clone(), column: ColumnDef { identity: true, ..col("id", "BIGINT") } };
+        assert_eq!(statements(&DuckdbDialect, &identity, None).unwrap_err().kind, crate::ErrorKind::Unsupported);
+        let alter = SchemaChange::AlterColumn {
+            table: duck,
+            column: "total".into(),
+            data_type: Some("DECIMAL(14,2)".into()),
+            nullable: Some(false),
+            default: None,
+        };
+        assert_eq!(statements(&DuckdbDialect, &alter, None).unwrap().len(), 2);
+        let sf = ObjectRef::new(NodeKind::Table, "DB", Some("PUBLIC".into()), "ORDERS");
+        let rename = SchemaChange::RenameTable { table: sf, new_name: "BILLS".into() };
+        assert_eq!(
+            statements(&SnowflakeDialect, &rename, None).unwrap(),
+            ["ALTER TABLE \"DB\".\"PUBLIC\".\"ORDERS\" RENAME TO \"DB\".\"PUBLIC\".\"BILLS\""]
         );
     }
 

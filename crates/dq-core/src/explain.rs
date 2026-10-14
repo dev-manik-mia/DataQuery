@@ -60,7 +60,11 @@ impl ExplainDialect {
             SqlFlavor::Postgres => Some(Self::Postgres),
             SqlFlavor::Mysql if version.starts_with("MariaDB") => Some(Self::Mariadb),
             SqlFlavor::Mysql => Some(Self::Mysql),
-            SqlFlavor::Sqlserver | SqlFlavor::Oracle => None,
+            SqlFlavor::Sqlserver
+            | SqlFlavor::Oracle
+            | SqlFlavor::Clickhouse
+            | SqlFlavor::Duckdb
+            | SqlFlavor::Snowflake => None,
         }
     }
 

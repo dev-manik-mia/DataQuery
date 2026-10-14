@@ -239,7 +239,7 @@ const SPECS: &[Spec] = &[
         210,
         G::Analytical,
         "SQL",
-        None,
+        Some(443),
         "HTTPS · SQL",
         "Cloud warehouse",
         P::P2,
@@ -339,9 +339,7 @@ pub fn catalog(capabilities_of: impl Fn(Engine) -> Option<Capabilities>) -> Vec<
                 versions: s.versions,
                 priority: s.priority,
                 available: caps.is_some(),
-                file_based: s.port.is_none()
-                    && matches!(s.group, G::Relational | G::Analytical)
-                    && s.engine != Engine::Snowflake,
+                file_based: s.engine.is_file_based(),
                 capabilities: caps.unwrap_or_default(),
             }
         })
@@ -355,5 +353,10 @@ impl Engine {
 
     pub fn default_port(self) -> Option<u16> {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
+    }
+
+    /// Connects to a local database file (path in `database`) instead of a server.
+    pub fn is_file_based(self) -> bool {
+        matches!(self, Self::Sqlite | Self::Duckdb)
     }
 }
