@@ -68,7 +68,13 @@ impl Lexer<'_> {
 
     fn next_kind(&mut self) -> TokenKind {
         let c = self.bytes[self.pos];
-        let pg = self.flavor == SqlFlavor::Postgres;
+        let flavor = self.flavor;
+        let (pg, my, ms, ora) = (
+            flavor == SqlFlavor::Postgres,
+            flavor == SqlFlavor::Mysql,
+            flavor == SqlFlavor::Sqlserver,
+            flavor == SqlFlavor::Oracle,
+        );
         match c {
             b' ' | b'\t' | b'\n' | b'\r' | 0x0c => {
                 while matches!(self.peek(0), Some(b' ' | b'\t' | b'\n' | b'\r' | 0x0c)) {
@@ -76,22 +82,33 @@ impl Lexer<'_> {
                 }
                 TokenKind::Whitespace
             }
-            b'-' if self.peek(1) == Some(b'-') && (pg || self.peek(2).is_none_or(|c| c.is_ascii_whitespace())) => {
+            // MySQL needs whitespace after `--`; the others do not.
+            b'-' if self.peek(1) == Some(b'-') && (!my || self.peek(2).is_none_or(|c| c.is_ascii_whitespace())) => {
                 self.line_comment()
             }
-            b'#' if !pg => self.line_comment(),
-            b'/' if self.peek(1) == Some(b'*') => self.block_comment(pg),
-            b'\'' => self.quoted(b'\'', !pg),
-            b'"' if pg => self.quoted(b'"', false).ident(),
-            b'"' => self.quoted(b'"', true),
-            b'`' if !pg => self.quoted(b'`', false).ident(),
+            b'#' if my => self.line_comment(),
+            b'/' if self.peek(1) == Some(b'*') => self.block_comment(pg || ms),
+            b'\'' => self.quoted(b'\'', my),
+            b'"' if my => self.quoted(b'"', true),
+            b'"' => self.quoted(b'"', false).ident(),
+            b'`' if my => self.quoted(b'`', false).ident(),
+            b'[' if ms => self.quoted_until(b']'),
             b'e' | b'E' if pg && self.peek(1) == Some(b'\'') => {
                 self.pos += 1;
                 self.quoted(b'\'', true)
             }
+            b'q' | b'Q' if ora && self.peek(1) == Some(b'\'') => self.q_quote(1),
+            b'n' | b'N' if ora && matches!(self.peek(1), Some(b'q' | b'Q')) && self.peek(2) == Some(b'\'') => {
+                self.q_quote(2)
+            }
             b'$' if pg => self.dollar(),
-            b'?' if !pg => {
+            b'?' if my => self.single(TokenKind::Param),
+            b'@' if ms => self.at_sign(),
+            b':' if ora && self.peek(1).is_some_and(|c| c.is_ascii_digit()) => {
                 self.pos += 1;
+                while self.peek(0).is_some_and(|c| c.is_ascii_digit()) {
+                    self.pos += 1;
+                }
                 TokenKind::Param
             }
             b';' => self.single(TokenKind::Semicolon),
@@ -106,8 +123,9 @@ impl Lexer<'_> {
                 }
                 TokenKind::Number
             }
-            c if is_word_start(c) => {
-                while self.peek(0).is_some_and(is_word_continue) {
+            c if is_word_start(c) || (ms && c == b'#') => {
+                self.pos += 1;
+                while self.peek(0).is_some_and(|c| is_word_continue(c) || (ora && c == b'#')) {
                     self.pos += 1;
                 }
                 TokenKind::Word
@@ -119,6 +137,61 @@ impl Lexer<'_> {
                 TokenKind::Punct
             }
         }
+    }
+
+    /// T-SQL `@P1` parameters (as the driver binds them); other `@name` and
+    /// `@@name` words are variables and functions.
+    fn at_sign(&mut self) -> TokenKind {
+        let start = self.pos;
+        self.pos += 1;
+        while self.peek(0).is_some_and(|c| is_word_continue(c) || c == b'@') {
+            self.pos += 1;
+        }
+        let text = &self.src[start + 1..self.pos];
+        let param = text.len() > 1
+            && text.as_bytes()[0].eq_ignore_ascii_case(&b'p')
+            && text.bytes().skip(1).all(|c| c.is_ascii_digit());
+        if param { TokenKind::Param } else { TokenKind::Word }
+    }
+
+    /// `[name]` with `]]` as an escaped bracket (T-SQL).
+    fn quoted_until(&mut self, close: u8) -> TokenKind {
+        self.pos += 1;
+        while let Some(c) = self.peek(0) {
+            self.pos += 1;
+            if c == close {
+                if self.peek(0) == Some(close) {
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        TokenKind::QuotedIdent
+    }
+
+    /// Oracle alternative quoting: `q'[it's]'`, `q'{…}'`, `q'!…!'`. `prefix`
+    /// is the length of `q` or `nq`.
+    fn q_quote(&mut self, prefix: usize) -> TokenKind {
+        let open = self.pos + prefix + 1;
+        let Some(&delimiter) = self.bytes.get(open) else {
+            self.pos = self.bytes.len();
+            return TokenKind::String;
+        };
+        let close = match delimiter {
+            b'[' => b']',
+            b'{' => b'}',
+            b'(' => b')',
+            b'<' => b'>',
+            other => other,
+        };
+        let body = open + 1;
+        let end = self.bytes[body.min(self.bytes.len())..]
+            .windows(2)
+            .position(|w| w[0] == close && w[1] == b'\'')
+            .map_or(self.bytes.len(), |i| body + i + 2);
+        self.pos = end;
+        TokenKind::String
     }
 
     fn single(&mut self, kind: TokenKind) -> TokenKind {
@@ -240,6 +313,10 @@ mod tests {
     fn params() {
         assert!(kinds("select $1", SqlFlavor::Postgres).contains(&(TokenKind::Param, "$1")));
         assert!(kinds("select ?", SqlFlavor::Mysql).contains(&(TokenKind::Param, "?")));
+        assert!(kinds("select @P2, @x", SqlFlavor::Sqlserver).contains(&(TokenKind::Param, "@P2")));
+        assert!(kinds("select @P2, @x", SqlFlavor::Sqlserver).contains(&(TokenKind::Word, "@x")));
+        assert!(kinds("select :1 from dual", SqlFlavor::Oracle).contains(&(TokenKind::Param, ":1")));
+        assert!(!kinds(":new.id", SqlFlavor::Oracle).iter().any(|(k, _)| *k == TokenKind::Param));
     }
 
     #[test]
@@ -247,6 +324,8 @@ mod tests {
         for src in ["'abc", "\"abc", "$x$ abc", "/* abc", "E'\\", "`abc"] {
             let _ = tokenize(src, SqlFlavor::Postgres);
             let _ = tokenize(src, SqlFlavor::Mysql);
+            let _ = tokenize(src, SqlFlavor::Sqlserver);
+            let _ = tokenize(src, SqlFlavor::Oracle);
         }
     }
 

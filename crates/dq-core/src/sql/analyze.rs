@@ -99,21 +99,36 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
     let words: Vec<String> =
         tokens.iter().filter(|t| !t.is_trivia()).take(4).map(|t| t.text(sql).to_ascii_uppercase()).collect();
     let word = |i: usize| words.get(i).map_or("", String::as_str);
-    match word(0) {
-        "BEGIN" | "START" => TxEffect::Begin,
-        "COMMIT" | "END" | "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
-        "ROLLBACK" if word(1) == "TO" || (word(2) == "TO" && matches!(word(1), "WORK" | "TRANSACTION")) => {
-            TxEffect::RollbackToSavepoint
-        }
-        "COMMIT" | "ROLLBACK" | "END" | "ABORT" => TxEffect::End,
-        "PREPARE" if word(1) == "TRANSACTION" => TxEffect::End,
-        // MySQL commits the open transaction before DDL and account statements.
-        "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" | "GRANT" | "REVOKE" | "LOCK" | "UNLOCK"
-            if flavor == SqlFlavor::Mysql =>
-        {
-            TxEffect::End
-        }
-        _ => TxEffect::None,
+    match flavor {
+        SqlFlavor::Sqlserver => match word(0) {
+            "BEGIN" if matches!(word(1), "TRAN" | "TRANSACTION" | "DISTRIBUTED") => TxEffect::Begin,
+            "COMMIT" | "ROLLBACK" => TxEffect::End,
+            _ => TxEffect::None,
+        },
+        SqlFlavor::Oracle => match word(0) {
+            "SET" if word(1) == "TRANSACTION" => TxEffect::Begin,
+            "ROLLBACK" if word(1) == "TO" || (word(1) == "WORK" && word(2) == "TO") => TxEffect::RollbackToSavepoint,
+            // DDL commits the open transaction before and after it runs.
+            "COMMIT" | "ROLLBACK" | "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" | "GRANT" | "REVOKE"
+            | "COMMENT" | "AUDIT" | "NOAUDIT" | "ANALYZE" | "PURGE" | "FLASHBACK" => TxEffect::End,
+            _ => TxEffect::None,
+        },
+        SqlFlavor::Postgres | SqlFlavor::Mysql => match word(0) {
+            "BEGIN" | "START" => TxEffect::Begin,
+            "COMMIT" | "END" | "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
+            "ROLLBACK" if word(1) == "TO" || (word(2) == "TO" && matches!(word(1), "WORK" | "TRANSACTION")) => {
+                TxEffect::RollbackToSavepoint
+            }
+            "COMMIT" | "ROLLBACK" | "END" | "ABORT" => TxEffect::End,
+            "PREPARE" if word(1) == "TRANSACTION" => TxEffect::End,
+            // MySQL commits the open transaction before DDL and account statements.
+            "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" | "GRANT" | "REVOKE" | "LOCK" | "UNLOCK"
+                if flavor == SqlFlavor::Mysql =>
+            {
+                TxEffect::End
+            }
+            _ => TxEffect::None,
+        },
     }
 }
 
@@ -132,19 +147,116 @@ pub fn redact_literals(sql: &str, flavor: SqlFlavor) -> String {
 }
 
 /// Splits `src` into statements, skipping empty and comment-only ones.
+///
+/// `;` ends a statement except inside T-SQL `BEGIN … END` blocks and routine
+/// bodies, and inside Oracle PL/SQL units. A line holding only `GO` (T-SQL) or
+/// `/` (Oracle) also ends one, and is the only end of a routine body.
 pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
     let tokens = tokenize(src, flavor);
     let mut out = Vec::new();
     let mut utf16 = Utf16Index::new(src);
     let mut chunk_start = 0;
+    let mut block = Block::default();
     for (i, tok) in tokens.iter().enumerate() {
-        if tok.kind == TokenKind::Semicolon {
-            push_statement(src, &tokens[chunk_start..i], &mut utf16, &mut out);
+        let ends = match tok.kind {
+            TokenKind::Semicolon => !block.inside(),
+            TokenKind::Word | TokenKind::Punct => is_separator_line(src, &tokens, i, flavor),
+            _ => false,
+        };
+        if ends {
+            push_statement(src, &tokens[chunk_start..i], flavor, &mut utf16, &mut out);
             chunk_start = i + 1;
+            block = Block::default();
+        } else if tok.kind == TokenKind::Word {
+            block.observe(src, &tokens, i, flavor);
         }
     }
-    push_statement(src, &tokens[chunk_start..], &mut utf16, &mut out);
+    push_statement(src, &tokens[chunk_start..], flavor, &mut utf16, &mut out);
     out
+}
+
+/// Tracks whether the statement being read is inside a block whose `;` do not end it.
+#[derive(Default)]
+struct Block {
+    /// Significant words seen so far, up to a few, to recognise routine headers.
+    head: Vec<String>,
+    /// T-SQL `BEGIN`/`CASE` depth.
+    depth: u32,
+    /// A routine or PL/SQL unit: only `GO` / `/` ends it.
+    routine: bool,
+}
+
+impl Block {
+    fn inside(&self) -> bool {
+        self.routine || self.depth > 0
+    }
+
+    fn observe(&mut self, src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) {
+        let word = tokens[i].text(src).to_ascii_uppercase();
+        if self.head.len() < 6 {
+            self.head.push(word.clone());
+            self.routine = self.routine || starts_routine(&self.head, flavor);
+        }
+        if flavor != SqlFlavor::Sqlserver {
+            return;
+        }
+        let next = tokens[i + 1..]
+            .iter()
+            .find(|t| !t.is_trivia())
+            .filter(|t| t.kind == TokenKind::Word)
+            .map(|t| t.text(src).to_ascii_uppercase());
+        match word.as_str() {
+            "BEGIN"
+                if !matches!(
+                    next.as_deref(),
+                    Some("TRAN" | "TRANSACTION" | "DISTRIBUTED" | "DIALOG" | "CONVERSATION")
+                ) =>
+            {
+                self.depth += 1;
+            }
+            "CASE" => self.depth += 1,
+            "END" if next.as_deref() != Some("CONVERSATION") => self.depth = self.depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+}
+
+/// The statement's first words open a routine body (T-SQL) or a PL/SQL unit (Oracle).
+fn starts_routine(head: &[String], flavor: SqlFlavor) -> bool {
+    let words: Vec<&str> = head
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !matches!(*w, "OR" | "REPLACE" | "EDITIONABLE" | "NONEDITIONABLE" | "EDITIONING"))
+        .collect();
+    match (flavor, words.as_slice()) {
+        (SqlFlavor::Sqlserver, ["CREATE" | "ALTER", "ALTER", kind, ..] | ["CREATE" | "ALTER", kind, ..]) => {
+            matches!(*kind, "PROCEDURE" | "PROC" | "FUNCTION" | "TRIGGER")
+        }
+        (SqlFlavor::Oracle, ["DECLARE" | "BEGIN", ..]) => true,
+        (SqlFlavor::Oracle, ["CREATE", kind, ..]) => {
+            matches!(*kind, "PROCEDURE" | "FUNCTION" | "PACKAGE" | "TRIGGER" | "TYPE" | "LIBRARY")
+        }
+        _ => false,
+    }
+}
+
+/// A line holding only `GO` (T-SQL) or `/` (Oracle).
+fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -> bool {
+    let text = tokens[i].text(src);
+    let separator = match flavor {
+        SqlFlavor::Sqlserver => tokens[i].kind == TokenKind::Word && text.eq_ignore_ascii_case("GO"),
+        SqlFlavor::Oracle => tokens[i].kind == TokenKind::Punct && text == "/",
+        SqlFlavor::Postgres | SqlFlavor::Mysql => false,
+    };
+    if !separator {
+        return false;
+    }
+    let line_start = src[..tokens[i].start].rfind('\n').map_or(0, |n| n + 1);
+    let line_end = src[tokens[i].end..].find('\n').map_or(src.len(), |n| tokens[i].end + n);
+    src[line_start..tokens[i].start].trim().is_empty() && {
+        let rest = src[tokens[i].end..line_end].trim();
+        rest.is_empty() || rest.starts_with("--")
+    }
 }
 
 /// Classifies a single statement (any trailing `;` is ignored).
@@ -159,14 +271,20 @@ pub fn command_tag(sql: &str, flavor: SqlFlavor) -> String {
         .unwrap_or_default()
 }
 
-fn push_statement(src: &str, tokens: &[Token], utf16: &mut Utf16Index, out: &mut Vec<StatementInfo>) {
+fn push_statement(
+    src: &str,
+    tokens: &[Token],
+    flavor: SqlFlavor,
+    utf16: &mut Utf16Index,
+    out: &mut Vec<StatementInfo>,
+) {
     let Some(first) = tokens.iter().position(|t| !t.is_trivia()) else {
         return;
     };
     let last = tokens.iter().rposition(|t| !t.is_trivia()).unwrap_or(first);
     let body = &tokens[first..=last];
     let sig: Vec<Token> = body.iter().copied().filter(|t| !t.is_trivia()).collect();
-    let (kind, writes, destructive) = classify(src, &sig);
+    let (kind, writes, destructive) = classify(src, &sig, flavor);
     let byte_start = body[0].start;
     let byte_end = body[body.len() - 1].end;
     out.push(StatementInfo {
@@ -187,7 +305,8 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
     let mut questions = 0;
     let mut highest = 0;
     for p in params {
-        match p.strip_prefix('$').and_then(|n| n.parse::<u32>().ok()) {
+        let numbered = p.strip_prefix('$').or_else(|| p.strip_prefix(':')).or_else(|| p.get(2..).filter(|_| p.starts_with('@')));
+        match numbered.and_then(|n| n.parse::<u32>().ok()) {
             Some(n) => highest = highest.max(n),
             None => questions += 1,
         }
@@ -195,10 +314,23 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
     highest.max(questions)
 }
 
-fn classify(src: &str, sig: &[Token]) -> (StatementKind, bool, Option<DestructiveReason>) {
+fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool, Option<DestructiveReason>) {
     let word = |i: usize| sig.get(i).filter(|t| t.kind == TokenKind::Word).map(|t| t.text(src).to_ascii_uppercase());
     let head = word(0).unwrap_or_default();
     let mut kind = keyword_kind(&head);
+    match (flavor, head.as_str()) {
+        // A T-SQL `BEGIN` without `TRAN` opens a block; Oracle `BEGIN`/`DECLARE` run PL/SQL.
+        (SqlFlavor::Sqlserver, "BEGIN")
+            if !matches!(word(1).as_deref(), Some("TRAN" | "TRANSACTION" | "DISTRIBUTED")) =>
+        {
+            kind = StatementKind::Other;
+        }
+        (SqlFlavor::Sqlserver, "SAVE") => kind = StatementKind::Transaction,
+        (SqlFlavor::Sqlserver, "END") => kind = StatementKind::Other,
+        (SqlFlavor::Oracle, "BEGIN" | "DECLARE") => kind = StatementKind::Call,
+        (SqlFlavor::Oracle, "SET") if word(1).as_deref() == Some("TRANSACTION") => kind = StatementKind::Transaction,
+        _ => {}
+    }
 
     if head == "WITH" {
         kind = main_keyword_after_with(src, sig).map_or(StatementKind::Select, keyword_kind);
@@ -253,7 +385,7 @@ fn keyword_kind(word: &str) -> StatementKind {
         "SET" | "RESET" => StatementKind::Set,
         "SHOW" => StatementKind::Show,
         "EXPLAIN" | "DESCRIBE" | "DESC" => StatementKind::Explain,
-        "CALL" | "DO" | "EXECUTE" => StatementKind::Call,
+        "CALL" | "DO" | "EXECUTE" | "EXEC" => StatementKind::Call,
         "USE" => StatementKind::Use,
         _ => StatementKind::Other,
     }
@@ -470,5 +602,55 @@ mod tests {
         assert!(one("select * from t where id = $1").has_params);
         assert!(!one("select '$1'").has_params);
         assert!(analyze("select ?", MY).unwrap().has_params);
+    }
+
+    const MS: SqlFlavor = SqlFlavor::Sqlserver;
+    const ORA: SqlFlavor = SqlFlavor::Oracle;
+
+    fn texts(src: &str, flavor: SqlFlavor) -> Vec<&str> {
+        split_statements(src, flavor).iter().map(|s| s.text(src)).collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn tsql_blocks_and_go() {
+        let src = "IF 1 = 1 BEGIN UPDATE t SET a = 1; DELETE FROM u WHERE id = 2; END;\nSELECT [a;b] FROM t\nGO\nCREATE PROCEDURE p AS\nSELECT 1;\nSELECT 2;\ngo\nBEGIN TRAN; COMMIT";
+        assert_eq!(
+            texts(src, MS),
+            vec![
+                "IF 1 = 1 BEGIN UPDATE t SET a = 1; DELETE FROM u WHERE id = 2; END",
+                "SELECT [a;b] FROM t",
+                "CREATE PROCEDURE p AS\nSELECT 1;\nSELECT 2;",
+                "BEGIN TRAN",
+                "COMMIT",
+            ]
+        );
+        assert_eq!(analyze("SELECT @P1, @P3, @x", MS).unwrap().param_count, 3);
+        assert_eq!(transaction_effect("begin transaction", MS), TxEffect::Begin);
+        assert_eq!(transaction_effect("BEGIN SELECT 1 END", MS), TxEffect::None);
+        assert_eq!(analyze("BEGIN TRAN", MS).unwrap().kind, StatementKind::Transaction);
+        assert!(analyze("EXEC dbo.purge", MS).unwrap().writes);
+        // `#temp` is a table name, not a comment.
+        assert_eq!(texts("SELECT * FROM #t; SELECT 1", MS).len(), 2);
+    }
+
+    #[test]
+    fn plsql_units_end_at_slash() {
+        let src = "SELECT q'[it's; fine]' FROM dual;\nBEGIN\n  UPDATE t SET a = :1;\n  COMMIT;\nEND;\n/\nCREATE OR REPLACE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW\nBEGIN :new.id := 1; END;\n/\nSELECT 10 / 2 FROM dual";
+        assert_eq!(
+            texts(src, ORA),
+            vec![
+                "SELECT q'[it's; fine]' FROM dual",
+                "BEGIN\n  UPDATE t SET a = :1;\n  COMMIT;\nEND;",
+                "CREATE OR REPLACE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW\nBEGIN :new.id := 1; END;",
+                "SELECT 10 / 2 FROM dual",
+            ]
+        );
+        let block = split_statements(src, ORA);
+        assert_eq!(block[1].param_count, 1);
+        assert_eq!(block[2].param_count, 0, ":new is not a bind");
+        assert_eq!(block[1].kind, StatementKind::Call);
+        assert_eq!(transaction_effect("CREATE TABLE x (a NUMBER)", ORA), TxEffect::End);
+        assert_eq!(transaction_effect("SET TRANSACTION READ WRITE", ORA), TxEffect::Begin);
+        assert_eq!(transaction_effect("rollback to savepoint a", ORA), TxEffect::RollbackToSavepoint);
     }
 }
