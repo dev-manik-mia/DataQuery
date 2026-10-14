@@ -1,0 +1,22 @@
+[package]
+name = "dq-duckdb"
+description = "DuckDB adapter for DataQuery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dq-core.workspace = true
+async-trait.workspace = true
+duckdb.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

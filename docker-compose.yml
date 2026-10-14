@@ -87,6 +87,22 @@ services:
       interval: 2s
       retries: 60
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_DB: dataquery_test
+      CLICKHOUSE_USER: dataquery
+      CLICKHOUSE_PASSWORD: dataquery
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports: ["58123:8123"]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes: ["./docker/clickhouse-seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      interval: 2s
+      retries: 60
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }
