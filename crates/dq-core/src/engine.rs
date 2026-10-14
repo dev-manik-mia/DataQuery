@@ -19,6 +19,7 @@ pub enum Engine {
     Snowflake,
     Redis,
     Valkey,
+    Dragonfly,
     Mongodb,
     Dynamodb,
     Cassandra,
@@ -269,6 +270,18 @@ const SPECS: &[Spec] = &[
         P::P2,
     ),
     spec(
+        Engine::Dragonfly,
+        "Dragonfly",
+        "Df",
+        265,
+        G::KeyValue,
+        "Commands",
+        Some(6379),
+        "6379 · Redis-compatible",
+        "Redis-compatible (Dragonfly 1.x)",
+        P::P2,
+    ),
+    spec(
         Engine::Mongodb,
         "MongoDB",
         "Mg",
@@ -375,6 +388,11 @@ impl Engine {
 
     pub fn default_port(self) -> Option<u16> {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
+    }
+
+    /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.
+    pub fn is_redis_like(self) -> bool {
+        matches!(self, Self::Redis | Self::Valkey | Self::Dragonfly)
     }
 
     /// Connects to a local database file (path in `database`) instead of a server.

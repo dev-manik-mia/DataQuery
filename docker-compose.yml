@@ -147,6 +147,18 @@ services:
       interval: 2s
       retries: 30
 
+  # Dragonfly (Redis-compatible); 16 databases like Redis, little memory for tests.
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.34.2
+    command: ["--requirepass", "dataquery", "--dbnum", "16", "--proactor_threads", "1", "--maxmemory", "256mb", "--version_check=false"]
+    ulimits:
+      memlock: -1
+    ports: ["56381:6379"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a dataquery --no-auth-warning ping | grep -q PONG"]
+      interval: 2s
+      retries: 30
+
   # Heavy optional servers run under profiles (see package.json db:up:wide / db:up:search):
   # all test databases together need more than the default 8 GB of Docker memory.
   # Cassandra 5 with password authentication (user cassandra / cassandra); slow to start.

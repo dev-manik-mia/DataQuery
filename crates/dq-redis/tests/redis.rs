@@ -1,6 +1,7 @@
-//! Integration tests against Redis 8 and Valkey 8 (`npm run db:up`).
+//! Integration tests against Redis 8, Valkey 8 and Dragonfly (`npm run db:up`).
 //! Each test runs against every server whose variable is set:
-//! `DATAQUERY_TEST_REDIS=localhost:56379`, `DATAQUERY_TEST_VALKEY=localhost:56380`.
+//! `DATAQUERY_TEST_REDIS=localhost:56379`, `DATAQUERY_TEST_VALKEY=localhost:56380`,
+//! `DATAQUERY_TEST_DRAGONFLY=localhost:56381`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,6 +24,7 @@ fn servers() -> Vec<(RedisAdapter, ConnConfig)> {
     [
         ("DATAQUERY_TEST_REDIS", RedisAdapter::REDIS, Engine::Redis),
         ("DATAQUERY_TEST_VALKEY", RedisAdapter::VALKEY, Engine::Valkey),
+        ("DATAQUERY_TEST_DRAGONFLY", RedisAdapter::DRAGONFLY, Engine::Dragonfly),
     ]
     .into_iter()
     .filter_map(|(var, adapter, engine)| {
@@ -85,7 +87,11 @@ const OPTS: ExecOptions = ExecOptions { row_limit: 100, timeout_secs: 30 };
 async fn connects_and_detects_the_server() -> DbResult<()> {
     for (adapter, config) in servers() {
         let info = adapter.test(&ConnectParams::new(config.clone(), Some("dataquery".into()))).await?;
-        let expected = if config.engine == Engine::Valkey { "Valkey " } else { "Redis " };
+        let expected = match config.engine {
+            Engine::Valkey => "Valkey ",
+            Engine::Dragonfly => "Dragonfly ",
+            _ => "Redis ",
+        };
         assert!(info.version.starts_with(expected), "{}", info.version);
         assert_eq!((info.database.as_str(), info.user.as_str()), ("9", "default"));
         let wrong = adapter.test(&ConnectParams::new(config.clone(), Some("nope".into()))).await.unwrap_err();
@@ -225,7 +231,9 @@ async fn reads_every_type_in_pages() -> DbResult<()> {
             .sum();
         assert_eq!(entries, 25);
         let details = &x[0].details;
-        assert!(details.encoding.is_some() && details.memory_bytes.is_some());
+        assert!(details.memory_bytes.is_some());
+        // Dragonfly has no OBJECT command, so it reports no encoding.
+        assert_eq!(details.encoding.is_some(), config.engine != Engine::Dragonfly);
         // A long string is cut for the viewer.
         let big = "a".repeat(MAX_STRING_BYTES + 10);
         store

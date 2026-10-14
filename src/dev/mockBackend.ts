@@ -31,6 +31,7 @@ const ENGINES: EngineInfo[] = [
   engine('snowflake', 'Snowflake', 'Sf', 210, 'analytical', 'SQL', 443, 'HTTPS · SQL', 'P2', true),
   engine('redis', 'Redis', 'Rd', 25, 'key_value', 'Commands', 6379, '6379 · commands · v6–7', 'P1', true),
   engine('valkey', 'Valkey', 'Vk', 175, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),
+  engine('dragonfly', 'Dragonfly', 'Df', 265, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),
   engine('mongodb', 'MongoDB', 'Mg', 145, 'document', 'MQL', 27017, '27017 · MQL · v5–8', 'P2', true),
   engine('dynamodb', 'DynamoDB', 'Dy', 330, 'document', 'PartiQL', 443, 'AWS · PartiQL', 'P2', true),
   engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2', true),

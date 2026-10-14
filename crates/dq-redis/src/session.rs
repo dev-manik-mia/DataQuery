@@ -1,4 +1,4 @@
-//! An open Redis or Valkey connection.
+//! An open Redis, Valkey or Dragonfly connection.
 //!
 //! The editor and the console share one query connection, so `SELECT`,
 //! `MULTI` and blocking commands behave like `redis-cli`. The key browser,
@@ -84,6 +84,20 @@ pub(crate) fn parse_line(line: &str) -> DbResult<Vec<Vec<u8>>> {
     Ok(args)
 }
 
+/// "Redis 8.0.2", "Valkey 8.1.0" or "Dragonfly 1.34.2", from `INFO server`: the
+/// compatible servers also report the Redis version they emulate.
+fn server_label(server: &HashMap<String, String>) -> String {
+    let field = |k: &str| server.get(k).map(String::as_str);
+    let redis = field("redis_version").unwrap_or_default();
+    if let Some(v) = field("dragonfly_version") {
+        format!("Dragonfly {}", v.trim_start_matches("df-v").trim_start_matches('v'))
+    } else if field("valkey_version").is_some() || field("server_name") == Some("valkey") {
+        format!("Valkey {}", field("valkey_version").unwrap_or(redis))
+    } else {
+        format!("Redis {redis}")
+    }
+}
+
 fn is_server_error(e: &redis::RedisError) -> bool {
     matches!(e.kind(), redis::ErrorKind::Server(_) | redis::ErrorKind::Extension) && e.code().is_some()
 }
@@ -97,19 +111,16 @@ impl RedisSession {
         let mut conn = connector.connect(db, None).await?;
         let server: String = redis::cmd("INFO").arg("server").query_async(&mut conn).await.map_err(map_error)?;
         let server = info_fields(&server);
-        let valkey = server.contains_key("valkey_version") || server.get("server_name").is_some_and(|n| n == "valkey");
-        let version = if valkey {
-            format!(
-                "Valkey {}",
-                server.get("valkey_version").or_else(|| server.get("redis_version")).cloned().unwrap_or_default()
-            )
-        } else {
-            format!("Redis {}", server.get("redis_version").cloned().unwrap_or_default())
-        };
-        let user: String =
-            redis::cmd("ACL").arg("WHOAMI").query_async(&mut conn).await.unwrap_or_else(|_| {
-                if config.username.is_empty() { "default".into() } else { config.username.clone() }
-            });
+        let version = server_label(&server);
+        let user: String = redis::cmd("ACL")
+            .arg("WHOAMI")
+            .query_async::<String>(&mut conn)
+            .await
+            // Dragonfly answers "User is default".
+            .map_or_else(
+                |_| if config.username.is_empty() { "default".into() } else { config.username.clone() },
+                |u| u.strip_prefix("User is ").map_or_else(|| u.clone(), str::to_owned),
+            );
         let cluster: String = redis::cmd("INFO").arg("cluster").query_async(&mut conn).await.unwrap_or_default();
         let databases = if info_fields(&cluster).get("cluster_enabled").is_some_and(|v| v == "1") {
             1
@@ -529,6 +540,10 @@ mod tests {
     #[test]
     fn info_lines() {
         let f = info_fields("# Server\r\nredis_version:8.0.2\r\nvalkey_version:8.1.0\r\n");
+        assert_eq!(server_label(&f), "Valkey 8.1.0");
+        let df = info_fields("# Server\r\nredis_version:7.4.0\r\ndragonfly_version:df-v1.34.2\r\n");
+        assert_eq!(server_label(&df), "Dragonfly 1.34.2");
+        assert_eq!(server_label(&info_fields("redis_version:8.0.2\r\n")), "Redis 8.0.2");
         assert_eq!(f.get("redis_version").map(String::as_str), Some("8.0.2"));
         assert_eq!(f.get("valkey_version").map(String::as_str), Some("8.1.0"));
     }

@@ -25,6 +25,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'partiql';
     case 'redis':
     case 'valkey':
+    case 'dragonfly':
       return 'redis';
     case 'cassandra':
     case 'scylladb':
@@ -86,7 +87,7 @@ export function databaseLabel(engine: Engine): string {
   if (engine === 'oracle') return 'Service name';
   if (engine === 'duckdb' || engine === 'sqlite') return 'Database file';
   if (engine === 'mongodb') return 'Default database';
-  if (engine === 'redis' || engine === 'valkey') return 'Database number';
+  if (engine === 'redis' || engine === 'valkey' || engine === 'dragonfly') return 'Database number';
   if (engine === 'cassandra' || engine === 'scylladb') return 'Keyspace';
   return 'Database';
 }
@@ -117,6 +118,7 @@ export function credentialLabels(engine: Engine): { username: string; password: 
       return { username: 'Username', password: 'Password', usernameRequired: false };
     case 'redis':
     case 'valkey':
+    case 'dragonfly':
       return { username: 'Username (ACL)', password: 'Password', usernameRequired: false };
     case 'cassandra':
     case 'scylladb':
@@ -148,6 +150,7 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: 'test', username: '' };
     case 'redis':
     case 'valkey':
+    case 'dragonfly':
       return { database: '0', username: '' };
     case 'cassandra':
     case 'scylladb':

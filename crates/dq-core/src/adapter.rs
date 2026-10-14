@@ -197,7 +197,7 @@ pub trait Session: Send + Sync {
         Err(DbError::unsupported(format!("This connection has no setting `{name}`.")))
     }
 
-    /// Key browser operations, for key-value engines (Redis, Valkey).
+    /// Key browser operations, for key-value engines (Redis, Valkey, Dragonfly).
     fn keys(&self) -> Option<&dyn KeyValueStore> {
         None
     }

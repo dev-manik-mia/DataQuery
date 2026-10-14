@@ -1,4 +1,4 @@
-//! Redis and Valkey adapter for DataQuery (standalone servers, RESP2).
+//! Redis, Valkey and Dragonfly adapter for DataQuery (standalone servers, RESP2).
 //!
 //! The explorer lists databases `0…n-1`; keys are browsed with `SCAN` in the
 //! key browser ([`dq_core::keyvalue::KeyValueStore`]). The editor and the
@@ -20,7 +20,7 @@ use dq_core::result::ServerInfo;
 
 pub use session::RedisSession;
 
-/// One adapter for both servers; Valkey speaks the Redis protocol.
+/// One adapter for the Redis protocol: Redis, Valkey and Dragonfly.
 #[derive(Debug, Clone, Copy)]
 pub struct RedisAdapter {
     engine: Engine,
@@ -29,6 +29,7 @@ pub struct RedisAdapter {
 impl RedisAdapter {
     pub const REDIS: Self = Self { engine: Engine::Redis };
     pub const VALKEY: Self = Self { engine: Engine::Valkey };
+    pub const DRAGONFLY: Self = Self { engine: Engine::Dragonfly };
 
     pub const CAPABILITIES: Capabilities = Capabilities {
         explorer: true,

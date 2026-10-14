@@ -185,26 +185,29 @@ impl Monitor for PgSession {
         }
         let rows = client
             .query(
+                // The size functions return NULL for a table dropped while this runs.
                 "SELECT n.nspname::text, c.relname::text, c.relkind::text, pg_total_relation_size(c.oid), \
-                        pg_relation_size(c.oid), pg_indexes_size(c.oid), c.reltuples::int8 \
+                        COALESCE(pg_relation_size(c.oid), 0), COALESCE(pg_indexes_size(c.oid), 0), c.reltuples::int8 \
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                  WHERE c.relkind IN ('r', 'm', 'p') AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema' \
-                 ORDER BY 4 DESC LIMIT $1",
+                 ORDER BY 4 DESC NULLS LAST LIMIT $1",
                 &[&i64::from(limit.clamp(1, 1000))],
             )
             .await
             .map_err(pg)?;
         Ok(rows
             .iter()
-            .map(|r| {
+            .filter_map(|r| {
+                // Skip a table that disappeared between listing and sizing it.
+                let total_bytes = r.try_get::<_, Option<i64>>(3).ok().flatten()?;
                 let kind = if r.get::<_, String>(2) == "m" { NodeKind::MaterializedView } else { NodeKind::Table };
-                ObjectSize {
+                Some(ObjectSize {
                     object: ObjectRef::new(kind, database.clone(), Some(r.get(0)), r.get::<_, String>(1)),
-                    total_bytes: r.get(3),
+                    total_bytes,
                     table_bytes: r.get(4),
                     index_bytes: r.get(5),
                     rows: Some(r.get::<_, i64>(6)).filter(|n| *n >= 0),
-                }
+                })
             })
             .collect())
     }

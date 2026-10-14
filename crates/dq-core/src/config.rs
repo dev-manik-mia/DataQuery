@@ -374,6 +374,7 @@ impl ConnConfig {
                 | Engine::Dynamodb
                 | Engine::Redis
                 | Engine::Valkey
+                | Engine::Dragonfly
                 | Engine::Cassandra
                 | Engine::Scylladb
                 | Engine::Elasticsearch
@@ -390,7 +391,7 @@ impl ConnConfig {
         if self.connect_timeout_secs == 0 || self.connect_timeout_secs > Self::MAX_TIMEOUT_SECS {
             return Err(DbError::invalid("Connect timeout must be between 1 and 300 seconds."));
         }
-        if matches!(self.engine, Engine::Redis | Engine::Valkey) && self.database_index().is_none() {
+        if self.engine.is_redis_like() && self.database_index().is_none() {
             return Err(DbError::invalid("The database is a number such as 0."));
         }
         self.tls_files.validate()?;
@@ -456,8 +457,8 @@ pub struct ParsedUrl {
 
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
-/// `snowflake://`, `duckdb://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://` and
-/// `valkeys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
+/// `snowflake://`, `duckdb://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
+/// `valkeys://`, `dragonfly://` and `dragonflys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
 /// `DuckDB` it is the file; for Redis it is the database number.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     // Several hosts are not a valid URL authority, so MongoDB URLs are read by hand.
@@ -477,6 +478,7 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "redis" | "rediss" => Engine::Redis,
         "neo4j" | "neo4j+s" | "neo4j+ssc" | "bolt" | "bolt+s" | "bolt+ssc" => Engine::Neo4j,
         "valkey" | "valkeys" => Engine::Valkey,
+        "dragonfly" | "dragonflys" => Engine::Dragonfly,
         "duckdb" => {
             // `duckdb:///absolute/path.duckdb` or `duckdb://:memory:`
             let path = input.trim().trim_start_matches("duckdb://");
@@ -509,7 +511,7 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let host = host.trim_start_matches('[').trim_end_matches(']').to_owned();
     let path = decode(url.path().trim_start_matches('/'));
     // Redis URLs name the database by number (`redis://host/2`).
-    let path = if matches!(engine, Engine::Redis | Engine::Valkey) && path.is_empty() { "0".to_owned() } else { path };
+    let path = if engine.is_redis_like() && path.is_empty() { "0".to_owned() } else { path };
     // Snowflake URLs carry the schema too: `/database/schema`.
     let (database, schema) = match path.split_once('/') {
         Some((db, schema)) if engine == Engine::Snowflake => (db.to_owned(), Some(schema.to_owned())),
@@ -523,10 +525,9 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let mut connect_timeout_secs = 10;
     let mut tls_files = TlsFiles::default();
     // SQL Server spells TLS as `encrypt` and `trustServerCertificate`.
-    // `rediss://` and `valkeys://` mean TLS; plain `redis://` does not.
-    // `rediss://`, `valkeys://` and `neo4j+s://` mean TLS; plain `redis://` and `neo4j://` do not.
+    // `rediss://`, `valkeys://`, `dragonflys://` and `neo4j+s://` mean TLS; the plain schemes do not.
     let mut encrypt: Option<bool> = match url.scheme() {
-        "redis" | "valkey" | "neo4j" | "bolt" => Some(false),
+        "redis" | "valkey" | "dragonfly" | "neo4j" | "bolt" => Some(false),
         _ => None,
     };
     // `+ssc`: TLS with a self-signed certificate (not verified).
@@ -683,6 +684,9 @@ mod tests {
         assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Valkey, 6379, "0"));
         assert_eq!((p.config.ssl_mode, p.config.username.as_str()), (SslMode::Disable, ""));
         assert!(parse_connection_url("redis://localhost/x").is_err());
+        let p = parse_connection_url("dragonfly://:pw@cache.local:6380/3").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Dragonfly, 6380, "3"));
+        assert_eq!((p.config.ssl_mode, p.password.as_deref()), (SslMode::Disable, Some("pw")));
     }
 
     #[test]
