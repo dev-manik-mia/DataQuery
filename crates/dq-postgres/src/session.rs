@@ -25,7 +25,7 @@ use tokio_postgres::{CancelToken, Client, RowStream};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::catalog;
-use crate::connect::{self, Role};
+use crate::connect::{self, Flavor, Role};
 use crate::error::map_error;
 use crate::values::{TextParam, column_meta, decode_row};
 
@@ -47,6 +47,7 @@ pub struct PgSession {
     /// Kept in memory only, to open catalog and edit connections.
     params: ConnectParams,
     info: ServerInfo,
+    pub(crate) flavor: Flavor,
     tls: MakeRustlsConnect,
     query: Mutex<QueryConnection>,
     cancel_token: CancelToken,
@@ -73,7 +74,7 @@ impl PgSession {
         let started = Instant::now();
         let config = &params.config;
         let conn = connect::open(params, &config.database, Role::Query, &tls).await?;
-        let info = connect::server_info(&conn.client, config, started).await?;
+        let (info, flavor) = connect::server_info(&conn.client, config, started).await?;
         Ok(Self {
             cancel_token: conn.client.cancel_token(),
             query: Mutex::new(QueryConnection {
@@ -84,6 +85,7 @@ impl PgSession {
             }),
             params: params.clone(),
             info,
+            flavor,
             tls,
             running: AtomicBool::new(false),
             catalogs: Mutex::new(Vec::new()),

@@ -59,7 +59,7 @@ pub async fn schemas(client: &Client, database: &str) -> DbResult<Vec<Node>> {
                 (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN {RELKINDS}), \
                 obj_description(n.oid, 'pg_namespace') \
          FROM pg_namespace n \
-         WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema' \
+         WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname NOT IN ('information_schema', 'crdb_internal') \
          ORDER BY n.nspname <> 'public', n.nspname"
     );
     let rows = client.query(&sql, &[]).await.map_err(pg)?;
@@ -86,12 +86,12 @@ fn relation_node(database: &str, row: &tokio_postgres::Row) -> Node {
 }
 
 const RELATION_COLUMNS: &str =
-    "n.nspname::text, c.relname::text, c.relkind::text, c.reltuples::int8, obj_description(c.oid, 'pg_class')";
+    "n.nspname::text, c.relname::text, c.relkind::text, COALESCE(c.reltuples, -1)::int8, obj_description(c.oid, 'pg_class')";
 
 pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResult<Vec<Node>> {
     let sql = format!(
         "SELECT {RELATION_COLUMNS} FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE n.nspname = $1 AND c.relkind IN {RELKINDS} AND NOT c.relispartition \
+         WHERE n.nspname = $1 AND c.relkind IN {RELKINDS} AND NOT COALESCE(c.relispartition, false) \
          ORDER BY {}, c.relname",
         relkind_order()
     );
@@ -202,7 +202,7 @@ async fn relation(client: &Client, object: &ObjectRef) -> DbResult<Relation> {
     let row = client
         .query_opt(
             &format!(
-                "SELECT c.oid, c.relkind::text, c.reltuples::int8, obj_description(c.oid, 'pg_class') \
+                "SELECT c.oid, c.relkind::text, COALESCE(c.reltuples, -1)::int8, obj_description(c.oid, 'pg_class') \
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                  WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN {RELKINDS}"
             ),
@@ -353,9 +353,13 @@ async fn size(client: &Client, oid: u32, kind: NodeKind) -> DbResult<Option<Tabl
             "SELECT pg_total_relation_size($1::oid), pg_relation_size($1::oid), pg_indexes_size($1::oid)",
             &[&oid],
         )
-        .await
-        .map_err(pg)?;
-    Ok(Some(TableSize { total_bytes: r.get(0), table_bytes: r.get(1), index_bytes: r.get(2) }))
+        .await;
+    match r {
+        Ok(r) => Ok(Some(TableSize { total_bytes: r.get(0), table_bytes: r.get(1), index_bytes: r.get(2) })),
+        // CockroachDB has no size functions; its sizes are per range, not per table.
+        Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_FUNCTION) => Ok(None),
+        Err(e) => Err(pg(e)),
+    }
 }
 
 const FK_SELECT: &str = "SELECT c.conname::text, tn.nspname::text, t.relname::text, \
@@ -489,7 +493,7 @@ pub async fn schema_model(client: &Client, database: &str, schema: Option<&str>)
             &format!(
                 "WITH rels AS (SELECT c.oid, n.nspname, c.relname, c.relkind FROM pg_class c \
                      JOIN pg_namespace n ON n.oid = c.relnamespace \
-                     WHERE c.relkind IN {RELKINDS} AND NOT c.relispartition AND {filter} \
+                     WHERE c.relkind IN {RELKINDS} AND NOT COALESCE(c.relispartition, false) AND {filter} \
                      ORDER BY n.nspname, c.relname LIMIT $2) \
                  SELECT r.nspname::text, r.relname::text, r.relkind::text, a.attname::text, \
                         format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \

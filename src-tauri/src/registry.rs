@@ -12,7 +12,9 @@ pub struct Registry(HashMap<Engine, Arc<dyn DatabaseAdapter>>);
 impl Registry {
     pub fn new() -> Self {
         let adapters: Vec<(Engine, Arc<dyn DatabaseAdapter>)> = vec![
-            (Engine::Postgres, Arc::new(dq_postgres::PostgresAdapter)),
+            (Engine::Postgres, Arc::new(dq_postgres::PostgresAdapter::POSTGRES)),
+            (Engine::Cockroachdb, Arc::new(dq_postgres::PostgresAdapter::COCKROACH)),
+            (Engine::Sqlserver, Arc::new(dq_sqlserver::SqlServerAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];

@@ -58,7 +58,7 @@ macro_rules! require_db {
 }
 
 async fn session(cfg: &ConnConfig) -> Arc<dyn Session> {
-    PostgresAdapter.connect(&with_password(cfg, PASSWORD)).await.expect("connect")
+    PostgresAdapter::POSTGRES.connect(&with_password(cfg, PASSWORD)).await.expect("connect")
 }
 
 fn table(schema: &str, name: &str) -> ObjectRef {
@@ -79,7 +79,7 @@ fn text(cell: &Cell) -> String {
 #[tokio::test]
 async fn test_reports_server_details() {
     let cfg = require_db!();
-    let info = PostgresAdapter.test(&with_password(&cfg, PASSWORD)).await.unwrap();
+    let info = PostgresAdapter::POSTGRES.test(&with_password(&cfg, PASSWORD)).await.unwrap();
     assert!(info.version.starts_with("PostgreSQL "), "{}", info.version);
     assert_eq!(info.database, "dataquery_test");
     assert!(info.tls.is_none());
@@ -89,7 +89,7 @@ async fn test_reports_server_details() {
 async fn invalid_credentials_are_actionable_and_redacted() {
     let cfg = require_db!();
     let secret = "wrong-Secret-123";
-    let err = PostgresAdapter.test(&with_password(&cfg, secret)).await.unwrap_err();
+    let err = PostgresAdapter::POSTGRES.test(&with_password(&cfg, secret)).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Auth);
     assert_eq!(err.code.as_deref(), Some("28P01"));
     assert!(err.action.as_deref().unwrap_or_default().contains("username and password"));
@@ -101,7 +101,7 @@ async fn invalid_credentials_are_actionable_and_redacted() {
 async fn network_failure_is_classified() {
     let mut cfg = require_db!();
     cfg.port = 1;
-    let err = PostgresAdapter.test(&with_password(&cfg, PASSWORD)).await.unwrap_err();
+    let err = PostgresAdapter::POSTGRES.test(&with_password(&cfg, PASSWORD)).await.unwrap_err();
     assert!(matches!(err.kind, ErrorKind::Network | ErrorKind::Timeout), "{err:?}");
 }
 
@@ -109,7 +109,7 @@ async fn network_failure_is_classified() {
 async fn tls_is_required_when_asked() {
     let mut cfg = require_db!();
     cfg.ssl_mode = SslMode::VerifyFull;
-    let err = PostgresAdapter.test(&with_password(&cfg, PASSWORD)).await.unwrap_err();
+    let err = PostgresAdapter::POSTGRES.test(&with_password(&cfg, PASSWORD)).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Tls, "{err:?}");
 }
 

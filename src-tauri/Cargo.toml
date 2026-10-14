@@ -17,6 +17,7 @@ tauri-build = { version = "2.5", features = [] }
 dq-core.workspace = true
 dq-postgres.workspace = true
 dq-mysql.workspace = true
+dq-sqlserver.workspace = true
 dq-store.workspace = true
 dq-ssh.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -77,7 +77,7 @@ async fn tunnels_to_postgres_after_trusting_the_host_key() {
         ..ConnConfig::default()
     };
     let params = ConnectParams { config, password: Some("dataquery".into()), endpoint: Some(opened.local_addr()) };
-    let session = dq_postgres::PostgresAdapter.connect(&params).await.unwrap();
+    let session = dq_postgres::PostgresAdapter::POSTGRES.connect(&params).await.unwrap();
     let options = ExecOptions { row_limit: 10, timeout_secs: 10 };
     let r = session.execute("SELECT current_database()", &[], options).await.unwrap();
     assert_eq!(r.rows[0][0].to_text().as_deref(), Some("dataquery_test"));
