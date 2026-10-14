@@ -79,6 +79,61 @@ impl StatementInfo {
     }
 }
 
+/// How a statement changes the session's transaction state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxEffect {
+    /// `BEGIN`, `START TRANSACTION`, `COMMIT AND CHAIN`.
+    Begin,
+    /// `COMMIT`, `ROLLBACK`, `END`, `ABORT`, or a MySQL statement that commits implicitly.
+    End,
+    /// `ROLLBACK TO SAVEPOINT`: a failed transaction becomes usable again.
+    RollbackToSavepoint,
+    None,
+}
+
+/// The transaction effect of one statement.
+pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
+    let tokens = tokenize(sql, flavor);
+    let words: Vec<String> = tokens
+        .iter()
+        .filter(|t| !t.is_trivia())
+        .take(4)
+        .map(|t| t.text(sql).to_ascii_uppercase())
+        .collect();
+    let word = |i: usize| words.get(i).map_or("", String::as_str);
+    match word(0) {
+        "BEGIN" | "START" => TxEffect::Begin,
+        "COMMIT" | "END" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
+        "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
+        "ROLLBACK" if word(1) == "TO" || (word(2) == "TO" && matches!(word(1), "WORK" | "TRANSACTION")) => {
+            TxEffect::RollbackToSavepoint
+        }
+        "COMMIT" | "ROLLBACK" | "END" | "ABORT" => TxEffect::End,
+        "PREPARE" if word(1) == "TRANSACTION" => TxEffect::End,
+        // MySQL commits the open transaction before DDL and account statements.
+        "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" | "GRANT" | "REVOKE" | "LOCK" | "UNLOCK"
+            if flavor == SqlFlavor::Mysql =>
+        {
+            TxEffect::End
+        }
+        _ => TxEffect::None,
+    }
+}
+
+/// Replaces string literals with `'…'`, for history entries when the user
+/// asked not to keep values.
+pub fn redact_literals(sql: &str, flavor: SqlFlavor) -> String {
+    let mut out = String::with_capacity(sql.len());
+    for token in tokenize(sql, flavor) {
+        if token.kind == TokenKind::String {
+            out.push_str("'…'");
+        } else {
+            out.push_str(token.text(sql));
+        }
+    }
+    out
+}
+
 /// Splits `src` into statements, skipping empty and comment-only ones.
 pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
     let tokens = tokenize(src, flavor);
@@ -372,6 +427,26 @@ mod tests {
         let my = analyze("INSERT INTO t VALUES (1) ON DUPLICATE KEY UPDATE a = 1", MY).unwrap();
         assert_eq!(my.destructive, None);
         assert!(my.writes);
+    }
+
+    #[test]
+    fn transaction_effects() {
+        assert_eq!(transaction_effect("begin", PG), TxEffect::Begin);
+        assert_eq!(transaction_effect("START TRANSACTION READ ONLY", MY), TxEffect::Begin);
+        assert_eq!(transaction_effect("commit", PG), TxEffect::End);
+        assert_eq!(transaction_effect("COMMIT AND CHAIN", PG), TxEffect::Begin);
+        assert_eq!(transaction_effect("rollback to savepoint s1", PG), TxEffect::RollbackToSavepoint);
+        assert_eq!(transaction_effect("ROLLBACK WORK TO s1", MY), TxEffect::RollbackToSavepoint);
+        assert_eq!(transaction_effect("rollback", MY), TxEffect::End);
+        assert_eq!(transaction_effect("create table t (a int)", MY), TxEffect::End);
+        assert_eq!(transaction_effect("create table t (a int)", PG), TxEffect::None);
+        assert_eq!(transaction_effect("select 1", PG), TxEffect::None);
+    }
+
+    #[test]
+    fn literals_are_redacted() {
+        assert_eq!(redact_literals("select * from t where a = 'x''y' and b = 1", PG), "select * from t where a = '…' and b = 1");
+        assert_eq!(redact_literals("select $$secret$$", PG), "select '…'");
     }
 
     #[test]

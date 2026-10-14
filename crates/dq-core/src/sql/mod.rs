@@ -7,5 +7,8 @@ pub mod dialect;
 pub mod format;
 pub mod lexer;
 
-pub use analyze::{DestructiveReason, StatementInfo, StatementKind, analyze, command_tag, split_statements};
+pub use analyze::{
+    DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, redact_literals, split_statements,
+    transaction_effect,
+};
 pub use dialect::{Dialect, MysqlDialect, PostgresDialect, SqlFlavor};
