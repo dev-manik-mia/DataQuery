@@ -1,0 +1,21 @@
+[package]
+name = "dq-cassandra"
+description = "Cassandra and ScyllaDB adapter for DataQuery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dq-core.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+scylla.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

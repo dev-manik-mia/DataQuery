@@ -23,6 +23,7 @@ dq-snowflake = { path = "crates/dq-snowflake" }
 dq-mongodb = { path = "crates/dq-mongodb" }
 dq-dynamodb = { path = "crates/dq-dynamodb" }
 dq-redis = { path = "crates/dq-redis" }
+dq-cassandra = { path = "crates/dq-cassandra" }
 
 async-trait = "0.1"
 base64 = "0.22"
@@ -35,6 +36,7 @@ mysql_async = { version = "0.37", default-features = false, features = ["default
 postgres-protocol = "0.6"
 redis = { version = "1.7", default-features = false, features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls-insecure", "streams", "acl"] }
 regex = "1"
+scylla = { version = "1.9", features = ["rustls-023", "chrono-04", "num-bigint-04", "bigdecimal-04"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-native-certs = "0.8"

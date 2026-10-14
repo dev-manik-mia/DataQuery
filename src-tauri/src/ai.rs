@@ -172,6 +172,7 @@ pub fn prepare(
         SqlFlavor::Mongodb => "MongoDB shell (mongosh) syntax, e.g. db.orders.find({ … })",
         SqlFlavor::Partiql => "DynamoDB PartiQL",
         SqlFlavor::Redis => "Redis commands (one per line, redis-cli syntax)",
+        SqlFlavor::Cql => "Cassandra CQL (restrict the partition key; avoid ALLOW FILTERING)",
     };
     let (hint, task, mut sent) = match request {
         AiRequest::Sql { question } => {

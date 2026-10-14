@@ -147,6 +147,32 @@ services:
       interval: 2s
       retries: 30
 
+  # Cassandra 5 with password authentication (user cassandra / cassandra); slow to start.
+  cassandra:
+    image: cassandra:5.0
+    environment:
+      MAX_HEAP_SIZE: 768M
+      HEAP_NEWSIZE: 128M
+      CASSANDRA_CLUSTER_NAME: dataquery
+      CASSANDRA_DC: dc1
+    command: ["bash", "-c", "sed -i 's/^authenticator:.*/authenticator: PasswordAuthenticator/' /etc/cassandra/cassandra.yaml && exec docker-entrypoint.sh cassandra -f"]
+    ports: ["59042:9042"]
+    volumes: ["./docker/cassandra-seed.cql:/seed/seed.cql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -u cassandra -p cassandra -e 'DESCRIBE KEYSPACES' >/dev/null 2>&1"]
+      interval: 5s
+      retries: 60
+
+  scylla:
+    image: scylladb/scylla:2025.1
+    command: ["--smp", "1", "--memory", "750M", "--overprovisioned", "1", "--developer-mode", "1", "--skip-wait-for-gossip-to-settle", "0"]
+    ports: ["59043:9042"]
+    volumes: ["./docker/cassandra-seed.cql:/seed/seed.cql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' >/dev/null 2>&1"]
+      interval: 5s
+      retries: 60
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

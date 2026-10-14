@@ -20,6 +20,8 @@ export interface GridColumn {
   typeName: string;
   numeric: boolean;
   editable?: boolean;
+  /** Key marker shown in the header, e.g. `PK` or `CK ↓` (CQL). */
+  badge?: string;
 }
 
 export interface GridRow {
@@ -454,6 +456,11 @@ export function DataGrid({
                 <span className={styles.headName}>
                   {pinned.includes(ci) && <Icon name="pin" size={10} />}
                   <span className="ellipsis">{c.name}</span>
+                  {c.badge && (
+                    <span className={styles.headBadge} data-kind={c.badge.startsWith('PK') ? 'partition' : 'clustering'}>
+                      {c.badge}
+                    </span>
+                  )}
                   {sorted && <Icon name={sort?.descending ? 'arrowDown' : 'arrowUp'} size={11} />}
                   {masked.has(ci) && <Icon name="eyeOff" size={11} title="Masked: right-click to reveal" />}
                   {foreignKeys?.has(ci) && <Icon name="link" size={11} title={foreignKeys.get(ci)!.title} />}

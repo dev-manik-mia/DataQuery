@@ -1,3 +1,4 @@
+import type { KeyRole } from '@/bindings/KeyRole';
 import type { NodeKind } from '@/bindings/NodeKind';
 import type { ObjectRef } from '@/bindings/ObjectRef';
 
@@ -14,6 +15,7 @@ export const KIND_MARK: Record<NodeKind, string> = {
   function: 'F',
   procedure: 'P',
   key: 'K',
+  type: 'U',
   group: '',
 };
 
@@ -29,10 +31,11 @@ export const KIND_LABEL: Record<NodeKind, string> = {
   function: 'Function',
   procedure: 'Procedure',
   key: 'Key',
+  type: 'Type',
   group: 'Folder',
 };
 
-const GROUP_LABEL: Record<string, string> = { sequences: 'Sequences', functions: 'Functions', procedures: 'Procedures' };
+const GROUP_LABEL: Record<string, string> = { sequences: 'Sequences', functions: 'Functions', procedures: 'Procedures', types: 'Types' };
 
 export function isRelation(o: ObjectRef): boolean {
   return o.kind === 'table' || o.kind === 'view' || o.kind === 'materialized_view';
@@ -54,4 +57,9 @@ export function objectLabel(o: ObjectRef): string {
 /** Full path for tooltips: `database.schema.table` or `database.table`. */
 export function objectPath(o: ObjectRef): string {
   return [o.database, o.schema, o.name].filter(Boolean).join('.');
+}
+
+/** Header markers for wide-column keys: `PK` for partition columns, `CK ↑`/`CK ↓` for clustering columns. */
+export function keyBadges(keys: readonly KeyRole[]): Map<string, string> {
+  return new Map(keys.map((k) => [k.column, k.role === 'partition' ? 'PK' : k.descending ? 'CK ↓' : 'CK ↑']));
 }

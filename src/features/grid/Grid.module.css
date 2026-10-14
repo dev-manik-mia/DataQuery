@@ -55,6 +55,22 @@
   color: var(--ink);
 }
 
+.headBadge {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--accent-tint);
+  color: var(--accent-on-tint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.headBadge[data-kind='clustering'] {
+  background: var(--caution-tint);
+  color: var(--caution);
+}
+
 .headType {
   font-family: var(--font-mono);
   font-size: 10px;

@@ -40,12 +40,14 @@ import type { ImportReport } from '@/bindings/ImportReport';
 import type { ImportSource } from '@/bindings/ImportSource';
 import type { ConsoleReply } from '@/bindings/ConsoleReply';
 import type { KeychainStatus } from '@/bindings/KeychainStatus';
+import type { KeyRole } from '@/bindings/KeyRole';
 import type { KeyWrite } from '@/bindings/KeyWrite';
 import type { MonitorSnapshot } from '@/bindings/MonitorSnapshot';
 import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
 import type { ObjectSize } from '@/bindings/ObjectSize';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
+import type { QueryAnalysis } from '@/bindings/QueryAnalysis';
 import type { RowChange } from '@/bindings/RowChange';
 import type { RowCount } from '@/bindings/RowCount';
 import type { RowFilter } from '@/bindings/RowFilter';
@@ -63,6 +65,7 @@ import type { ScriptDraft } from '@/bindings/ScriptDraft';
 import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { ServerSetting } from '@/bindings/ServerSetting';
 import type { SessionInfo } from '@/bindings/SessionInfo';
+import type { SessionOption } from '@/bindings/SessionOption';
 import type { Settings } from '@/bindings/Settings';
 import type { Snippet } from '@/bindings/Snippet';
 import type { SnippetDraft } from '@/bindings/SnippetDraft';
@@ -146,6 +149,10 @@ export const api = {
   // queries
   runSql: ({ sessionId }: Sid, sql: string, params: (string | null)[] | null, confirmation: Confirmation | null) =>
     call<Guarded<RunReport>>('run_sql', { sessionId, sql, params, confirmation }),
+  queryAnalysis: ({ sessionId }: Sid, sql: string) => call<QueryAnalysis | null>('query_analysis', { sessionId, sql }),
+  sessionOptions: ({ sessionId }: Sid) => call<SessionOption[]>('session_options', { sessionId }),
+  setSessionOption: ({ sessionId }: Sid, name: string, value: string) => call<SessionOption[]>('set_session_option', { sessionId, name, value }),
+  keyRoles: ({ sessionId }: Sid, object: ObjectRef) => call<KeyRole[]>('key_roles', { sessionId, object: objectRef(object) }),
   fetchMore: ({ sessionId }: Sid, limit: number) => call<RowsPage>('fetch_more', { sessionId, limit }),
   cancelQuery: ({ sessionId }: Sid) => call<boolean>('cancel_query', { sessionId }),
   transaction: ({ sessionId }: Sid, action: TxAction) => call<TxStatus>('transaction', { sessionId, action }),

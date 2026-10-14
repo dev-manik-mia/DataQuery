@@ -19,6 +19,16 @@ pub async fn table_structure(
     ops::structure(&*state.session(&session_id).await?.session, &object).await
 }
 
+/// Partition and clustering columns (CQL), for the `PK` / `CK` header markers.
+#[tauri::command]
+pub async fn key_roles(
+    state: State<'_, AppState>,
+    session_id: String,
+    object: ObjectRef,
+) -> CmdResult<Vec<dq_core::schema::KeyRole>> {
+    state.session(&session_id).await?.session.key_roles(&object).await
+}
+
 #[tauri::command]
 pub async fn table_ddl(state: State<'_, AppState>, session_id: String, object: ObjectRef) -> CmdResult<String> {
     state.session(&session_id).await?.session.ddl(&object).await

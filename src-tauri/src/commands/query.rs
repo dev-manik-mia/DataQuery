@@ -100,13 +100,16 @@ pub(crate) fn next_tx(current: TxStatus, sql: &str, flavor: SqlFlavor, failed: b
 }
 
 /// Starts a transaction when manual-commit mode is on and none is open.
+/// Engines without transactions (ClickHouse, CQL) run every statement on its own.
 async fn begin_if_manual(
+    state: &AppState,
     open: &OpenSession,
     settings: &dq_store::Settings,
     statements: &[StatementInfo],
 ) -> CmdResult<()> {
     let only_tx_control = statements.iter().all(|s| s.kind == StatementKind::Transaction);
-    if settings.manual_commit && open.tx_status() == TxStatus::Auto && !only_tx_control {
+    let transactions = state.registry.capabilities(open.session.info().engine).is_some_and(|c| c.transactions);
+    if settings.manual_commit && transactions && open.tx_status() == TxStatus::Auto && !only_tx_control {
         let options = ExecOptions { row_limit: 1, timeout_secs: settings.timeout_secs };
         open.session.execute(open.session.dialect().begin_transaction(), &[], options).await?;
         open.set_tx_status(TxStatus::Open);
@@ -150,7 +153,7 @@ pub async fn run_sql(
 
     let options = ExecOptions { row_limit: settings.row_limit, timeout_secs: settings.timeout_secs };
     let started = Instant::now();
-    begin_if_manual(&open, &settings, &statements).await?;
+    begin_if_manual(&state, &open, &settings, &statements).await?;
     let mut outcomes = Vec::with_capacity(statements.len());
     for (index, statement) in statements.iter().enumerate() {
         let text = statement.text(&sql);
@@ -258,6 +261,51 @@ pub async fn explain(
     }
     let settings = state.settings().await?;
     open.session.explain(statement.text(&sql), &params.unwrap_or_default(), analyze, settings.timeout_secs).await
+}
+
+/// The editor banner for a statement: CQL single-partition reads vs scans. `None` for other engines.
+#[tauri::command]
+pub async fn query_analysis(
+    state: State<'_, AppState>,
+    session_id: String,
+    sql: String,
+) -> CmdResult<Option<dq_core::sql::cql::QueryAnalysis>> {
+    let open = state.session(&session_id).await?;
+    if open.session.dialect().flavor() != SqlFlavor::Cql {
+        return Ok(None);
+    }
+    let statements = split_statements(&sql, SqlFlavor::Cql);
+    let [statement] = statements.as_slice() else {
+        return Ok(None);
+    };
+    let text = statement.text(&sql);
+    let Some(object) = dq_core::sql::cql::select_target(text, &open.session.info().database) else {
+        return Ok(None);
+    };
+    // An unknown table has no keys; the server will say so when the statement runs.
+    let keys = open.session.key_roles(&object).await.unwrap_or_default();
+    Ok(dq_core::sql::cql::analyze_select(text, object, keys))
+}
+
+/// Settings of the query connection shown in the editor toolbar (CQL consistency, page size).
+#[tauri::command]
+pub async fn session_options(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CmdResult<Vec<dq_core::adapter::SessionOption>> {
+    Ok(state.session(&session_id).await?.session.options())
+}
+
+#[tauri::command]
+pub async fn set_session_option(
+    state: State<'_, AppState>,
+    session_id: String,
+    name: String,
+    value: String,
+) -> CmdResult<Vec<dq_core::adapter::SessionOption>> {
+    let open = state.session(&session_id).await?;
+    open.session.set_option(&name, &value).await?;
+    Ok(open.session.options())
 }
 
 #[tauri::command]

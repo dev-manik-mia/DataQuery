@@ -1,0 +1,1 @@
+//! Cassandra and ScyllaDB adapter.
