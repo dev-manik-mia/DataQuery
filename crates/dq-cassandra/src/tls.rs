@@ -1,4 +1,4 @@
-//! TLS for Cassandra and ScyllaDB connections (same rules as `dq-postgres`). Certificates are verified unless the user
+//! TLS for Cassandra and `ScyllaDB` connections (same rules as `dq-postgres`). Certificates are verified unless the user
 //! explicitly chose `require` or `prefer`; nothing is bypassed silently.
 
 use std::sync::{Arc, LazyLock};

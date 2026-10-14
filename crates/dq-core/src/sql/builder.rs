@@ -127,7 +127,7 @@ fn order_clause(d: &dyn Dialect, structure: &TableStructure, sort: Option<&SortS
         return Ok(format!(" ORDER BY {} {dir}", d.quote_ident(&sort.column)));
     }
     // Stable paging: default to the row identity.
-    if structure.row_identity.is_empty() {
+    if structure.row_identity.is_empty() || !d.orders_by_row_identity() {
         return Ok(String::new());
     }
     let keys: Vec<_> = structure.row_identity.iter().map(|c| d.quote_ident(c)).collect();

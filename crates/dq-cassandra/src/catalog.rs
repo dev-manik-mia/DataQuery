@@ -35,8 +35,11 @@ fn list(text: Option<String>) -> Vec<String> {
 }
 
 pub async fn keyspaces(driver: &Driver, current: &str) -> DbResult<Vec<Node>> {
-    let mut names: Vec<String> =
-        text_rows(driver, "SELECT keyspace_name FROM system_schema.keyspaces", ()).await?.iter().map(|r| r.string(0)).collect();
+    let mut names: Vec<String> = text_rows(driver, "SELECT keyspace_name FROM system_schema.keyspaces", ())
+        .await?
+        .iter()
+        .map(|r| r.string(0))
+        .collect();
     names.sort_by(|a, b| (is_system(a), a).cmp(&(is_system(b), b)));
     Ok(names
         .into_iter()
@@ -83,7 +86,9 @@ pub async fn keyspace_children(driver: &Driver, keyspace: &str) -> DbResult<Vec<
         node.comment = r.text(1).filter(|c| !c.is_empty());
         out.push(node);
     }
-    out.extend(views?.iter().map(|r| Node::leaf(ObjectRef::new(NodeKind::MaterializedView, keyspace, None, r.string(0)))));
+    out.extend(
+        views?.iter().map(|r| Node::leaf(ObjectRef::new(NodeKind::MaterializedView, keyspace, None, r.string(0)))),
+    );
     let group = |id: &str, count: usize| {
         let mut node = Node::container(ObjectRef::new(NodeKind::Group, keyspace, None, id));
         node.row_estimate = Some(count as i64);
@@ -104,7 +109,8 @@ pub async fn keyspace_children(driver: &Driver, keyspace: &str) -> DbResult<Vec<
 pub async fn group_children(driver: &Driver, group: &ObjectRef) -> DbResult<Vec<Node>> {
     let ks = group.database.as_str();
     if group.name == GROUP_TYPES {
-        let rows = text_rows(driver, "SELECT type_name FROM system_schema.types WHERE keyspace_name = ?", (ks,)).await?;
+        let rows =
+            text_rows(driver, "SELECT type_name FROM system_schema.types WHERE keyspace_name = ?", (ks,)).await?;
         return Ok(rows.iter().map(|r| Node::leaf(ObjectRef::new(NodeKind::Type, ks, None, r.string(0)))).collect());
     }
     let mut out = Vec::new();
@@ -196,7 +202,8 @@ pub async fn key_roles(driver: &Driver, object: &ObjectRef) -> DbResult<Vec<KeyR
 
 /// `PRIMARY KEY ((a, b), c DESC)`.
 fn primary_key(keys: &[KeyRole]) -> String {
-    let partition: Vec<String> = keys.iter().filter(|k| k.role == KeyRoleKind::Partition).map(|k| name(&k.column)).collect();
+    let partition: Vec<String> =
+        keys.iter().filter(|k| k.role == KeyRoleKind::Partition).map(|k| name(&k.column)).collect();
     let clustering: Vec<String> = keys
         .iter()
         .filter(|k| k.role == KeyRoleKind::Clustering)
@@ -272,7 +279,11 @@ pub async fn structure(driver: &Driver, object: &ObjectRef) -> DbResult<TableStr
     Ok(TableStructure {
         object: object.clone(),
         columns,
-        constraints: vec![ConstraintInfo { kind: ConstraintKind::PrimaryKey, name: "primary key".into(), definition: primary_key(&keys) }],
+        constraints: vec![ConstraintInfo {
+            kind: ConstraintKind::PrimaryKey,
+            name: "primary key".into(),
+            definition: primary_key(&keys),
+        }],
         indexes,
         row_identity: if view { Vec::new() } else { keys.iter().map(|k| k.column.clone()).collect() },
         full_row_key: Vec::new(),
@@ -298,7 +309,8 @@ pub async fn ddl(driver: &Driver, object: &ObjectRef) -> DbResult<String> {
         NodeKind::Database => "KEYSPACE",
         _ => return Err(DbError::unsupported("This object has no definition.")),
     };
-    let target = if object.kind == NodeKind::Database { name(&object.name) } else { qualified(&object.database, &object.name) };
+    let target =
+        if object.kind == NodeKind::Database { name(&object.name) } else { qualified(&object.database, &object.name) };
     let described = text_rows(driver, &format!("DESCRIBE {what} {target}"), ()).await;
     if let Ok(rows) = described {
         let statements: Vec<String> = rows.iter().filter_map(|r| r.text(3)).collect();
@@ -312,7 +324,9 @@ pub async fn ddl(driver: &Driver, object: &ObjectRef) -> DbResult<String> {
             let keys = roles(&cols);
             let mut lines: Vec<String> = cols
                 .iter()
-                .map(|c| format!("  {} {}{}", name(&c.name), c.data_type, if c.kind == "static" { " STATIC" } else { "" }))
+                .map(|c| {
+                    format!("  {} {}{}", name(&c.name), c.data_type, if c.kind == "static" { " STATIC" } else { "" })
+                })
                 .collect();
             lines.push(format!("  {}", primary_key(&keys)));
             let order: Vec<String> = keys
@@ -320,7 +334,11 @@ pub async fn ddl(driver: &Driver, object: &ObjectRef) -> DbResult<String> {
                 .filter(|k| k.role == KeyRoleKind::Clustering)
                 .map(|k| format!("{} {}", name(&k.column), if k.descending { "DESC" } else { "ASC" }))
                 .collect();
-            let with = if order.is_empty() { String::new() } else { format!(" WITH CLUSTERING ORDER BY ({})", order.join(", ")) };
+            let with = if order.is_empty() {
+                String::new()
+            } else {
+                format!(" WITH CLUSTERING ORDER BY ({})", order.join(", "))
+            };
             Ok(format!("CREATE TABLE {target} (\n{}\n){with};", lines.join(",\n")))
         }
         NodeKind::Type => {
@@ -341,7 +359,9 @@ pub async fn ddl(driver: &Driver, object: &ObjectRef) -> DbResult<String> {
 
 pub async fn dependencies(driver: &Driver, object: &ObjectRef) -> DbResult<Dependencies> {
     let ks = object.database.as_str();
-    let views = text_rows(driver, "SELECT view_name, base_table_name FROM system_schema.views WHERE keyspace_name = ?", (ks,)).await?;
+    let views =
+        text_rows(driver, "SELECT view_name, base_table_name FROM system_schema.views WHERE keyspace_name = ?", (ks,))
+            .await?;
     let mut deps = Dependencies::default();
     for v in views {
         if object.kind == NodeKind::MaterializedView && v.string(0) == object.name {
@@ -360,7 +380,8 @@ pub async fn dependencies(driver: &Driver, object: &ObjectRef) -> DbResult<Depen
 }
 
 pub async fn schema_model(driver: &Driver, keyspace: &str) -> DbResult<SchemaModel> {
-    let tables = text_rows(driver, "SELECT table_name FROM system_schema.tables WHERE keyspace_name = ?", (keyspace,)).await?;
+    let tables =
+        text_rows(driver, "SELECT table_name FROM system_schema.tables WHERE keyspace_name = ?", (keyspace,)).await?;
     let cols = text_rows(
         driver,
         "SELECT table_name, column_name, kind, position, type FROM system_schema.columns WHERE keyspace_name = ?",
@@ -382,7 +403,11 @@ pub async fn schema_model(driver: &Driver, keyspace: &str) -> DbResult<SchemaMod
                     _ => 2,
                 };
                 let key = rank < 2;
-                (rank, c.number(3).unwrap_or(-1), ModelColumn { name: c.string(1), data_type: c.string(4), nullable: !key, primary_key: key })
+                (
+                    rank,
+                    c.number(3).unwrap_or(-1),
+                    ModelColumn { name: c.string(1), data_type: c.string(4), nullable: !key, primary_key: key },
+                )
             })
             .collect();
         columns.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));

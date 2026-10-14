@@ -102,7 +102,8 @@ pub fn decimal_text(v: &CqlDecimal) -> String {
         return format!("{sign}{digits}{}", "0".repeat(scale.unsigned_abs() as usize));
     }
     let scale = scale as usize;
-    let padded = if digits.len() <= scale { format!("{}{digits}", "0".repeat(scale - digits.len() + 1)) } else { digits };
+    let padded =
+        if digits.len() <= scale { format!("{}{digits}", "0".repeat(scale - digits.len() + 1)) } else { digits };
     let (whole, frac) = padded.split_at(padded.len() - scale);
     format!("{sign}{whole}.{frac}")
 }
@@ -154,7 +155,14 @@ pub fn duration_text(d: CqlDuration) -> String {
     if days > 0 {
         let _ = write!(out, "{days}d");
     }
-    for (unit, size) in [("h", 3_600_000_000_000), ("m", 60_000_000_000), ("s", 1_000_000_000), ("ms", 1_000_000), ("us", 1_000), ("ns", 1)] {
+    for (unit, size) in [
+        ("h", 3_600_000_000_000),
+        ("m", 60_000_000_000),
+        ("s", 1_000_000_000),
+        ("ms", 1_000_000),
+        ("us", 1_000),
+        ("ns", 1),
+    ] {
         if nanos >= size {
             let _ = write!(out, "{}{unit}", nanos / size);
             nanos %= size;
@@ -204,7 +212,9 @@ pub fn json_of(v: &CqlValue) -> Json {
         CqlValue::SmallInt(i) => Json::from(*i),
         CqlValue::TinyInt(i) => Json::from(*i),
         CqlValue::Counter(c) => Json::from(c.0),
-        CqlValue::Double(f) => serde_json::Number::from_f64(*f).map_or_else(|| Json::String(float_text(*f)), Json::Number),
+        CqlValue::Double(f) => {
+            serde_json::Number::from_f64(*f).map_or_else(|| Json::String(float_text(*f)), Json::Number)
+        }
         CqlValue::Float(f) => serde_json::Number::from_f64(f64::from(*f))
             .map_or_else(|| Json::String(float_text(f64::from(*f))), Json::Number),
         CqlValue::List(items) | CqlValue::Set(items) | CqlValue::Vector(items) => {
@@ -259,20 +269,16 @@ pub fn cell(v: Option<&CqlValue>, limits: CellLimits) -> Cell {
 /// Converts the text for parameter `n` (1-based) to `t`. `None` is null.
 pub fn param(n: usize, text: Option<&str>, t: &ColumnType<'_>) -> DbResult<Option<CqlValue>> {
     let Some(text) = text else { return Ok(None) };
-    from_text(text, t)
-        .map(Some)
-        .map_err(|e| DbError::invalid(format!("Parameter {n} ({}): {e}", type_name(t))))
+    from_text(text, t).map(Some).map_err(|e| DbError::invalid(format!("Parameter {n} ({}): {e}", type_name(t))))
 }
 
 /// Text to a value of `t`. Collections, tuples and UDTs are JSON.
 pub fn from_text(text: &str, t: &ColumnType<'_>) -> Result<CqlValue, String> {
-    match t {
-        ColumnType::Native(n) => native(text, n),
-        _ => {
-            let json: Json = serde_json::from_str(text).map_err(|_| format!("`{text}` is not valid JSON"))?;
-            from_json(&json, t)
-        }
+    if let ColumnType::Native(n) = t {
+        return native(text, n);
     }
+    let json: Json = serde_json::from_str(text).map_err(|_| format!("`{text}` is not valid JSON"))?;
+    from_json(&json, t)
 }
 
 fn native(text: &str, n: &NativeType) -> Result<CqlValue, String> {
@@ -309,9 +315,10 @@ fn native(text: &str, n: &NativeType) -> Result<CqlValue, String> {
         }
         NativeType::Inet => CqlValue::Inet(t.parse::<IpAddr>().map_err(|_| parse_err("an IP address"))?),
         NativeType::Blob => CqlValue::Blob(parse_hex(t).ok_or_else(|| parse_err("hex bytes (0x…)"))?),
-        NativeType::Timestamp => CqlValue::Timestamp(CqlTimestamp(parse_timestamp(t).ok_or_else(|| {
-            parse_err("a timestamp (2026-10-14 09:59:12+0000, RFC 3339 or milliseconds)")
-        })?)),
+        NativeType::Timestamp => CqlValue::Timestamp(CqlTimestamp(
+            parse_timestamp(t)
+                .ok_or_else(|| parse_err("a timestamp (2026-10-14 09:59:12+0000, RFC 3339 or milliseconds)"))?,
+        )),
         NativeType::Date => {
             let d = NaiveDate::parse_from_str(t, "%Y-%m-%d").map_err(|_| parse_err("a date (YYYY-MM-DD)"))?;
             let days = d.signed_duration_since(NaiveDate::default()).num_days() + DATE_EPOCH_OFFSET;
@@ -325,7 +332,9 @@ fn native(text: &str, n: &NativeType) -> Result<CqlValue, String> {
                 i64::from(time.num_seconds_from_midnight()) * 1_000_000_000 + i64::from(time.nanosecond()),
             ))
         }
-        NativeType::Duration => CqlValue::Duration(parse_duration(t).ok_or_else(|| parse_err("a duration (e.g. 1h30m)"))?),
+        NativeType::Duration => {
+            CqlValue::Duration(parse_duration(t).ok_or_else(|| parse_err("a duration (e.g. 1h30m)"))?)
+        }
         _ => return Err("this type cannot be set from text".into()),
     })
 }
@@ -358,7 +367,7 @@ fn parse_decimal(t: &str) -> Option<CqlDecimal> {
 
 fn parse_hex(t: &str) -> Option<Vec<u8>> {
     let h = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
-    if h.len() % 2 != 0 {
+    if !h.len().is_multiple_of(2) {
         return None;
     }
     (0..h.len()).step_by(2).map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect()
@@ -544,10 +553,7 @@ mod tests {
         assert_eq!(text_of(&from_text("09:05:01.5", &n(NativeType::Time)).unwrap()), "09:05:01.500000000");
         let d = from_text("1y2mo3d4h5m6s7ms", &n(NativeType::Duration)).unwrap();
         assert_eq!(text_of(&d), "1y2mo3d4h5m6s7ms");
-        assert!(matches!(
-            cell(Some(&ts), CellLimits::GRID),
-            Cell::Temporal { zoned: true, .. }
-        ));
+        assert!(matches!(cell(Some(&ts), CellLimits::GRID), Cell::Temporal { zoned: true, .. }));
         assert!(from_text("yesterday", &n(NativeType::Timestamp)).is_err());
     }
 
@@ -580,7 +586,10 @@ mod tests {
             definition: Arc::new(UserDefinedType {
                 name: Cow::Borrowed("location"),
                 keyspace: Cow::Borrowed("ks"),
-                field_types: vec![(Cow::Borrowed("lat"), n(NativeType::Double)), (Cow::Borrowed("label"), n(NativeType::Text))],
+                field_types: vec![
+                    (Cow::Borrowed("lat"), n(NativeType::Double)),
+                    (Cow::Borrowed("label"), n(NativeType::Text)),
+                ],
             }),
         };
         assert_eq!(type_name(&udt), "frozen<location>");

@@ -6,6 +6,7 @@
 use std::hash::{Hash, Hasher};
 
 use async_trait::async_trait;
+use dq_core::adapter::Session as _;
 use dq_core::monitor::{Monitor, MonitorSnapshot, ObjectSize, Replication, ServerProcess, ServerSetting};
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::{DbError, DbResult};
@@ -57,7 +58,9 @@ impl Monitor for CqlSession {
                         client: Some(client),
                         state: r.text(3),
                         duration_ms: None,
-                        query: r.text(4).map(|d| if self.scylla { d } else { format!("{d} · {} requests", r.string(6)) }),
+                        query: r
+                            .text(4)
+                            .map(|d| if self.scylla { d } else { format!("{d} · {} requests", r.string(6)) }),
                         wait: None,
                         blocked_by: Vec::new(),
                         active: false,
@@ -83,7 +86,11 @@ impl Monitor for CqlSession {
     }
 
     async fn server_settings(&self, search: Option<&str>) -> DbResult<Vec<ServerSetting>> {
-        let sql = if self.scylla { "SELECT name, value, source FROM system.config" } else { "SELECT name, value FROM system_views.settings" };
+        let sql = if self.scylla {
+            "SELECT name, value, source FROM system.config"
+        } else {
+            "SELECT name, value FROM system_views.settings"
+        };
         let needle = search.unwrap_or_default().to_lowercase();
         let rows = text_rows(&self.driver, sql, ())
             .await
@@ -126,7 +133,7 @@ impl Monitor for CqlSession {
                 rows: Some(partitions),
             })
             .collect();
-        out.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+        out.sort_by_key(|o| std::cmp::Reverse(o.total_bytes));
         out.truncate(limit as usize);
         Ok(out)
     }
@@ -135,8 +142,6 @@ impl Monitor for CqlSession {
         Err(DbError::unsupported("Cassandra cannot end another client's requests."))
     }
 }
-
-use dq_core::adapter::Session as _;
 
 #[cfg(test)]
 mod tests {

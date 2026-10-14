@@ -28,7 +28,7 @@ struct Tunnel(SocketAddr);
 
 #[async_trait]
 impl AddressTranslator for Tunnel {
-    async fn translate_address(&self, _peer: &UntranslatedPeer<'_>) -> Result<SocketAddr, TranslationError> {
+    async fn translate_address(&self, _peer: &UntranslatedPeer) -> Result<SocketAddr, TranslationError> {
         Ok(self.0)
     }
 }

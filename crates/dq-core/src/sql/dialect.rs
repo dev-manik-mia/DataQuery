@@ -145,6 +145,13 @@ pub trait Dialect: Send + Sync {
         false
     }
 
+    /// Table pages are ordered by the row identity when no sort is chosen, so
+    /// paging is stable. CQL refuses `ORDER BY` on partition keys; its token
+    /// order is stable already.
+    fn orders_by_row_identity(&self) -> bool {
+        true
+    }
+
     fn aborts_transaction_on_error(&self) -> bool {
         self.flavor().postgres_like()
     }
@@ -986,6 +993,10 @@ impl Dialect for CqlDialect {
 
     fn client_side_offset(&self) -> bool {
         true
+    }
+
+    fn orders_by_row_identity(&self) -> bool {
+        false
     }
 
     fn template_placeholder(&self, _n: usize) -> String {

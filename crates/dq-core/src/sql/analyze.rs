@@ -137,9 +137,8 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             }
             _ => TxEffect::None,
         },
-        SqlFlavor::Clickhouse => TxEffect::None,
         // CQL has no transactions; `BEGIN BATCH … APPLY BATCH` is one statement.
-        SqlFlavor::Cql => TxEffect::None,
+        SqlFlavor::Clickhouse | SqlFlavor::Cql => TxEffect::None,
         SqlFlavor::Redis => match word(0) {
             "MULTI" => TxEffect::Begin,
             "EXEC" | "DISCARD" => TxEffect::End,

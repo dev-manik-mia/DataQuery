@@ -6,6 +6,7 @@
 //! and timeouts stop waiting for the request and drop it.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex as SyncMutex};
 use std::time::{Duration, Instant};
 
@@ -20,7 +21,7 @@ use dq_core::sql::cql::{AnalysisLevel, analyze_select, select_target};
 use dq_core::sql::{CqlDialect, Dialect, SqlFlavor, command_tag, split_statements};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult, ErrorKind};
-use futures_util::{StreamExt, TryStreamExt, stream};
+use futures_util::{StreamExt, stream};
 use scylla::client::session::Session as Driver;
 use scylla::response::query_result::QueryResult;
 use scylla::response::{PagingState, PagingStateResponse};
@@ -213,7 +214,11 @@ impl CqlSession {
             engine: config.engine,
             version,
             latency_ms: elapsed(started),
-            tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user: if config.username.trim().is_empty() { "anonymous".into() } else { config.username.clone() },
             database: config.database.trim().to_owned(),
             read_only: config.read_only,
@@ -236,7 +241,7 @@ impl CqlSession {
     }
 
     fn settings(&self) -> Settings {
-        self.settings.lock().map(|s| s.clone()).unwrap_or_else(|e| e.into_inner().clone())
+        self.settings.lock().map_or_else(|e| e.into_inner().clone(), |s| s.clone())
     }
 
     fn update(&self, f: impl FnOnce(&mut Settings)) {
@@ -294,7 +299,14 @@ impl CqlSession {
         Ok((prepared, values))
     }
 
-    async fn request(&self, cql: &str, params: Params<'_>, page: i32, timeout: u32, tracing: bool) -> DbResult<Request> {
+    async fn request(
+        &self,
+        cql: &str,
+        params: Params<'_>,
+        page: i32,
+        timeout: u32,
+        tracing: bool,
+    ) -> DbResult<Request> {
         let tune = self.tune(page, timeout, tracing);
         Ok(if params.is_empty() {
             let mut s = Statement::new(cql);
@@ -364,14 +376,25 @@ impl CqlSession {
         Ok((rows, first))
     }
 
-    async fn run(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<(StatementResult, Option<Cursor>)> {
+    async fn run(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        options: ExecOptions,
+    ) -> DbResult<(StatementResult, Option<Cursor>)> {
         let started = Instant::now();
         let settings = self.settings();
         let page = settings.page_size.unwrap_or(options.row_limit.min(5_000) as i32);
         let request = self.request(sql, params, page, options.timeout_secs, settings.tracing).await?;
         let mut cursor = Cursor { request, paging: Some(PagingState::start()), buffered: VecDeque::new() };
         let (rows, first) = self.fill(&mut cursor, options.row_limit as usize).await?;
-        let first = first.unwrap_or(Page { columns: Vec::new(), rows: Vec::new(), next: None, warnings: Vec::new(), tracing_id: None });
+        let first = first.unwrap_or(Page {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            next: None,
+            warnings: Vec::new(),
+            tracing_id: None,
+        });
         let has_more = cursor.paging.is_some() || !cursor.buffered.is_empty();
         let mut notices = first.warnings;
         if let Some(id) = first.tracing_id {
@@ -390,15 +413,24 @@ impl CqlSession {
     }
 
     fn local(&self, command: Local, started: Instant) -> DbResult<StatementResult> {
-        let invalid = |v: &str, allowed: &[&str]| DbError::invalid(format!("`{v}` is not one of {}.", allowed.join(", ")));
+        let invalid =
+            |v: &str, allowed: &[&str]| DbError::invalid(format!("`{v}` is not one of {}.", allowed.join(", ")));
         Ok(match command {
-            Local::Consistency(None) => message_result("CONSISTENCY", format!("Current consistency level is {}.", self.settings().consistency), started),
+            Local::Consistency(None) => message_result(
+                "CONSISTENCY",
+                format!("Current consistency level is {}.", self.settings().consistency),
+                started,
+            ),
             Local::Consistency(Some(v)) => {
                 consistency(&v).ok_or_else(|| invalid(&v, &CONSISTENCY_LEVELS))?;
                 self.update(|s| s.consistency.clone_from(&v));
                 message_result("CONSISTENCY", format!("Consistency level set to {v}."), started)
             }
-            Local::Serial(None) => message_result("SERIAL CONSISTENCY", format!("Current serial consistency level is {}.", self.settings().serial), started),
+            Local::Serial(None) => message_result(
+                "SERIAL CONSISTENCY",
+                format!("Current serial consistency level is {}.", self.settings().serial),
+                started,
+            ),
             Local::Serial(Some(v)) => {
                 serial(&v).ok_or_else(|| invalid(&v, &SERIAL_LEVELS))?;
                 self.update(|s| s.serial.clone_from(&v));
@@ -406,19 +438,43 @@ impl CqlSession {
             }
             Local::Paging(v) => {
                 let size = match v.as_deref() {
-                    None => return Ok(message_result("PAGING", format!("Page size: {}.", self.settings().page_size.map_or("the row limit".into(), |p| p.to_string())), started)),
+                    None => {
+                        return Ok(message_result(
+                            "PAGING",
+                            format!(
+                                "Page size: {}.",
+                                self.settings().page_size.map_or("the row limit".into(), |p| p.to_string())
+                            ),
+                            started,
+                        ));
+                    }
                     Some("ON") => None,
                     Some("OFF") => Some(5_000),
-                    Some(n) => Some(n.parse::<i32>().ok().filter(|n| (1..=5_000).contains(n)).ok_or_else(|| DbError::invalid("The page size is between 1 and 5000."))?),
+                    Some(n) => Some(
+                        n.parse::<i32>()
+                            .ok()
+                            .filter(|n| (1..=5_000).contains(n))
+                            .ok_or_else(|| DbError::invalid("The page size is between 1 and 5000."))?,
+                    ),
                 };
                 self.update(|s| s.page_size = size);
-                message_result("PAGING", format!("Page size: {}.", size.map_or("the row limit".into(), |p| p.to_string())), started)
+                message_result(
+                    "PAGING",
+                    format!("Page size: {}.", size.map_or("the row limit".into(), |p| p.to_string())),
+                    started,
+                )
             }
             Local::Tracing(v) => {
                 let on = match v.as_deref() {
                     Some("ON") => true,
                     Some("OFF") => false,
-                    _ => return Ok(message_result("TRACING", format!("Tracing is {}.", if self.settings().tracing { "on" } else { "off" }), started)),
+                    _ => {
+                        return Ok(message_result(
+                            "TRACING",
+                            format!("Tracing is {}.", if self.settings().tracing { "on" } else { "off" }),
+                            started,
+                        ));
+                    }
                 };
                 self.update(|s| s.tracing = on);
                 message_result("TRACING", format!("Tracing {}.", if on { "enabled" } else { "disabled" }), started)
@@ -481,10 +537,14 @@ impl CqlSession {
             "INSERT" if !has_condition => (" IF NOT EXISTS", "A row with this primary key already exists."),
             _ => ("", ""),
         };
-        let conditional = BoundStatement { sql: format!("{}{suffix}", statement.sql.trim_end_matches(';')), ..statement.clone() };
+        let conditional =
+            BoundStatement { sql: format!("{}{suffix}", statement.sql.trim_end_matches(';')), ..statement.clone() };
         let rows = client::rows(self.run_bound(&conditional).await?)?;
         if !suffix.is_empty() {
-            let applied = rows.first().and_then(|r| r.columns.first()).is_some_and(|v| matches!(v, Some(CqlValue::Boolean(true))));
+            let applied = rows
+                .first()
+                .and_then(|r| r.columns.first())
+                .is_some_and(|v| matches!(v, Some(CqlValue::Boolean(true))));
             if !applied {
                 return Err(DbError::new(ErrorKind::Constraint, conflict));
             }
@@ -541,7 +601,13 @@ impl CqlSession {
                 ],
                 ..PlanNode::default()
             };
-            return Ok(ExplainResult { plan: Some(node), raw: "No plan: CQL routes each statement to the partition's replicas.".into(), analyzed: false, planning_ms: None, execution_ms: None });
+            return Ok(ExplainResult {
+                plan: Some(node),
+                raw: "No plan: CQL routes each statement to the partition's replicas.".into(),
+                analyzed: false,
+                planning_ms: None,
+                execution_ms: None,
+            });
         };
         let label = match a.level {
             AnalysisLevel::Good => "Single-partition read",
@@ -549,7 +615,12 @@ impl CqlSession {
             AnalysisLevel::Caution => "Scan",
         };
         let keys = |role: KeyRoleKind| {
-            a.keys.iter().filter(|k| k.role == role).map(|k| if k.descending { format!("{} DESC", k.column) } else { k.column.clone() }).collect::<Vec<_>>().join(", ")
+            a.keys
+                .iter()
+                .filter(|k| k.role == role)
+                .map(|k| if k.descending { format!("{} DESC", k.column) } else { k.column.clone() })
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         let node = PlanNode {
             label: label.into(),
@@ -570,7 +641,11 @@ impl CqlSession {
         let request = self.request(sql, params, 100, timeout_secs, true).await?;
         let page = self.guarded(timeout_secs, self.page(&request, PagingState::start(), CellLimits::GRID)).await?;
         let id = page.tracing_id.ok_or_else(|| DbError::internal("The server returned no tracing session."))?;
-        let trace = self.driver.get_tracing_info(&id).await.map_err(|e| DbError::new(ErrorKind::Server, format!("Could not read the trace: {e}")))?;
+        let trace = self
+            .driver
+            .get_tracing_info(&id)
+            .await
+            .map_err(|e| DbError::new(ErrorKind::Server, format!("Could not read the trace: {e}")))?;
         let ms = |us: Option<i32>| us.map(|u| f64::from(u) / 1000.0);
         let mut raw = String::new();
         let children = trace
@@ -578,12 +653,13 @@ impl CqlSession {
             .iter()
             .map(|e| {
                 let source = e.source.map(|s| s.to_string());
-                raw.push_str(&format!(
-                    "{:>8} µs  {:<15}  {}\n",
+                let _ = writeln!(
+                    raw,
+                    "{:>8} µs  {:<15}  {}",
                     e.source_elapsed.unwrap_or_default(),
                     source.clone().unwrap_or_default(),
                     e.activity.clone().unwrap_or_default()
-                ));
+                );
                 PlanNode {
                     label: e.activity.clone().unwrap_or_default(),
                     detail: source,
@@ -653,7 +729,9 @@ impl Session for CqlSession {
     async fn list_children(&self, parent: Option<&ObjectRef>) -> DbResult<Vec<Node>> {
         match parent {
             None => catalog::keyspaces(&self.driver, &self.keyspace()).await,
-            Some(p) if p.kind == NodeKind::Database => catalog::keyspace_children(&self.driver, &p.name).await,
+            Some(p) if p.kind == NodeKind::Database => {
+                Box::pin(catalog::keyspace_children(&self.driver, &p.name)).await
+            }
             Some(p) if p.kind == NodeKind::Group => catalog::group_children(&self.driver, p).await,
             Some(_) => Ok(Vec::new()),
         }
@@ -695,7 +773,8 @@ impl Session for CqlSession {
     async fn fetch_more(&self, limit: u32) -> DbResult<RowsPage> {
         let started = Instant::now();
         let mut cursor = self.query.lock().await;
-        let mut open = cursor.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
+        let mut open =
+            cursor.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
         let limit = limit.clamp(1, ExecOptions::MAX_ROW_LIMIT) as usize;
         let (rows, _) = self.guarded(0, self.fill(&mut open, limit)).await?;
         let has_more = open.paging.is_some() || !open.buffered.is_empty();
@@ -706,12 +785,13 @@ impl Session for CqlSession {
     }
 
     async fn cancel(&self) -> DbResult<bool> {
-        let running = self.running.lock().ok().and_then(|r| r.clone());
-        Ok(running.map(|stop| stop.notify_one()).is_some())
+        let Some(stop) = self.running.lock().ok().and_then(|r| r.clone()) else { return Ok(false) };
+        stop.notify_one();
+        Ok(true)
     }
 
     async fn structure(&self, object: &ObjectRef) -> DbResult<TableStructure> {
-        catalog::structure(&self.driver, object).await
+        Box::pin(catalog::structure(&self.driver, object)).await
     }
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {
@@ -747,7 +827,13 @@ impl Session for CqlSession {
         Ok((columns, rows))
     }
 
-    async fn stream_query(&self, _database: &str, sql: &str, params: Params<'_>, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         self.read_batches(sql, params, CellLimits::FULL, on_batch).await
     }
 
@@ -764,7 +850,7 @@ impl Session for CqlSession {
             return Err(read_only_error());
         }
         let mut head = Vec::new();
-        for s in statements.by_ref() {
+        for s in &mut *statements {
             head.push(s?);
             if head.len() > MAX_BATCH {
                 break;
@@ -794,14 +880,23 @@ impl Session for CqlSession {
                     counts.push(n);
                 }
                 Err(e) => {
-                    return Err(DbError { message: format!("{} {done} statements before it were applied.", e.message), ..e });
+                    return Err(DbError {
+                        message: format!("{} {done} statements before it were applied.", e.message),
+                        ..e
+                    });
                 }
             }
         }
         Ok(counts)
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         let sql = sql.trim().trim_end_matches(';');
         if analyze { self.trace(sql, params, timeout_secs).await } else { self.plan(sql, params).await }
     }
@@ -814,8 +909,18 @@ impl Session for CqlSession {
         let s = self.settings();
         let choices = |c: &[&str]| c.iter().map(|&x| x.to_owned()).collect();
         vec![
-            SessionOption { name: "consistency".into(), label: "Consistency".into(), value: s.consistency, choices: choices(&CONSISTENCY_LEVELS) },
-            SessionOption { name: "serial_consistency".into(), label: "Serial consistency".into(), value: s.serial, choices: choices(&SERIAL_LEVELS) },
+            SessionOption {
+                name: "consistency".into(),
+                label: "Consistency".into(),
+                value: s.consistency,
+                choices: choices(&CONSISTENCY_LEVELS),
+            },
+            SessionOption {
+                name: "serial_consistency".into(),
+                label: "Serial consistency".into(),
+                value: s.serial,
+                choices: choices(&SERIAL_LEVELS),
+            },
             SessionOption {
                 name: "page_size".into(),
                 label: "Page size".into(),

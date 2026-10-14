@@ -1880,12 +1880,19 @@ name = "dq-cassandra"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "dq-core",
  "futures-util",
+ "num-bigint 0.4.8",
+ "rustls",
+ "rustls-native-certs",
  "scylla",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]
