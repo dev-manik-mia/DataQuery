@@ -202,11 +202,11 @@ const REDIS_SSL_LABELS: Record<SslMode, string> = {
 };
 
 const NEO4J_SSL_LABELS: Record<SslMode, string> = {
-  disable: 'neo4j:// (no TLS)',
-  prefer: 'neo4j+ssc:// (no verification)',
-  require: 'neo4j+ssc:// (no verification)',
-  'verify-ca': 'neo4j+s:// (verify certificate)',
-  'verify-full': 'neo4j+s:// (verify certificate and host)',
+  disable: 'HTTP :7474 (no TLS)',
+  prefer: 'HTTPS :7473 (no verification)',
+  require: 'HTTPS :7473 (no verification)',
+  'verify-ca': 'HTTPS :7473 (verify certificate)',
+  'verify-full': 'HTTPS :7473 (verify certificate and host)',
 };
 
 const HTTPS_SSL_LABELS: Record<SslMode, string> = {

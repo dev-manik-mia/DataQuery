@@ -328,7 +328,18 @@ const SPECS: &[Spec] = &[
         "Also OpenSearch",
         P::P2,
     ),
-    spec(Engine::Neo4j, "Neo4j", "N4", 190, G::SearchGraph, "Cypher", Some(7687), "7687 · Cypher", "Graph", P::P2),
+    spec(
+        Engine::Neo4j,
+        "Neo4j",
+        "N4",
+        190,
+        G::SearchGraph,
+        "Cypher",
+        Some(7474),
+        "7474 · Cypher (HTTP)",
+        "Graph · Neo4j 5.19+ Query API",
+        P::P2,
+    ),
 ];
 
 /// Builds the full engine catalog. `capabilities_of` returns `Some` for engines

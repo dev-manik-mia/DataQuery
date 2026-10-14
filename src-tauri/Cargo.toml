@@ -27,6 +27,7 @@ dq-dynamodb.workspace = true
 dq-redis.workspace = true
 dq-cassandra.workspace = true
 dq-elasticsearch.workspace = true
+dq-neo4j.workspace = true
 dq-store.workspace = true
 dq-ssh.workspace = true
 reqwest.workspace = true

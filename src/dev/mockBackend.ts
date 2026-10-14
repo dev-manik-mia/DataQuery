@@ -36,7 +36,7 @@ const ENGINES: EngineInfo[] = [
   engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2', true),
   engine('scylladb', 'ScyllaDB', 'Sc', 330, 'wide_column', 'CQL', 9042, '9042 · CQL', 'P2', true),
   engine('elasticsearch', 'Elasticsearch', 'Es', 55, 'search_graph', 'Query DSL', 9200, '9200 · Query DSL', 'P2', true),
-  engine('neo4j', 'Neo4j', 'N4', 190, 'search_graph', 'Cypher', 7687, '7687 · Cypher', 'P2', true),
+  engine('neo4j', 'Neo4j', 'N4', 190, 'search_graph', 'Cypher', 7474, '7474 · Cypher (HTTP)', 'P2', true),
 ];
 
 const conn = (id: string, name: string, environment: string, host: string, database: string, folder: string | null, favorite: boolean, used: number | null): SavedConnection =>
@@ -52,7 +52,7 @@ const CONNECTIONS = [
   { ...conn('c6', 'cache-redis', 'Staging', 'cache.stg.kestrel.internal', '0', 'f1', false, now - 3_600_000), config: { ...conn('c6', '', 'Staging', 'cache.stg.kestrel.internal', '0', null, false, null).config, engine: 'redis', port: 6379 } } as SavedConnection,
   { ...conn('c7', 'telemetry-cassandra', 'Production', '10.0.4.12', 'telemetry', 'f1', false, now - 7 * 86_400_000), config: { ...conn('c7', '', 'Production', '10.0.4.12', 'telemetry', null, false, null).config, engine: 'cassandra', port: 9042 } } as SavedConnection,
   { ...conn('c8', 'search-es', 'Staging', 'es.stg.kestrel.internal', '', 'f1', false, null), config: { ...conn('c8', '', 'Staging', 'es.stg.kestrel.internal', '', null, false, null).config, engine: 'elasticsearch', port: 9200 } } as SavedConnection,
-  { ...conn('c9', 'graph-neo4j', 'Development', 'graph.dev.kestrel.internal', 'neo4j', 'f1', false, null), config: { ...conn('c9', '', 'Development', 'graph.dev.kestrel.internal', 'neo4j', null, false, null).config, engine: 'neo4j', port: 7687 } } as SavedConnection,
+  { ...conn('c9', 'graph-neo4j', 'Development', 'graph.dev.kestrel.internal', 'neo4j', 'f1', false, null), config: { ...conn('c9', '', 'Development', 'graph.dev.kestrel.internal', 'neo4j', null, false, null).config, engine: 'neo4j', port: 7474 } } as SavedConnection,
 ];
 
 const CQL_KEYS = [

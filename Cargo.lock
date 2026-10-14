@@ -1561,6 +1561,7 @@ dependencies = [
  "dq-elasticsearch",
  "dq-mongodb",
  "dq-mysql",
+ "dq-neo4j",
  "dq-oracle",
  "dq-postgres",
  "dq-redis",

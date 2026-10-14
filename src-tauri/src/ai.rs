@@ -173,7 +173,9 @@ pub fn prepare(
         SqlFlavor::Partiql => "DynamoDB PartiQL",
         SqlFlavor::Redis => "Redis commands (one per line, redis-cli syntax)",
         SqlFlavor::Cql => "Cassandra CQL (restrict the partition key; avoid ALLOW FILTERING)",
-        SqlFlavor::QueryDsl => "Elasticsearch requests in Kibana Dev Tools form (a `GET /index/_search` line, then the JSON body)",
+        SqlFlavor::QueryDsl => {
+            "Elasticsearch requests in Kibana Dev Tools form (a `GET /index/_search` line, then the JSON body)"
+        }
         SqlFlavor::Cypher => "Neo4j Cypher",
     };
     let (hint, task, mut sent) = match request {

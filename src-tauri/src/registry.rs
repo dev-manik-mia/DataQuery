@@ -26,6 +26,7 @@ impl Registry {
             (Engine::Cassandra, Arc::new(dq_cassandra::CassandraAdapter::CASSANDRA)),
             (Engine::Scylladb, Arc::new(dq_cassandra::CassandraAdapter::SCYLLA)),
             (Engine::Elasticsearch, Arc::new(dq_elasticsearch::ElasticsearchAdapter)),
+            (Engine::Neo4j, Arc::new(dq_neo4j::Neo4jAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];

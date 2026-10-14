@@ -551,9 +551,16 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         _ if trust_server_certificate => ssl_mode = SslMode::Require,
         _ => {}
     }
+    // DataQuery talks to Neo4j over its HTTP Query API: Bolt URLs map to the HTTP
+    // port (7474, or 7473 with TLS); an explicit non-Bolt port is kept.
+    let port = match (engine, url.port()) {
+        (Engine::Neo4j, None | Some(7687)) if ssl_mode == SslMode::Disable => Some(7474),
+        (Engine::Neo4j, None | Some(7687)) => Some(7473),
+        (_, port) => port,
+    };
     let config = ConnConfig {
         engine,
-        port: url.port().or_else(|| engine.default_port()).unwrap_or(0),
+        port: port.or_else(|| engine.default_port()).unwrap_or(0),
         host: host.clone(),
         database: database.clone(),
         username: decode(url.username()),
@@ -651,10 +658,11 @@ mod tests {
     #[test]
     fn parses_neo4j_urls() {
         let p = parse_connection_url("neo4j+s://neo4j:pw@graph.example.com/movies").unwrap();
-        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Neo4j, 7687, SslMode::VerifyFull));
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Neo4j, 7473, SslMode::VerifyFull));
         assert_eq!((p.config.database.as_str(), p.password.as_deref()), ("movies", Some("pw")));
-        let p = parse_connection_url("bolt://neo4j@localhost:57687").unwrap();
-        assert_eq!((p.config.port, p.config.ssl_mode), (57687, SslMode::Disable));
+        let p = parse_connection_url("bolt://neo4j@localhost:7687").unwrap();
+        assert_eq!((p.config.port, p.config.ssl_mode), (7474, SslMode::Disable));
+        assert_eq!(parse_connection_url("neo4j://neo4j@localhost:57474").unwrap().config.port, 57474);
         assert_eq!(parse_connection_url("neo4j+ssc://a@h").unwrap().config.ssl_mode, SslMode::Require);
     }
 
