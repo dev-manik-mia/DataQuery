@@ -38,10 +38,10 @@ impl MysqlAdapter {
         ddl: true,
         schemas: false,
         materialized_views: false,
-        explain: false,
-        monitoring: false,
-        transactions: false,
-        schema_diff: false,
+        explain: true,
+        monitoring: true,
+        transactions: true,
+        schema_diff: true,
     };
 }
 

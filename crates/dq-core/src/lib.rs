@@ -10,6 +10,7 @@ pub mod config;
 pub mod edit;
 pub mod engine;
 pub mod error;
+pub mod monitor;
 pub mod explain;
 pub mod node;
 pub mod ops;

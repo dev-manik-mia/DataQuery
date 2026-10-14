@@ -4,6 +4,7 @@
 mod catalog;
 mod connect;
 mod error;
+mod monitor;
 mod session;
 mod tls;
 pub mod values;
@@ -31,10 +32,10 @@ impl PostgresAdapter {
         ddl: true,
         schemas: true,
         materialized_views: true,
-        explain: false,
-        monitoring: false,
-        transactions: false,
-        schema_diff: false,
+        explain: true,
+        monitoring: true,
+        transactions: true,
+        schema_diff: true,
     };
 }
 

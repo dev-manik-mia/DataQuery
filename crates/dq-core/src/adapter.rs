@@ -13,6 +13,7 @@ use crate::config::ConnConfig;
 use crate::edit::BoundStatement;
 use crate::engine::{Capabilities, Engine};
 use crate::error::DbResult;
+use crate::monitor::Monitor;
 use crate::node::{Node, ObjectRef};
 use crate::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult};
 use crate::schema::{Dependencies, SchemaModel, TableStructure};
@@ -139,6 +140,11 @@ pub trait Session: Send + Sync {
     /// Executes statements in a single transaction on a dedicated connection.
     /// Rolls back on the first error or when a statement's `expect_rows` is not met.
     async fn run_in_transaction(&self, database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>>;
+
+    /// Server monitoring, when the engine supports it.
+    fn monitor(&self) -> Option<&dyn Monitor> {
+        None
+    }
 
     async fn close(&self);
 }

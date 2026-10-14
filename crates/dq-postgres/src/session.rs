@@ -90,6 +90,19 @@ impl PgSession {
         })
     }
 
+    /// A read-only catalog connection, for monitoring.
+    pub(crate) async fn catalog_client(&self, database: &str) -> DbResult<Arc<Client>> {
+        self.catalog(database).await
+    }
+
+    pub(crate) fn info_version(&self) -> String {
+        self.info.version.clone()
+    }
+
+    pub(crate) fn info_database(&self) -> String {
+        self.info.database.clone()
+    }
+
     fn err(&self, e: &tokio_postgres::Error) -> DbError {
         map_error(e, self.params.password())
     }
@@ -336,6 +349,10 @@ impl Session for PgSession {
         }
         tx.commit().await.map_err(|e| self.err(&e))?;
         Ok(counts)
+    }
+
+    fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
+        Some(self)
     }
 
     async fn close(&self) {
