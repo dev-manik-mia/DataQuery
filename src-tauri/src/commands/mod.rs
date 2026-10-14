@@ -2,6 +2,7 @@
 //! map to a serialisable response. Every command is async so nothing blocks
 //! the UI thread.
 
+pub mod ai;
 pub mod connections;
 pub mod explorer;
 pub mod history;
