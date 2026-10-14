@@ -120,18 +120,19 @@ const PG_SKIP: &[&str] = &[
     "Parent Relationship",
 ];
 
-fn pg_node(v: &Value) -> PlanNode {
-    let f = |k: &str| v.get(k).and_then(Value::as_f64);
-    let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
-    let relation = s("Relation Name").map(|r| match s("Schema") {
+fn pg_node(node: &Value) -> PlanNode {
+    let v = node;
+    let num = |k: &str| v.get(k).and_then(Value::as_f64);
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let relation = text("Relation Name").map(|r| match text("Schema") {
         Some(schema) => format!("{schema}.{r}"),
         None => r,
     });
-    let detail = match (relation, s("Index Name")) {
+    let detail = match (relation, text("Index Name")) {
         (Some(r), Some(i)) => Some(format!("{r} using {i}")),
         (Some(r), None) => Some(r),
         (None, Some(i)) => Some(format!("using {i}")),
-        (None, None) => s("CTE Name").or_else(|| s("Subplan Name")).or_else(|| s("Function Name")),
+        (None, None) => text("CTE Name").or_else(|| text("Subplan Name")).or_else(|| text("Function Name")),
     };
     let props = v
         .as_object()
@@ -140,13 +141,13 @@ fn pg_node(v: &Value) -> PlanNode {
         })
         .unwrap_or_default();
     PlanNode {
-        label: s("Node Type").unwrap_or_else(|| "Node".into()),
+        label: text("Node Type").unwrap_or_else(|| "Node".into()),
         detail,
-        cost: f("Total Cost"),
-        rows: f("Plan Rows"),
-        actual_ms: f("Actual Total Time"),
-        actual_rows: f("Actual Rows"),
-        loops: f("Actual Loops"),
+        cost: num("Total Cost"),
+        rows: num("Plan Rows"),
+        actual_ms: num("Actual Total Time"),
+        actual_rows: num("Actual Rows"),
+        loops: num("Actual Loops"),
         props,
         children: v.get("Plans").and_then(Value::as_array).map(|a| a.iter().map(pg_node).collect()).unwrap_or_default(),
     }

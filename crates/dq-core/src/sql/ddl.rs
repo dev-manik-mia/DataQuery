@@ -2,6 +2,8 @@
 //! identifiers are quoted by the dialect, and user-typed fragments (types,
 //! defaults, check expressions) must be single expressions without `;`.
 
+use std::fmt::Write;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -212,7 +214,7 @@ fn column_def(d: &dyn Dialect, c: &ColumnDef) -> DbResult<String> {
         out.push_str(" NOT NULL");
     }
     if let Some(default) = c.default.as_deref().filter(|d| !d.trim().is_empty()) {
-        out.push_str(&format!(" DEFAULT {}", expression(d, default, "default")?));
+        let _ = write!(out, " DEFAULT {}", expression(d, default, "default")?);
     }
     Ok(out)
 }
@@ -253,13 +255,13 @@ fn mysql_modify(
         None => current.default.clone(),
     };
     if let Some(default) = default {
-        out.push_str(&format!(" DEFAULT {default}"));
+        let _ = write!(out, " DEFAULT {default}");
     }
     if current.identity {
         out.push_str(" AUTO_INCREMENT");
     }
     if let Some(comment) = &current.comment {
-        out.push_str(&format!(" COMMENT {}", d.quote_literal(comment)));
+        let _ = write!(out, " COMMENT {}", d.quote_literal(comment));
     }
     Ok(out)
 }
@@ -402,11 +404,10 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
             name(n, "The constraint name")?;
             let q = d.quote_ident(n);
             vec![alter(match (pg, kind) {
-                (true, _) => format!("DROP CONSTRAINT {q}"),
                 (false, ConstraintKind::PrimaryKey) => "DROP PRIMARY KEY".into(),
                 (false, ConstraintKind::ForeignKey) => format!("DROP FOREIGN KEY {q}"),
                 (false, ConstraintKind::Unique) => format!("DROP INDEX {q}"),
-                (false, _) => format!("DROP CONSTRAINT {q}"),
+                _ => format!("DROP CONSTRAINT {q}"),
             })]
         }
     })

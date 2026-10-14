@@ -504,14 +504,13 @@ impl SqlSink {
     fn literal(&self, cell: &Cell) -> String {
         let d = self.dialect;
         match cell {
-            Cell::Null => "NULL".into(),
+            Cell::Null | Cell::Unsupported { value: None, .. } => "NULL".into(),
             Cell::Bool { value } => if *value { "TRUE" } else { "FALSE" }.into(),
             Cell::Number { value } if value.chars().all(|c| c.is_ascii_digit() || "+-.eE".contains(c)) => value.clone(),
             Cell::Binary { head_hex, .. } => match d.flavor() {
                 crate::sql::SqlFlavor::Postgres => format!("'\\x{head_hex}'::bytea"),
                 crate::sql::SqlFlavor::Mysql => format!("X'{head_hex}'"),
             },
-            Cell::Unsupported { value: None, .. } => "NULL".into(),
             other => d.quote_literal(&other.to_text().unwrap_or_default()),
         }
     }
@@ -687,7 +686,8 @@ pub fn preview(source: &ImportSource, limit: usize) -> DbResult<ImportPreview> {
                 }
                 objects.push(object);
             }
-            let rows = objects.iter().map(|o| headers.iter().map(|h| o.get(h).and_then(json_text)).collect()).collect();
+            let rows =
+                objects.iter().map(|o| headers.iter().map(|h| o.get(h).and_then(|v| json_text(v))).collect()).collect();
             Ok(ImportPreview { headers, rows })
         }
     }
@@ -729,7 +729,7 @@ pub fn rows(source: &ImportSource, fields: Vec<FieldRef>) -> DbResult<RowIter> {
                 .collect::<DbResult<_>>()?;
             Ok(Box::new(json_objects(Path::new(path))?.map(move |object| {
                 let object = object?;
-                Ok(keys.iter().map(|k| object.get(k).and_then(json_text)).collect())
+                Ok(keys.iter().map(|k| object.get(k).and_then(|v| json_text(v))).collect())
             })))
         }
     }
@@ -739,7 +739,7 @@ type JsonObject = std::collections::HashMap<String, Box<RawValue>>;
 
 /// The text stored for a JSON value: strings unquoted, numbers exactly as
 /// written, objects and arrays as JSON text, `null` as NULL.
-fn json_text(raw: &Box<RawValue>) -> Option<String> {
+fn json_text(raw: &RawValue) -> Option<String> {
     let text = raw.get().trim();
     if text == "null" {
         return None;

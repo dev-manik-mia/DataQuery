@@ -99,8 +99,7 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
     let word = |i: usize| words.get(i).map_or("", String::as_str);
     match word(0) {
         "BEGIN" | "START" => TxEffect::Begin,
-        "COMMIT" | "END" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
-        "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
+        "COMMIT" | "END" | "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
         "ROLLBACK" if word(1) == "TO" || (word(2) == "TO" && matches!(word(1), "WORK" | "TRANSACTION")) => {
             TxEffect::RollbackToSavepoint
         }
