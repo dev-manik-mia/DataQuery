@@ -329,7 +329,7 @@ fn alter_column(
     };
     let default_sql = |e: &str| expression(d, e, "default");
     Ok(match d.flavor() {
-        SqlFlavor::Mongodb | SqlFlavor::Partiql | SqlFlavor::Redis => {
+        SqlFlavor::Mongodb | SqlFlavor::Partiql | SqlFlavor::Redis | SqlFlavor::QueryDsl | SqlFlavor::Cypher => {
             return Err(DbError::unsupported("Document collections have no SQL schema to change."));
         }
         SqlFlavor::Cql => {
@@ -525,7 +525,9 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
                 | SqlFlavor::Redis
-                | SqlFlavor::Cql => {
+                | SqlFlavor::Cql
+                | SqlFlavor::QueryDsl
+                | SqlFlavor::Cypher => {
                     let target = ObjectRef { name: new_name.clone(), ..t.clone() };
                     vec![format!("RENAME TABLE {table} TO {}", d.quoted_name(&target))]
                 }
@@ -544,7 +546,9 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
                 | SqlFlavor::Redis
-                | SqlFlavor::Cql => format!("ADD COLUMN {def}"),
+                | SqlFlavor::Cql
+                | SqlFlavor::QueryDsl
+                | SqlFlavor::Cypher => format!("ADD COLUMN {def}"),
             })]
         }
         SchemaChange::DropColumn { column, .. } => {
@@ -610,7 +614,9 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
                 | SqlFlavor::Redis
-                | SqlFlavor::Cql => {
+                | SqlFlavor::Cql
+                | SqlFlavor::QueryDsl
+                | SqlFlavor::Cypher => {
                     vec![format!("DROP INDEX {} ON {table}", d.quote_ident(n))]
                 }
             }

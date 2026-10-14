@@ -31,6 +31,10 @@ pub enum SqlFlavor {
     Redis,
     /// Cassandra Query Language (Cassandra and `ScyllaDB`).
     Cql,
+    /// Elasticsearch / `OpenSearch` requests in Dev Tools form (`GET /index/_search` + JSON body).
+    QueryDsl,
+    /// Neo4j Cypher.
+    Cypher,
 }
 
 impl SqlFlavor {
@@ -41,7 +45,7 @@ impl SqlFlavor {
 
     /// Statements are not SQL: the document engines' own languages.
     pub fn is_document(self) -> bool {
-        matches!(self, Self::Mongodb | Self::Partiql | Self::Redis)
+        matches!(self, Self::Mongodb | Self::Partiql | Self::Redis | Self::QueryDsl | Self::Cypher)
     }
 }
 
@@ -92,7 +96,8 @@ pub trait Dialect: Send + Sync {
             SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb | SqlFlavor::Cql => {
                 Some(object.database.as_str())
             }
-            SqlFlavor::Partiql | SqlFlavor::Redis => None,
+            SqlFlavor::Partiql | SqlFlavor::Redis | SqlFlavor::QueryDsl => None,
+            SqlFlavor::Cypher => Some(object.database.as_str()),
             SqlFlavor::Postgres
             | SqlFlavor::Sqlserver
             | SqlFlavor::Oracle
@@ -212,6 +217,8 @@ pub struct MongoDialect;
 pub struct PartiqlDialect;
 pub struct RedisDialect;
 pub struct CqlDialect;
+pub struct QueryDslDialect;
+pub struct CypherDialect;
 
 impl Dialect for PostgresDialect {
     fn flavor(&self) -> SqlFlavor {
@@ -1029,6 +1036,138 @@ impl Dialect for CqlDialect {
     }
 }
 
+/// Elasticsearch requests. Names are JSON strings; the SQL builders are never
+/// used, so their methods return harmless text.
+impl Dialect for QueryDslDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::QueryDsl
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        serde_json::Value::String(ident.to_owned()).to_string()
+    }
+
+    /// Index names are lower case without spaces, quotes or slashes.
+    fn needs_quotes(&self, ident: &str) -> bool {
+        ident.is_empty() || ident.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '/' | '\\' | ','))
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        self.quote_ident(value)
+    }
+
+    fn placeholder(&self, _index: usize, _column_type: &str) -> String {
+        "null".into()
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    fn comparable(&self, _data_type: &str) -> bool {
+        false
+    }
+
+    fn search_predicate(&self, quoted_column: &str, _placeholder: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    fn paginate(&self, sql: &str, _ordered: bool, _offset: u64, _limit: u64) -> String {
+        sql.to_owned()
+    }
+
+    fn template_placeholder(&self, _n: usize) -> String {
+        "null".into()
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("\"{hex}\"")
+    }
+
+    fn quoted_name(&self, object: &ObjectRef) -> String {
+        format!("/{}", object.name)
+    }
+
+    fn display_name(&self, object: &ObjectRef) -> String {
+        object.name.clone()
+    }
+}
+
+/// Cypher: `` `Name` `` for labels and properties that need it, `$p1` parameters.
+impl Dialect for CypherDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Cypher
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        format!("`{}`", ident.replace('`', "``"))
+    }
+
+    fn needs_quotes(&self, ident: &str) -> bool {
+        let mut chars = ident.chars();
+        !(chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            || is_reserved(ident, CYPHER_RESERVED)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+
+    fn placeholder(&self, index: usize, _column_type: &str) -> String {
+        format!("$p{index}")
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        format!("toString({quoted_column})")
+    }
+
+    fn comparable(&self, _data_type: &str) -> bool {
+        false
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("toLower(toString({quoted_column})) CONTAINS toLower({placeholder})")
+    }
+
+    fn paginate(&self, sql: &str, _ordered: bool, offset: u64, limit: u64) -> String {
+        if offset == 0 { format!("{sql} LIMIT {limit}") } else { format!("{sql} SKIP {offset} LIMIT {limit}") }
+    }
+
+    fn template_placeholder(&self, n: usize) -> String {
+        format!("$p{n}")
+    }
+
+    /// The adapter opens an explicit transaction on `BEGIN`.
+    fn begin_transaction(&self) -> &'static str {
+        "BEGIN"
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("'{hex}'")
+    }
+
+    fn bool_literal(&self, value: bool) -> &'static str {
+        if value { "true" } else { "false" }
+    }
+
+    fn quoted_name(&self, object: &ObjectRef) -> String {
+        self.quote_ident(&object.name)
+    }
+
+    fn display_name(&self, object: &ObjectRef) -> String {
+        self.display_ident(&object.name)
+    }
+}
+
 pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
     match flavor {
         SqlFlavor::Postgres => &PostgresDialect,
@@ -1042,6 +1181,8 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Partiql => &PartiqlDialect,
         SqlFlavor::Redis => &RedisDialect,
         SqlFlavor::Cql => &CqlDialect,
+        SqlFlavor::QueryDsl => &QueryDslDialect,
+        SqlFlavor::Cypher => &CypherDialect,
     }
 }
 
@@ -1119,6 +1260,13 @@ const CQL_RESERVED: &[&str] = &[
     "view",
     "where",
     "with",
+];
+
+/// Cypher keywords that cannot be bare label, type or property names.
+const CYPHER_RESERVED: &[&str] = &[
+    "all", "and", "as", "asc", "by", "call", "case", "create", "delete", "desc", "detach", "distinct", "else", "end",
+    "exists", "false", "foreach", "in", "is", "limit", "match", "merge", "not", "null", "optional", "or", "order",
+    "remove", "return", "set", "skip", "then", "true", "union", "unwind", "when", "where", "with", "xor", "yield",
 ];
 
 const MONGO_RESERVED: &[&str] = &["getCollection", "getName", "getSiblingDB", "runCommand", "aggregate"];

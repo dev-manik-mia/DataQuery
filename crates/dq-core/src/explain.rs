@@ -68,7 +68,9 @@ impl ExplainDialect {
             | SqlFlavor::Mongodb
             | SqlFlavor::Partiql
             | SqlFlavor::Redis
-            | SqlFlavor::Cql => None,
+            | SqlFlavor::Cql
+            | SqlFlavor::QueryDsl
+            | SqlFlavor::Cypher => None,
         }
     }
 

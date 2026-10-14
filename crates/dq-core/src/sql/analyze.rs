@@ -137,6 +137,12 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             }
             _ => TxEffect::None,
         },
+        SqlFlavor::Cypher => match word(0) {
+            "BEGIN" => TxEffect::Begin,
+            "COMMIT" | "ROLLBACK" => TxEffect::End,
+            _ => TxEffect::None,
+        },
+        SqlFlavor::QueryDsl => TxEffect::None,
         // CQL has no transactions; `BEGIN BATCH … APPLY BATCH` is one statement.
         SqlFlavor::Clickhouse | SqlFlavor::Cql => TxEffect::None,
         SqlFlavor::Redis => match word(0) {
@@ -195,13 +201,22 @@ pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
     let mut block = Block::default();
     let mongo = flavor == SqlFlavor::Mongodb;
     let redis = flavor == SqlFlavor::Redis;
+    let querydsl = flavor == SqlFlavor::QueryDsl;
     let mut depth = 0;
     for (i, tok) in tokens.iter().enumerate() {
-        if mongo {
+        if mongo || querydsl {
             depth += super::mongo::depth_delta(src, tok);
+        }
+        // Dev Tools: a method line at depth 0 starts the next request; it belongs to that request.
+        if querydsl && i > chunk_start && depth <= 0 && starts_request(src, tok) {
+            push_statement(src, &tokens[chunk_start..i], flavor, &mut utf16, &mut out);
+            chunk_start = i;
+            depth = 0;
+            continue;
         }
         let ends = match tok.kind {
             TokenKind::Semicolon if mongo => depth <= 0,
+            TokenKind::Semicolon if querydsl => false,
             // One command per line; `;` is an ordinary character.
             TokenKind::Semicolon if redis => false,
             TokenKind::Whitespace if redis => tok.text(src).contains('\n'),
@@ -221,6 +236,17 @@ pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
     }
     push_statement(src, &tokens[chunk_start..], flavor, &mut utf16, &mut out);
     out
+}
+
+/// A Dev Tools method word at the start of a line (`GET /index/_search`).
+fn starts_request(src: &str, tok: &Token) -> bool {
+    if tok.kind != TokenKind::Word
+        || !src[..tok.start].trim_end_matches([' ', '\t']).ends_with('\n') && !src[..tok.start].trim().is_empty()
+    {
+        return false;
+    }
+    let line_end = src[tok.start..].find('\n').map_or(src.len(), |n| tok.start + n);
+    super::querydsl::is_request_line(&src[tok.start..line_end])
 }
 
 /// Tracks whether the statement being read is inside a block whose `;` do not end it.
@@ -347,7 +373,9 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
         | SqlFlavor::Mongodb
         | SqlFlavor::Partiql
         | SqlFlavor::Redis
-        | SqlFlavor::Cql => false,
+        | SqlFlavor::Cql
+        | SqlFlavor::QueryDsl
+        | SqlFlavor::Cypher => false,
     };
     if !separator {
         return false;
@@ -401,12 +429,14 @@ fn push_statement(
     });
 }
 
-/// Distinct `ClickHouse` `{name:Type}` parameters, in order of first appearance.
+/// Distinct named parameters in order of first appearance: `ClickHouse` `{name:Type}`
+/// and Cypher `$name`.
 pub fn named_params(sql: &str, flavor: SqlFlavor) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for t in tokenize(sql, flavor).iter().filter(|t| t.kind == TokenKind::Param) {
         let text = t.text(sql);
-        if let Some(name) = text.strip_prefix('{').and_then(|r| r.split(':').next())
+        let cypher = text.strip_prefix('$').filter(|n| flavor == SqlFlavor::Cypher && !n.is_empty());
+        if let Some(name) = text.strip_prefix('{').and_then(|r| r.split(':').next()).or(cypher)
             && !names.iter().any(|n| n == name)
         {
             names.push(name.to_owned());
@@ -421,7 +451,12 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
     let mut highest = 0;
     let mut names: Vec<&str> = Vec::new();
     for p in params {
-        if let Some(name) = p.strip_prefix('{').and_then(|r| r.split(':').next()) {
+        // `{name:Type}` (ClickHouse) and `$name` (Cypher) count once per name.
+        let named = p
+            .strip_prefix('{')
+            .and_then(|r| r.split(':').next())
+            .or_else(|| p.strip_prefix('$').filter(|n| n.chars().next().is_some_and(|c| !c.is_ascii_digit())));
+        if let Some(name) = named {
             if !names.contains(&name) {
                 names.push(name);
             }
@@ -440,6 +475,13 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
 fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool, Option<DestructiveReason>) {
     if flavor == SqlFlavor::Mongodb {
         return super::mongo::classify(src, sig);
+    }
+    if flavor == SqlFlavor::Cypher {
+        return super::cypher::classify(src, sig);
+    }
+    if flavor == SqlFlavor::QueryDsl {
+        let text = sig.first().zip(sig.last()).map_or("", |(a, b)| &src[a.start..b.end]);
+        return super::querydsl::classify(text);
     }
     if flavor == SqlFlavor::Redis {
         let text = sig.first().zip(sig.last()).map_or("", |(a, b)| &src[a.start..b.end]);

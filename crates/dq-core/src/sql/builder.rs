@@ -222,6 +222,14 @@ pub fn select_template(d: &dyn Dialect, object: &ObjectRef, columns: &[String]) 
         }
         // No LIMIT in PartiQL: the editor's row limit applies.
         SqlFlavor::Partiql => format!("SELECT {list}\nFROM {name};"),
+        SqlFlavor::QueryDsl => {
+            format!("GET {name}/_search\n{{\n  \"query\": {{ \"match_all\": {{}} }},\n  \"size\": 100\n}}")
+        }
+        // Labels are tables; relationship types are views.
+        SqlFlavor::Cypher if object.kind == crate::node::NodeKind::View => {
+            format!("MATCH ()-[r:{name}]->()\nRETURN r\nLIMIT 100;")
+        }
+        SqlFlavor::Cypher => format!("MATCH (n:{name})\nRETURN n\nLIMIT 100;"),
         _ => format!("SELECT {list}\nFROM {name}\n{};", d.paginate("", true, 0, 100).trim_start()),
     }
 }
@@ -242,7 +250,14 @@ pub fn insert_template(d: &dyn Dialect, structure: &TableStructure) -> String {
         let first = structure.columns.first().map(|c| d.display_ident(&c.name));
         return format!("{};", d.insert_defaults(&d.display_name(&structure.object), first.as_deref()));
     }
+    let name = d.display_name(&structure.object);
     match d.flavor() {
+        SqlFlavor::QueryDsl => return format!("POST {}/_doc\n{{\n}}", d.quoted_name(&structure.object)),
+        SqlFlavor::Cypher => {
+            let props: Vec<String> =
+                cols.iter().enumerate().map(|(i, c)| format!("{}: $p{}", d.display_ident(&c.name), i + 1)).collect();
+            return format!("CREATE (n:{name} {{{}}})\nRETURN n;", props.join(", "));
+        }
         SqlFlavor::Mongodb => {
             let names: Vec<&str> = cols.iter().filter(|c| c.name != "_id").map(|c| c.name.as_str()).collect();
             return format!("{}.insertOne({{\n{}\n}})", d.display_name(&structure.object), shell_fields(d, &names, 2));
@@ -275,6 +290,18 @@ fn template_where(d: &dyn Dialect, structure: &TableStructure, first: usize) -> 
 
 /// `UPDATE` template setting every editable non-key column, matched on the row identity.
 pub fn update_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    match d.flavor() {
+        SqlFlavor::QueryDsl => {
+            return format!("POST {}/_update/<id>\n{{\n  \"doc\": {{ }}\n}}", d.quoted_name(&structure.object));
+        }
+        SqlFlavor::Cypher => {
+            return format!(
+                "MATCH (n:{})\nWHERE elementId(n) = $id\nSET n += $props\nRETURN n;",
+                d.display_name(&structure.object)
+            );
+        }
+        _ => {}
+    }
     if d.flavor() == SqlFlavor::Mongodb {
         let names: Vec<&str> = structure.columns.iter().filter(|c| c.name != "_id").map(|c| c.name.as_str()).collect();
         return format!(
@@ -300,6 +327,16 @@ pub fn update_template(d: &dyn Dialect, structure: &TableStructure) -> String {
 
 /// `DELETE` template matched on the row identity.
 pub fn delete_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    match d.flavor() {
+        SqlFlavor::QueryDsl => return format!("DELETE {}/_doc/<id>", d.quoted_name(&structure.object)),
+        SqlFlavor::Cypher => {
+            return format!(
+                "MATCH (n:{})\nWHERE elementId(n) = $id\nDETACH DELETE n;",
+                d.display_name(&structure.object)
+            );
+        }
+        _ => {}
+    }
     if d.flavor() == SqlFlavor::Mongodb {
         return format!("{}.deleteOne({{ _id: null }})", d.display_name(&structure.object));
     }

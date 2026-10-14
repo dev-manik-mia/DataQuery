@@ -40,6 +40,10 @@ pub const GROUP_SEQUENCES: &str = "sequences";
 pub const GROUP_FUNCTIONS: &str = "functions";
 pub const GROUP_PROCEDURES: &str = "procedures";
 pub const GROUP_TYPES: &str = "types";
+/// Neo4j: node labels (as tables) and relationship types (as views).
+pub const GROUP_LABELS: &str = "labels";
+pub const GROUP_RELATIONSHIPS: &str = "relationships";
+pub const GROUP_INDEXES: &str = "indexes";
 
 /// Identifies a database object. For engines without schemas `schema` is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]

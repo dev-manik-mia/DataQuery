@@ -362,7 +362,13 @@ impl ConnConfig {
         // Cassandra and ScyllaDB accept anonymous logins unless an authenticator is set.
         let optional_user = matches!(
             self.engine,
-            Engine::Mongodb | Engine::Dynamodb | Engine::Redis | Engine::Valkey | Engine::Cassandra | Engine::Scylladb
+            Engine::Mongodb
+                | Engine::Dynamodb
+                | Engine::Redis
+                | Engine::Valkey
+                | Engine::Cassandra
+                | Engine::Scylladb
+                | Engine::Elasticsearch
         );
         if self.username.trim().is_empty() && !optional_user {
             return Err(DbError::invalid("Username is required."));
@@ -461,6 +467,7 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "clickhouse" => Engine::Clickhouse,
         "snowflake" => Engine::Snowflake,
         "redis" | "rediss" => Engine::Redis,
+        "neo4j" | "neo4j+s" | "neo4j+ssc" | "bolt" | "bolt+s" | "bolt+ssc" => Engine::Neo4j,
         "valkey" | "valkeys" => Engine::Valkey,
         "duckdb" => {
             // `duckdb:///absolute/path.duckdb` or `duckdb://:memory:`
@@ -509,11 +516,13 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let mut tls_files = TlsFiles::default();
     // SQL Server spells TLS as `encrypt` and `trustServerCertificate`.
     // `rediss://` and `valkeys://` mean TLS; plain `redis://` does not.
+    // `rediss://`, `valkeys://` and `neo4j+s://` mean TLS; plain `redis://` and `neo4j://` do not.
     let mut encrypt: Option<bool> = match url.scheme() {
-        "redis" | "valkey" => Some(false),
+        "redis" | "valkey" | "neo4j" | "bolt" => Some(false),
         _ => None,
     };
-    let mut trust_server_certificate = false;
+    // `+ssc`: TLS with a self-signed certificate (not verified).
+    let mut trust_server_certificate = url.scheme().ends_with("+ssc");
     for (key, value) in url.query_pairs() {
         let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "strict" | "mandatory");
         match key.as_ref() {
@@ -638,6 +647,16 @@ fn parse_mongo_url(input: &str) -> DbResult<ParsedUrl> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_neo4j_urls() {
+        let p = parse_connection_url("neo4j+s://neo4j:pw@graph.example.com/movies").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Neo4j, 7687, SslMode::VerifyFull));
+        assert_eq!((p.config.database.as_str(), p.password.as_deref()), ("movies", Some("pw")));
+        let p = parse_connection_url("bolt://neo4j@localhost:57687").unwrap();
+        assert_eq!((p.config.port, p.config.ssl_mode), (57687, SslMode::Disable));
+        assert_eq!(parse_connection_url("neo4j+ssc://a@h").unwrap().config.ssl_mode, SslMode::Require);
+    }
 
     #[test]
     fn parses_redis_urls() {

@@ -24,6 +24,8 @@ dq-mongodb = { path = "crates/dq-mongodb" }
 dq-dynamodb = { path = "crates/dq-dynamodb" }
 dq-redis = { path = "crates/dq-redis" }
 dq-cassandra = { path = "crates/dq-cassandra" }
+dq-elasticsearch = { path = "crates/dq-elasticsearch" }
+dq-neo4j = { path = "crates/dq-neo4j" }
 
 async-trait = "0.1"
 base64 = "0.22"

@@ -4,11 +4,13 @@
 pub mod analyze;
 pub mod builder;
 pub mod cql;
+pub mod cypher;
 pub mod ddl;
 pub mod dialect;
 pub mod format;
 pub mod lexer;
 mod mongo;
+pub mod querydsl;
 pub mod redis;
 
 pub use analyze::{
@@ -16,6 +18,6 @@ pub use analyze::{
     split_statements, transaction_effect,
 };
 pub use dialect::{
-    ClickhouseDialect, CqlDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect,
-    PostgresDialect, RedisDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
+    ClickhouseDialect, CqlDialect, CypherDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect,
+    PartiqlDialect, PostgresDialect, QueryDslDialect, RedisDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
 };

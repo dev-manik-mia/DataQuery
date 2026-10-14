@@ -78,6 +78,35 @@ impl Lexer<'_> {
         let (ch, sf, duck) =
             (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
         let (mongo, partiql) = (flavor == SqlFlavor::Mongodb, flavor == SqlFlavor::Partiql);
+        if flavor == SqlFlavor::QueryDsl {
+            // JSON strings; `#` and `//` comment lines.
+            let line_start = self.src[..self.pos].trim_end_matches([' ', '\t']).ends_with('\n')
+                || self.src[..self.pos].trim().is_empty();
+            match c {
+                b'"' => return self.quoted(b'"', true),
+                b'#' if line_start => return self.line_comment(),
+                b'/' if line_start && self.peek(1) == Some(b'/') => return self.line_comment(),
+                b'\'' | b'-' | b'$' | b'?' | b'@' | b':' => return self.single(TokenKind::Punct),
+                _ => {}
+            }
+        }
+        if flavor == SqlFlavor::Cypher {
+            // Backslash-escaped strings, backtick names, `//` comments, `$name` parameters.
+            match c {
+                b'\'' | b'"' => return self.quoted(c, true),
+                b'`' => return self.quoted(b'`', false).ident(),
+                b'/' if self.peek(1) == Some(b'/') => return self.line_comment(),
+                b'$' if self.peek(1).is_some_and(|n| is_word_continue(n)) => {
+                    self.pos += 1;
+                    while self.peek(0).is_some_and(is_word_continue) {
+                        self.pos += 1;
+                    }
+                    return TokenKind::Param;
+                }
+                b'-' => return self.single(TokenKind::Punct),
+                _ => {}
+            }
+        }
         if flavor == SqlFlavor::Cql {
             // `//` comments, `$$…$$` function bodies, `?` markers.
             match c {
