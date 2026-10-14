@@ -4,4 +4,8 @@ export type ColumnMapping = { column: string,
 /**
  * Zero-based CSV field index.
  */
-field: number, };
+field: number | null, 
+/**
+ * JSON key.
+ */
+key: string | null, };
