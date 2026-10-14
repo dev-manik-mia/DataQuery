@@ -36,6 +36,8 @@ interface Query {
 
 const EMPTY: Query = { filter: '', projection: '', sort: '' };
 const PAGE_SIZES = [20, 50, 100, 500];
+const PROJECTION_LABEL: Record<string, string> = { PartiQL: 'Attributes', 'Query DSL': 'Source fields', Cypher: 'Return' };
+const SORT_EXAMPLE: Record<string, string> = { MQL: '{ createdAt: -1 }', 'Query DSL': '{ "created_at": "desc" }', Cypher: 'n.name DESC' };
 
 /** Screen 13: a collection's documents, aggregation pipeline, indexes and validation rules. */
 export function DocumentsView({ object }: { object: ObjectRef }) {
@@ -193,13 +195,13 @@ export function DocumentsView({ object }: { object: ObjectRef }) {
           <div className={`${styles.queryBar} ${features.sort ? '' : styles.noSort}`} role="search">
             <QueryField label="Filter" value={draft.filter} placeholder={features.filter_example} onChange={(filter) => setDraft({ ...draft, filter })} onKeyDown={onQueryKey} />
             <QueryField
-              label={features.language === 'PartiQL' ? 'Attributes' : 'Project'}
+              label={PROJECTION_LABEL[features.language] ?? 'Project'}
               value={draft.projection}
               placeholder={features.projection_example}
               onChange={(projection) => setDraft({ ...draft, projection })}
               onKeyDown={onQueryKey}
             />
-            {features.sort && <QueryField label="Sort" value={draft.sort} placeholder="{ createdAt: -1 }" onChange={(sort) => setDraft({ ...draft, sort })} onKeyDown={onQueryKey} />}
+            {features.sort && <QueryField label="Sort" value={draft.sort} placeholder={SORT_EXAMPLE[features.language] ?? '{ createdAt: -1 }'} onChange={(sort) => setDraft({ ...draft, sort })} onKeyDown={onQueryKey} />}
             <Button variant="primary" size="sm" busy={loading} onClick={find}>
               Find
             </Button>

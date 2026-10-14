@@ -35,7 +35,7 @@ export const KIND_LABEL: Record<NodeKind, string> = {
   group: 'Folder',
 };
 
-const GROUP_LABEL: Record<string, string> = { sequences: 'Sequences', functions: 'Functions', procedures: 'Procedures', types: 'Types' };
+const GROUP_LABEL: Record<string, string> = { sequences: 'Sequences', functions: 'Functions', procedures: 'Procedures', types: 'Types', labels: 'Labels', relationships: 'Relationship types', indexes: 'Indexes and constraints' };
 
 export function isRelation(o: ObjectRef): boolean {
   return o.kind === 'table' || o.kind === 'view' || o.kind === 'materialized_view';

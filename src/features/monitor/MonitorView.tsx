@@ -72,6 +72,8 @@ const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   mongodb: 'Operations from currentOp',
   cassandra: 'Client connections from system_views.clients',
   scylladb: 'Client connections from system.clients',
+  elasticsearch: 'Running tasks from _tasks',
+  neo4j: 'Transactions from SHOW TRANSACTIONS',
 };
 
 export function MonitorView({ active }: { active: boolean }) {

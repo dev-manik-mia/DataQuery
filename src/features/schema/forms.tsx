@@ -24,6 +24,8 @@ export const TYPE_SUGGESTIONS: Record<SqlFlavor, string[]> = {
   mongodb: [],
   partiql: [],
   redis: [],
+  query_dsl: [],
+  cypher: [],
   cql: ['text', 'int', 'bigint', 'varint', 'decimal', 'double', 'boolean', 'uuid', 'timeuuid', 'timestamp', 'date', 'time', 'blob', 'inet', 'list<text>', 'set<text>', 'map<text, text>', 'frozen<my_type>', 'counter'],
 };
 
@@ -39,6 +41,8 @@ const IDENTITY_LABEL: Record<SqlFlavor, string> = {
   partiql: 'Identity (not supported)',
   redis: 'Identity (not supported)',
   cql: 'Identity (not supported; use uuid or timeuuid)',
+  query_dsl: 'Identity (not supported)',
+  cypher: 'Identity (not supported)',
   snowflake: 'IDENTITY',
 };
 

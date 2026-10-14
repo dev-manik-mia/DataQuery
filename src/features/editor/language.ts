@@ -9,6 +9,15 @@ import type { Snippet } from '@/bindings/Snippet';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import { defaultSchema } from '@/lib/engines';
 
+/** Cypher: clauses, functions and `//` comments; labels and properties stay plain words. */
+const CYPHER = SQLDialect.define({
+  keywords:
+    'match optional where return with unwind order by skip limit asc ascending desc descending create merge on set delete detach remove foreach call yield union all distinct as and or xor not in is null true false case when then else end exists count collect starts ends contains load csv headers from fieldterminator use show drop index constraint for require unique key node relationship database databases transactions terminate begin commit rollback explain profile',
+  builtin: 'id elementId labels type keys properties nodes relationships size length head last tail range toString toInteger toFloat toLower toUpper trim date datetime time duration point coalesce startNode endNode',
+  slashComments: true,
+  doubleQuotedStrings: true,
+});
+
 /** CQL: SQL-like with its own keywords, collection types and `//` comments. */
 const CQL = SQLDialect.define({
   keywords:
@@ -33,6 +42,55 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   partiql: StandardSQL,
   redis: StandardSQL,
   cql: CQL,
+  query_dsl: StandardSQL,
+  cypher: CYPHER,
+};
+
+/** Dev Tools: method lines, then JSON. */
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD'];
+const ES_ENDPOINTS = ['_search', '_count', '_doc', '_bulk', '_mapping', '_settings', '_cat/indices?v', '_cat/nodes?v', '_cluster/health', '_sql?format=txt', '_delete_by_query', '_update_by_query', '_aliases', '_tasks'];
+const devToolsMode = StreamLanguage.define<{ line: 'start' | 'request' | 'body' }>({
+  startState: () => ({ line: 'start' }),
+  token(stream, state) {
+    if (stream.sol()) state.line = 'start';
+    if (stream.eatSpace()) return null;
+    if (state.line === 'start' && (stream.match('#') || stream.match('//'))) {
+      stream.skipToEnd();
+      return 'comment';
+    }
+    if (state.line === 'start' && stream.match(/^(GET|POST|PUT|DELETE|HEAD|PATCH)\b/i)) {
+      state.line = 'request';
+      return 'keyword';
+    }
+    if (state.line === 'request') {
+      stream.skipToEnd();
+      return 'string-2';
+    }
+    state.line = 'body';
+    if (stream.peek() === '"') {
+      stream.next();
+      let escaped = false;
+      for (let c = stream.next(); c !== undefined; c = stream.next()) {
+        if (c === '"' && !escaped) break;
+        escaped = !escaped && c === '\\';
+      }
+      return stream.match(/^\s*:/, false) ? 'propertyName' : 'string';
+    }
+    if (stream.match(/^-?\d+(\.\d+)?([eE][+-]?\d+)?/)) return 'number';
+    if (stream.match(/^(true|false|null)\b/)) return 'atom';
+    stream.next();
+    return null;
+  },
+});
+
+const devToolsSource: CompletionSource = (context) => {
+  const method = context.matchBefore(/^[A-Za-z]*$/);
+  if (method && (method.from !== method.to || context.explicit)) return { from: method.from, options: HTTP_METHODS.map((m) => ({ label: m, type: 'keyword', apply: `${m} ` })) };
+  const path = context.matchBefore(/^(GET|POST|PUT|DELETE|HEAD)\s+\S*$/i);
+  if (!path) return null;
+  const slash = path.text.lastIndexOf('/');
+  const from = slash >= 0 ? path.from + slash + 1 : path.from + path.text.search(/\S*$/);
+  return { from, options: ES_ENDPOINTS.map((e) => ({ label: e, type: 'function' })) };
 };
 
 /** Common commands offered at the start of a Redis line. */
@@ -136,6 +194,9 @@ export function snippetSource(snippets: Snippet[]): CompletionSource {
 
 /** CodeMirror language for a dialect, with schema-aware and snippet completion. */
 export function sqlLanguage(flavor: SqlFlavor, model: SchemaModel | null = null, snippets: Snippet[] = []) {
+  if (flavor === 'query_dsl') {
+    return [devToolsMode, EditorState.languageData.of(() => [{ autocomplete: devToolsSource }, { autocomplete: snippetSource(snippets) }])];
+  }
   if (flavor === 'redis') {
     return [redisMode, EditorState.languageData.of(() => [{ autocomplete: redisSource }, { autocomplete: snippetSource(snippets) }])];
   }

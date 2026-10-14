@@ -68,7 +68,7 @@ const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; pl
 };
 
 /** Engines whose server has no single database to pick in the form. */
-const NO_DATABASE_FIELD: Engine[] = ['dynamodb'];
+const NO_DATABASE_FIELD: Engine[] = ['dynamodb', 'elasticsearch'];
 
 const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', 'disable'];
 

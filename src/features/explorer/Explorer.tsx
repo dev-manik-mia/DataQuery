@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { Node } from '@/bindings/Node';
+import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
 import { CreateTableDialog, StructureEditDialog, type StructureEdit } from '@/features/schema/forms';
@@ -62,6 +63,13 @@ function useVisibleItems(): Item[] {
     return out;
   }, [children, expanded, loading, errors, filter]);
 }
+
+/** What the generated templates are called per language: select, insert, update, delete. */
+const TEMPLATE_WORDS: Partial<Record<SqlFlavor, [string, string, string, string]>> = {
+  mongodb: ['find', 'insertOne', 'updateOne', 'deleteOne'],
+  query_dsl: ['search', 'index request', 'update request', 'delete request'],
+  cypher: ['MATCH', 'CREATE', 'SET', 'DETACH DELETE'],
+};
 
 export function Explorer({ width }: { width: number }) {
   const { expanded, selected, filter, toggle, refresh, select, setFilter } = useExplorer();
@@ -159,13 +167,12 @@ export function Explorer({ width }: { width: number }) {
         { label: 'Open documents', onSelect: () => openTableTab(node, 'data') },
         { type: 'separator' },
         { label: 'Copy name', onSelect: () => void copyName() },
-        { label: session?.flavor === 'mongodb' ? 'Generate find' : 'Generate SELECT', onSelect: () => void template(node, 'select') },
+        { label: `Generate ${TEMPLATE_WORDS[session?.flavor ?? 'postgres']?.[0] ?? 'SELECT'}`, onSelect: () => void template(node, 'select') },
         ...(table
-          ? [
-              { label: session?.flavor === 'mongodb' ? 'Generate insertOne' : 'Generate INSERT', onSelect: () => void template(node, 'insert') },
-              { label: session?.flavor === 'mongodb' ? 'Generate updateOne' : 'Generate UPDATE', onSelect: () => void template(node, 'update') },
-              { label: session?.flavor === 'mongodb' ? 'Generate deleteOne' : 'Generate DELETE', onSelect: () => void template(node, 'delete') },
-            ]
+          ? (['insert', 'update', 'delete'] as const).map((kind, i) => ({
+              label: `Generate ${TEMPLATE_WORDS[session?.flavor ?? 'postgres']?.[i + 1] ?? kind.toUpperCase()}`,
+              onSelect: () => void template(node, kind),
+            }))
           : []),
       ];
     }

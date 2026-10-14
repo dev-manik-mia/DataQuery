@@ -29,6 +29,10 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
     case 'cassandra':
     case 'scylladb':
       return 'cql';
+    case 'elasticsearch':
+      return 'query_dsl';
+    case 'neo4j':
+      return 'cypher';
     default:
       return 'postgres';
   }
@@ -36,7 +40,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
 
 /** Databases contain schemas (all but MySQL / MariaDB, where the database is the schema). */
 export function hasSchemas(flavor: SqlFlavor): boolean {
-  return !['mysql', 'clickhouse', 'mongodb', 'partiql', 'redis', 'cql'].includes(flavor);
+  return !['mysql', 'clickhouse', 'mongodb', 'partiql', 'redis', 'cql', 'query_dsl', 'cypher'].includes(flavor);
 }
 
 /** The schema new objects land in when none is named; Oracle uses the user's own schema. */
@@ -117,6 +121,8 @@ export function credentialLabels(engine: Engine): { username: string; password: 
     case 'cassandra':
     case 'scylladb':
       return { username: 'Username', password: 'Password', usernameRequired: false };
+    case 'elasticsearch':
+      return { username: 'Username', password: 'Password, or an API key with no username', usernameRequired: false };
     default:
       return { username: 'Username', password: 'Password', usernameRequired: true };
   }
@@ -146,6 +152,10 @@ export function connectionDefaults(engine: Engine): { database: string; username
     case 'cassandra':
     case 'scylladb':
       return { database: '', username: '' };
+    case 'elasticsearch':
+      return { database: '', username: 'elastic' };
+    case 'neo4j':
+      return { database: 'neo4j', username: 'neo4j' };
     default:
       return { database: '', username: '' };
   }
@@ -191,6 +201,14 @@ const REDIS_SSL_LABELS: Record<SslMode, string> = {
   'verify-full': 'rediss:// (verify certificate and host)',
 };
 
+const NEO4J_SSL_LABELS: Record<SslMode, string> = {
+  disable: 'neo4j:// (no TLS)',
+  prefer: 'neo4j+ssc:// (no verification)',
+  require: 'neo4j+ssc:// (no verification)',
+  'verify-ca': 'neo4j+s:// (verify certificate)',
+  'verify-full': 'neo4j+s:// (verify certificate and host)',
+};
+
 const HTTPS_SSL_LABELS: Record<SslMode, string> = {
   disable: 'HTTP (no TLS)',
   prefer: 'HTTPS (no verification)',
@@ -211,7 +229,10 @@ export function sslModeLabel(engine: Engine, mode: SslMode): string {
     case 'clickhouse':
     case 'snowflake':
     case 'partiql':
+    case 'query_dsl':
       return HTTPS_SSL_LABELS[mode];
+    case 'cypher':
+      return NEO4J_SSL_LABELS[mode];
     case 'mongodb':
       return MONGO_SSL_LABELS[mode];
     case 'redis':
