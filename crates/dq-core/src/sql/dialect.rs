@@ -27,6 +27,8 @@ pub enum SqlFlavor {
     Mongodb,
     /// `PartiQL` as `DynamoDB` runs it: `SELECT * FROM "orders" WHERE "pk" = ?`.
     Partiql,
+    /// Redis (and Valkey) commands, one per line, split like `redis-cli`.
+    Redis,
 }
 
 impl SqlFlavor {
@@ -37,7 +39,7 @@ impl SqlFlavor {
 
     /// Statements are not SQL: the document engines' own languages.
     pub fn is_document(self) -> bool {
-        matches!(self, Self::Mongodb | Self::Partiql)
+        matches!(self, Self::Mongodb | Self::Partiql | Self::Redis)
     }
 }
 
@@ -85,7 +87,7 @@ pub trait Dialect: Send + Sync {
     fn container<'a>(&self, object: &'a ObjectRef) -> Option<&'a str> {
         match self.flavor() {
             SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb => Some(object.database.as_str()),
-            SqlFlavor::Partiql => None,
+            SqlFlavor::Partiql | SqlFlavor::Redis => None,
             SqlFlavor::Postgres
             | SqlFlavor::Sqlserver
             | SqlFlavor::Oracle
@@ -112,6 +114,16 @@ pub trait Dialect: Send + Sync {
     fn template_placeholder(&self, n: usize) -> String;
 
     /// Statement that opens a transaction on the query connection.
+    /// Ends the open transaction, keeping its changes.
+    fn commit_transaction(&self) -> &'static str {
+        "COMMIT"
+    }
+
+    /// Ends the open transaction, discarding its changes.
+    fn rollback_transaction(&self) -> &'static str {
+        "ROLLBACK"
+    }
+
     fn begin_transaction(&self) -> &'static str {
         "BEGIN"
     }
@@ -180,6 +192,7 @@ pub struct DuckdbDialect;
 pub struct SnowflakeDialect;
 pub struct MongoDialect;
 pub struct PartiqlDialect;
+pub struct RedisDialect;
 
 impl Dialect for PostgresDialect {
     fn flavor(&self) -> SqlFlavor {
@@ -833,6 +846,78 @@ impl Dialect for PartiqlDialect {
     }
 }
 
+/// Redis commands. Arguments are quoted like `redis-cli`; there is no SQL, so
+/// the SQL builders are never used and their methods return harmless text.
+impl Dialect for RedisDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Redis
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        format!("\"{}\"", ident.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    fn needs_quotes(&self, ident: &str) -> bool {
+        ident.is_empty() || ident.chars().any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        self.quote_ident(value)
+    }
+
+    fn placeholder(&self, _index: usize, _column_type: &str) -> String {
+        String::new()
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    fn comparable(&self, _data_type: &str) -> bool {
+        false
+    }
+
+    fn search_predicate(&self, quoted_column: &str, _placeholder: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    fn paginate(&self, sql: &str, _ordered: bool, _offset: u64, _limit: u64) -> String {
+        sql.to_owned()
+    }
+
+    fn template_placeholder(&self, _n: usize) -> String {
+        String::new()
+    }
+
+    fn begin_transaction(&self) -> &'static str {
+        "MULTI"
+    }
+
+    fn commit_transaction(&self) -> &'static str {
+        "EXEC"
+    }
+
+    fn rollback_transaction(&self) -> &'static str {
+        "DISCARD"
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("\"{hex}\"")
+    }
+
+    fn quoted_name(&self, object: &ObjectRef) -> String {
+        self.quote_ident(&object.name)
+    }
+
+    fn display_name(&self, object: &ObjectRef) -> String {
+        self.display_ident(&object.name)
+    }
+}
+
 pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
     match flavor {
         SqlFlavor::Postgres => &PostgresDialect,
@@ -844,6 +929,7 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Snowflake => &SnowflakeDialect,
         SqlFlavor::Mongodb => &MongoDialect,
         SqlFlavor::Partiql => &PartiqlDialect,
+        SqlFlavor::Redis => &RedisDialect,
     }
 }
 

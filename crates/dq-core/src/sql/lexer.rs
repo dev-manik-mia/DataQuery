@@ -78,6 +78,14 @@ impl Lexer<'_> {
         let (ch, sf, duck) =
             (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
         let (mongo, partiql) = (flavor == SqlFlavor::Mongodb, flavor == SqlFlavor::Partiql);
+        if flavor == SqlFlavor::Redis {
+            // `redis-cli` arguments: quotes with backslash escapes, no comments.
+            match c {
+                b'\'' | b'"' => return self.quoted(c, true),
+                b'-' | b'/' | b'#' | b'$' | b'?' | b'@' | b':' | b'[' | b'{' => return self.single(TokenKind::Punct),
+                _ => {}
+            }
+        }
         if mongo {
             // JavaScript: three string quotes with backslash escapes, `//` comments, `$operators`.
             match c {

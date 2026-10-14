@@ -66,7 +66,8 @@ impl ExplainDialect {
             | SqlFlavor::Duckdb
             | SqlFlavor::Snowflake
             | SqlFlavor::Mongodb
-            | SqlFlavor::Partiql => None,
+            | SqlFlavor::Partiql
+            | SqlFlavor::Redis => None,
         }
     }
 

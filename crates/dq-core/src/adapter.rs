@@ -11,6 +11,7 @@ use async_trait::async_trait;
 
 use crate::config::ConnConfig;
 use crate::document::DocumentStore;
+use crate::keyvalue::KeyValueStore;
 use crate::edit::BoundStatement;
 use crate::engine::{Capabilities, Engine};
 use crate::error::{DbError, DbResult};
@@ -175,6 +176,11 @@ pub trait Session: Send + Sync {
     /// Their tables open in the Documents view, and table exports and imports
     /// go through these instead of generated SQL.
     fn documents(&self) -> Option<&dyn DocumentStore> {
+        None
+    }
+
+    /// Key browser operations, for key-value engines (Redis, Valkey).
+    fn keys(&self) -> Option<&dyn KeyValueStore> {
         None
     }
 

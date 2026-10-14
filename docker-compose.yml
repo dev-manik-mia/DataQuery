@@ -129,6 +129,24 @@ services:
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
     ports: ["58002:8000"]
 
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--requirepass", "dataquery", "--databases", "16"]
+    ports: ["56379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "dataquery", "--no-auth-warning", "ping"]
+      interval: 2s
+      retries: 30
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--requirepass", "dataquery"]
+    ports: ["56380:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "dataquery", "--no-auth-warning", "ping"]
+      interval: 2s
+      retries: 30
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

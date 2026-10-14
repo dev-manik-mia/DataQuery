@@ -281,6 +281,12 @@ fn validate_path(path: &str, what: &str) -> DbResult<()> {
 impl ConnConfig {
     pub const MAX_TIMEOUT_SECS: u32 = 300;
 
+    /// Redis database index: empty means 0.
+    pub fn database_index(&self) -> Option<u32> {
+        let db = self.database.trim();
+        if db.is_empty() { Some(0) } else { db.parse().ok() }
+    }
+
     /// A property, trimmed; `None` when unset or blank.
     pub fn property(&self, key: &str) -> Option<&str> {
         self.properties.get(key).map(|v| v.trim()).filter(|v| !v.is_empty())
@@ -351,8 +357,10 @@ impl ConnConfig {
         if self.port == 0 {
             return Err(DbError::invalid("Port must be between 1 and 65535."));
         }
-        // MongoDB may run without authentication; DynamoDB checks its access key above.
-        if self.username.trim().is_empty() && !matches!(self.engine, Engine::Mongodb | Engine::Dynamodb) {
+        // MongoDB and Redis may run without authentication (Redis uses the `default` user);
+        // DynamoDB checks its access key above.
+        let optional_user = matches!(self.engine, Engine::Mongodb | Engine::Dynamodb | Engine::Redis | Engine::Valkey);
+        if self.username.trim().is_empty() && !optional_user {
             return Err(DbError::invalid("Username is required."));
         }
         if self.username.len() > 128 || self.database.len() > 128 {
@@ -363,6 +371,9 @@ impl ConnConfig {
         }
         if self.connect_timeout_secs == 0 || self.connect_timeout_secs > Self::MAX_TIMEOUT_SECS {
             return Err(DbError::invalid("Connect timeout must be between 1 and 300 seconds."));
+        }
+        if matches!(self.engine, Engine::Redis | Engine::Valkey) && self.database_index().is_none() {
+            return Err(DbError::invalid("The database is a number such as 0."));
         }
         self.tls_files.validate()?;
         if let Some(ssh) = &self.ssh {
@@ -427,8 +438,9 @@ pub struct ParsedUrl {
 
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
-/// `snowflake://`, `duckdb://`, `mongodb://` and `mongodb+srv://` URLs. For Oracle the path is the service
-/// name; for Snowflake it is `database/schema`; for `DuckDB` it is the file.
+/// `snowflake://`, `duckdb://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://` and
+/// `valkeys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
+/// `DuckDB` it is the file; for Redis it is the database number.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     // Several hosts are not a valid URL authority, so MongoDB URLs are read by hand.
     if input.trim().starts_with("mongodb://") || input.trim().starts_with("mongodb+srv://") {
@@ -444,6 +456,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "oracle" => Engine::Oracle,
         "clickhouse" => Engine::Clickhouse,
         "snowflake" => Engine::Snowflake,
+        "redis" | "rediss" => Engine::Redis,
+        "valkey" | "valkeys" => Engine::Valkey,
         "duckdb" => {
             // `duckdb:///absolute/path.duckdb` or `duckdb://:memory:`
             let path = input.trim().trim_start_matches("duckdb://");
@@ -475,6 +489,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let host = url.host_str().ok_or_else(|| DbError::invalid("The URL has no host."))?;
     let host = host.trim_start_matches('[').trim_end_matches(']').to_owned();
     let path = decode(url.path().trim_start_matches('/'));
+    // Redis URLs name the database by number (`redis://host/2`).
+    let path = if matches!(engine, Engine::Redis | Engine::Valkey) && path.is_empty() { "0".to_owned() } else { path };
     // Snowflake URLs carry the schema too: `/database/schema`.
     let (database, schema) = match path.split_once('/') {
         Some((db, schema)) if engine == Engine::Snowflake => (db.to_owned(), Some(schema.to_owned())),
@@ -488,7 +504,11 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let mut connect_timeout_secs = 10;
     let mut tls_files = TlsFiles::default();
     // SQL Server spells TLS as `encrypt` and `trustServerCertificate`.
-    let mut encrypt: Option<bool> = None;
+    // `rediss://` and `valkeys://` mean TLS; plain `redis://` does not.
+    let mut encrypt: Option<bool> = match url.scheme() {
+        "redis" | "valkey" => Some(false),
+        _ => None,
+    };
     let mut trust_server_certificate = false;
     for (key, value) in url.query_pairs() {
         let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "strict" | "mandatory");
@@ -616,6 +636,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_redis_urls() {
+        let p = parse_connection_url("rediss://default:s%40cret@cache.local:6380/2").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Redis, 6380, "2"));
+        assert_eq!((p.config.ssl_mode, p.password.as_deref()), (SslMode::VerifyFull, Some("s@cret")));
+        let p = parse_connection_url("valkey://localhost").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Valkey, 6379, "0"));
+        assert_eq!((p.config.ssl_mode, p.config.username.as_str()), (SslMode::Disable, ""));
+        assert!(parse_connection_url("redis://localhost/x").is_err());
+    }
+
+    #[test]
     fn parses_mongodb_urls() {
         let p = parse_connection_url(
             "mongodb://ana:p%40ss@h1:27018,h2:27019/shop?replicaSet=rs0&authSource=admin&tls=true",
@@ -719,7 +750,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_scheme() {
-        assert!(parse_connection_url("redis://localhost").is_err());
+        assert!(parse_connection_url("cassandra://localhost").is_err());
         assert!(parse_connection_url("not a url").is_err());
     }
 

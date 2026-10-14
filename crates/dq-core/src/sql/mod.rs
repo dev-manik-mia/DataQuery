@@ -8,6 +8,7 @@ pub mod dialect;
 pub mod format;
 pub mod lexer;
 mod mongo;
+pub mod redis;
 
 pub use analyze::{
     DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, named_params, redact_literals,
@@ -15,5 +16,5 @@ pub use analyze::{
 };
 pub use dialect::{
     ClickhouseDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect,
-    PostgresDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
+    PostgresDialect, RedisDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
 };

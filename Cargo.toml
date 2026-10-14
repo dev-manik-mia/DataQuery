@@ -22,6 +22,7 @@ dq-clickhouse = { path = "crates/dq-clickhouse" }
 dq-snowflake = { path = "crates/dq-snowflake" }
 dq-mongodb = { path = "crates/dq-mongodb" }
 dq-dynamodb = { path = "crates/dq-dynamodb" }
+dq-redis = { path = "crates/dq-redis" }
 
 async-trait = "0.1"
 base64 = "0.22"
@@ -32,6 +33,7 @@ keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync
 mongodb = { version = "3.3", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"] }
 mysql_async = { version = "0.37", default-features = false, features = ["default-rustls-ring"] }
 postgres-protocol = "0.6"
+redis = { version = "1.7", default-features = false, features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls-insecure", "streams", "acl"] }
 regex = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

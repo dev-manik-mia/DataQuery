@@ -17,6 +17,8 @@ pub enum NodeKind {
     Trigger,
     Function,
     Procedure,
+    /// A Redis key; `database` is the database index.
+    Key,
     /// A folder in the tree, e.g. "Functions"; `name` is one of the `GROUP_*` ids.
     Group,
 }
@@ -28,7 +30,7 @@ impl NodeKind {
 
     /// Objects whose definition can be shown (`Session::ddl`).
     pub fn has_definition(self) -> bool {
-        !matches!(self, Self::Database | Self::Schema | Self::Group)
+        !matches!(self, Self::Database | Self::Schema | Self::Group | Self::Key)
     }
 }
 

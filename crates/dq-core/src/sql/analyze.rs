@@ -42,6 +42,12 @@ pub enum DestructiveReason {
     DeleteAllDocuments,
     /// `MongoDB` `updateMany({}, …)`.
     UpdateAllDocuments,
+    /// Redis `FLUSHALL` / `FLUSHDB`.
+    FlushData,
+    /// Redis commands that change or stop the server (`DEBUG`, `SHUTDOWN`, `CONFIG SET`, `REPLICAOF`, …).
+    ServerCommand,
+    /// Redis `KEYS`, which blocks the server while it walks every key.
+    BlockingKeys,
 }
 
 impl DestructiveReason {
@@ -54,6 +60,9 @@ impl DestructiveReason {
             Self::UpdateWithoutWhere => "UPDATE without WHERE changes every row.",
             Self::DeleteAllDocuments => "An empty filter deletes every document in the collection.",
             Self::UpdateAllDocuments => "An empty filter changes every document in the collection.",
+            Self::FlushData => "FLUSHALL and FLUSHDB delete every key.",
+            Self::ServerCommand => "This command changes, blocks or stops the server.",
+            Self::BlockingKeys => "KEYS blocks the server while it walks every key. The key browser uses SCAN instead.",
         }
     }
 }
@@ -129,6 +138,11 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             _ => TxEffect::None,
         },
         SqlFlavor::Clickhouse => TxEffect::None,
+        SqlFlavor::Redis => match word(0) {
+            "MULTI" => TxEffect::Begin,
+            "EXEC" | "DISCARD" => TxEffect::End,
+            _ => TxEffect::None,
+        },
         SqlFlavor::Mongodb | SqlFlavor::Partiql => match word(0) {
             "BEGIN" => TxEffect::Begin,
             "COMMIT" | "ROLLBACK" => TxEffect::End,
@@ -179,6 +193,7 @@ pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
     let mut chunk_start = 0;
     let mut block = Block::default();
     let mongo = flavor == SqlFlavor::Mongodb;
+    let redis = flavor == SqlFlavor::Redis;
     let mut depth = 0;
     for (i, tok) in tokens.iter().enumerate() {
         if mongo {
@@ -186,6 +201,9 @@ pub fn split_statements(src: &str, flavor: SqlFlavor) -> Vec<StatementInfo> {
         }
         let ends = match tok.kind {
             TokenKind::Semicolon if mongo => depth <= 0,
+            // One command per line; `;` is an ordinary character.
+            TokenKind::Semicolon if redis => false,
+            TokenKind::Whitespace if redis => tok.text(src).contains('\n'),
             TokenKind::Whitespace if mongo => super::mongo::line_ends_statement(src, &tokens, i, depth),
             TokenKind::Semicolon => !block.inside(),
             TokenKind::Word | TokenKind::Punct => is_separator_line(src, &tokens, i, flavor),
@@ -313,7 +331,8 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
         | SqlFlavor::Duckdb
         | SqlFlavor::Snowflake
         | SqlFlavor::Mongodb
-        | SqlFlavor::Partiql => false,
+        | SqlFlavor::Partiql
+        | SqlFlavor::Redis => false,
     };
     if !separator {
         return false;
@@ -406,6 +425,10 @@ fn param_count(src: &str, sig: &[Token]) -> u32 {
 fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool, Option<DestructiveReason>) {
     if flavor == SqlFlavor::Mongodb {
         return super::mongo::classify(src, sig);
+    }
+    if flavor == SqlFlavor::Redis {
+        let text = sig.first().zip(sig.last()).map_or("", |(a, b)| &src[a.start..b.end]);
+        return super::redis::classify(text);
     }
     let word = |i: usize| sig.get(i).filter(|t| t.kind == TokenKind::Word).map(|t| t.text(src).to_ascii_uppercase());
     let head = word(0).unwrap_or_default();

@@ -13,6 +13,7 @@ pub mod edit;
 pub mod engine;
 pub mod error;
 pub mod explain;
+pub mod keyvalue;
 pub mod migrations;
 pub mod monitor;
 pub mod node;

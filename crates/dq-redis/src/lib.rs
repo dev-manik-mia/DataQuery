@@ -1,0 +1,1 @@
+//! Redis and Valkey adapter.
