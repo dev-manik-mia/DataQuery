@@ -165,6 +165,17 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 16. Engines: Redis, Valkey
+
+- [x] T16.1 Core key-value layer `dq-core/keyvalue.rs`: `KeyValueStore` (SCAN steps with MATCH/TYPE/cursor, DBSIZE, paged values per type, one-key edits, console, key exports), binary-safe `RString` (UTF-8 text or reversible `\xNN` escapes), `Session::keys()`, `NodeKind::Key`, `ExportSource::Keys`.
+- [x] T16.2 `redis` flavor: one command per line, `redis-cli` argument splitting, read-only command table, `FLUSHALL`/`FLUSHDB`, `KEYS`, `DEBUG`, `SHUTDOWN`, `CONFIG SET`, `CLIENT KILL`, … destructive (always confirmed); `MULTI`/`EXEC`/`DISCARD` as transaction words (`Dialect::commit_transaction` / `rollback_transaction`).
+- [x] T16.3 Config: `redis://`, `rediss://`, `valkey://`, `valkeys://` URLs; optional ACL user; database number.
+- [x] T16.4 Adapter `dq-redis` (redis-rs, rustls) for Redis and Valkey: dedicated query connection (SELECT, MULTI, blocking commands), cancel/timeout with `CLIENT KILL` + reconnect, editor grids, redis-cli-formatted console replies, key browser reads (SCAN + TYPE/PTTL pipeline, HSCAN/SSCAN/LRANGE/ZRANGE/XRANGE pages, MEMORY USAGE, OBJECT ENCODING), guarded writes (WATCH for list items, RENAMENX, UNLINK), INFO/CLIENT LIST monitoring, sampled largest keys, CLIENT KILL.
+- [x] T16.5 UI: key browser replacing the explorer (database and type filters, pattern, prefix groups, TTLs, cursor and "Scan more", new key, export matching keys), key tab (type · size, TTL, memory, encoding, Edit TTL, Rename, Delete…, per-type editors with paging), console panel and console tab, Redis editor mode with command completion, connection form fields.
+- [x] T16.6 Test databases: `redis` (8, :56379) and `valkey` (8, :56380), password `dataquery`; integration tests in `crates/dq-redis/tests` run against both.
+
+---
+
 ## Verification
 
 | Area | How it was verified |
