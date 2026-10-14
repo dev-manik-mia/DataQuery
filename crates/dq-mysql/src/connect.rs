@@ -52,7 +52,7 @@ fn ssl_opts(params: &ConnectParams, mode: SslMode) -> Option<SslOpts> {
     if let Some(ca) = &files.ca_file {
         opts = opts.with_root_certs(vec![PathBuf::from(ca).into()]).with_disable_built_in_roots(true);
     }
-    if let (Some(cert), Some(key)) = (&files.client_cert_file, &files.client_key_file) {
+    if let Some((cert, key)) = files.client_pair() {
         opts =
             opts.with_client_identity(Some(ClientIdentity::new(PathBuf::from(cert).into(), PathBuf::from(key).into())));
     }

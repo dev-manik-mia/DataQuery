@@ -67,8 +67,9 @@ pub struct TlsFiles {
     /// PEM bundle of trusted CA certificates, used instead of the system roots.
     pub ca_file: Option<String>,
     /// PEM client certificate chain, for servers that require client certificates.
+    /// It may also hold the private key (one combined `.pem`).
     pub client_cert_file: Option<String>,
-    /// PEM private key for the client certificate.
+    /// PEM private key for the client certificate; empty when the certificate file holds it.
     pub client_key_file: Option<String>,
 }
 
@@ -77,12 +78,19 @@ impl TlsFiles {
         self.ca_file.is_none() && self.client_cert_file.is_none() && self.client_key_file.is_none()
     }
 
-    fn validate(&self) -> DbResult<()> {
+    /// The client certificate and key paths. Without a key file the certificate
+    /// file is a combined `.pem` that holds the key too.
+    pub fn client_pair(&self) -> Option<(&str, &str)> {
+        let cert = self.client_cert_file.as_deref()?;
+        Some((cert, self.client_key_file.as_deref().unwrap_or(cert)))
+    }
+
+    pub(crate) fn validate(&self) -> DbResult<()> {
         for path in [&self.ca_file, &self.client_cert_file, &self.client_key_file].into_iter().flatten() {
             validate_path(path, "Certificate files")?;
         }
-        if self.client_cert_file.is_some() != self.client_key_file.is_some() {
-            return Err(DbError::invalid("A client certificate needs both the certificate and the key file."));
+        if self.client_key_file.is_some() && self.client_cert_file.is_none() {
+            return Err(DbError::invalid("Choose the client certificate for this key."));
         }
         Ok(())
     }

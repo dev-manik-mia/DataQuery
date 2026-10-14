@@ -117,15 +117,16 @@ pub async fn connect(params: &ConnectParams) -> DbResult<Connected> {
         SslMode::Disable => Tls::Disabled,
         mode => {
             let files = &config.tls_files;
-            let cert_key_file_path = match (&files.client_cert_file, &files.client_key_file) {
-                (Some(cert), Some(key)) if cert != key => {
+            // The driver takes one file with the certificate and the key.
+            let cert_key_file_path = match files.client_pair() {
+                Some((cert, key)) if cert != key => {
                     let pem = combined_pem(cert, key)?;
                     let path = pem.0.clone();
                     cert_key = Some(pem);
                     Some(path)
                 }
-                (Some(cert), _) => Some(PathBuf::from(cert)),
-                _ => None,
+                Some((cert, _)) => Some(PathBuf::from(cert)),
+                None => None,
             };
             Tls::Enabled(
                 TlsOptions::builder()

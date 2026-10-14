@@ -54,9 +54,13 @@ impl Connector {
                     .transpose()
             };
             let files = &config.tls_files;
-            let client_tls = match (read(&files.client_cert_file)?, read(&files.client_key_file)?) {
-                (Some(client_cert), Some(client_key)) => Some(redis::ClientTlsConfig { client_cert, client_key }),
-                _ => None,
+            // A combined .pem serves as both; each is parsed for its own blocks.
+            let client_tls = match files.client_pair() {
+                Some((cert, key)) => Some(redis::ClientTlsConfig {
+                    client_cert: dq_core::tls::read_pem(cert, "client certificate")?,
+                    client_key: dq_core::tls::read_pem(key, "client key")?,
+                }),
+                None => None,
             };
             let certs = redis::TlsCertificates { client_tls, root_cert: read(&files.ca_file)? };
             let mut client = Client::build_with_tls(info, certs).map_err(map_error)?;

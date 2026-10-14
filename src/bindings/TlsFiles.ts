@@ -11,9 +11,10 @@ export type TlsFiles = {
 ca_file: string | null, 
 /**
  * PEM client certificate chain, for servers that require client certificates.
+ * It may also hold the private key (one combined `.pem`).
  */
 client_cert_file: string | null, 
 /**
- * PEM private key for the client certificate.
+ * PEM private key for the client certificate; empty when the certificate file holds it.
  */
 client_key_file: string | null, };

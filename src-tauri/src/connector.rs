@@ -74,6 +74,11 @@ pub async fn draft_secrets(state: &AppState, draft: &ConnectionDraft) -> DbResul
 /// failures as the connection's options allow.
 pub async fn open(state: &AppState, config: &ConnConfig, secrets: &Secrets) -> DbResult<Opened> {
     config.validate()?;
+    // Unreadable, wrong or encrypted .pem files get a clear message before any driver reads them.
+    if config.ssl_mode != dq_core::config::SslMode::Disable && !config.tls_files.is_empty() {
+        let files = config.tls_files.clone();
+        blocking(move || dq_core::tls::check_files(&files)).await?;
+    }
     let adapter = state.registry.get(config.engine)?;
     let attempts = config.options.connect_retries + 1;
     let mut attempt = 0;

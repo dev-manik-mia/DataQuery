@@ -75,13 +75,7 @@ impl Client {
                     .map_err(|e| DbError::new(ErrorKind::Tls, format!("Invalid CA file: {e}")))?;
                 builder = builder.add_root_certificate(cert);
             }
-            if let (Some(cert), Some(key)) = (&config.tls_files.client_cert_file, &config.tls_files.client_key_file) {
-                let mut pem = std::fs::read(cert)
-                    .map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the client certificate: {e}")))?;
-                pem.extend(
-                    std::fs::read(key)
-                        .map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the client key: {e}")))?,
-                );
+            if let Some(pem) = dq_core::tls::client_identity_pem(&config.tls_files)? {
                 let identity = reqwest::Identity::from_pem(&pem)
                     .map_err(|e| DbError::new(ErrorKind::Tls, format!("Invalid client certificate: {e}")))?;
                 builder = builder.identity(identity);

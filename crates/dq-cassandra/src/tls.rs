@@ -67,8 +67,9 @@ pub fn client_config(mode: SslMode, files: &TlsFiles) -> DbResult<Option<Arc<Cli
         .map_err(tls_error)?
         .dangerous()
         .with_custom_certificate_verifier(verifier);
-    let config = match (&files.client_cert_file, &files.client_key_file) {
-        (Some(cert), Some(key)) => {
+    // One combined .pem, or a certificate and a key file.
+    let config = match files.client_pair() {
+        Some((cert, key)) => {
             let chain = CertificateDer::pem_file_iter(cert)
                 .map_err(|e| file_error(cert, e))?
                 .collect::<Result<Vec<_>, _>>()
@@ -76,7 +77,7 @@ pub fn client_config(mode: SslMode, files: &TlsFiles) -> DbResult<Option<Arc<Cli
             let key = PrivateKeyDer::from_pem_file(key).map_err(|e| file_error(key, e))?;
             builder.with_client_auth_cert(chain, key).map_err(tls_error)?
         }
-        _ => builder.with_no_client_auth(),
+        None => builder.with_no_client_auth(),
     };
     Ok(Some(Arc::new(config)))
 }

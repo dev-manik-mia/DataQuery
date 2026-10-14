@@ -34,7 +34,7 @@ fn config(params: &ConnectParams, database: Option<&str>) -> Config {
     if let Some(ca) = &files.ca_file {
         config.trust_cert_ca(ca);
     }
-    if let (Some(cert), Some(key)) = (&files.client_cert_file, &files.client_key_file) {
+    if let Some((cert, key)) = files.client_pair() {
         config.client_certificate(cert, key);
     }
     // SQL Server encrypts the login even without TLS for the session; `disable`
