@@ -59,7 +59,7 @@ fn start_job(app: &AppHandle, state: &AppState, job_id: &str) -> TransferControl
     state.transfers.lock().expect("transfers lock").insert(job_id.to_owned(), cancelled.clone());
     let app = app.clone();
     let job = job_id.to_owned();
-    let last = std::sync::Mutex::new(Instant::now() - Duration::from_secs(1));
+    let last = std::sync::Mutex::new(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
     TransferControl::new(cancelled, move |rows, bytes| {
         let mut last = last.lock().expect("progress lock");
         if last.elapsed() >= Duration::from_millis(200) {

@@ -7,7 +7,11 @@ use super::CmdResult;
 use crate::ai::{self, AiAnswer, AiDisclosure, AiRequest, Prepared};
 use crate::state::{AppState, blocking};
 
-async fn prepared(state: &AppState, session_id: &str, request: &AiRequest) -> CmdResult<(dq_store::Settings, Prepared)> {
+async fn prepared(
+    state: &AppState,
+    session_id: &str,
+    request: &AiRequest,
+) -> CmdResult<(dq_store::Settings, Prepared)> {
     let settings = state.settings().await?;
     if !settings.ai_enabled {
         return Err(DbError::invalid("The AI assistant is off. Turn it on in Settings → AI assistant."));
@@ -21,7 +25,11 @@ async fn prepared(state: &AppState, session_id: &str, request: &AiRequest) -> Cm
 
 /// What a request would send, for the disclosure panel.
 #[tauri::command]
-pub async fn ai_disclosure(state: State<'_, AppState>, session_id: String, request: AiRequest) -> CmdResult<AiDisclosure> {
+pub async fn ai_disclosure(
+    state: State<'_, AppState>,
+    session_id: String,
+    request: AiRequest,
+) -> CmdResult<AiDisclosure> {
     Ok(prepared(&state, &session_id, &request).await?.1.disclosure)
 }
 

@@ -1,8 +1,9 @@
-use dq_core::edit::{ApplyReport, RowChange};
+use dq_core::edit::{ApplyReport, ColumnValue, RowChange};
 use dq_core::node::ObjectRef;
 use dq_core::ops;
 use dq_core::schema::TableStructure;
 use dq_core::table::{RowCount, RowFilter, TablePage, TablePageRequest};
+use dq_core::value::{Cell, CellLimits};
 use tauri::State;
 
 use super::{CmdResult, Guarded};
@@ -73,4 +74,53 @@ pub async fn apply_changes(
     }
     let value = ops::apply_changes(&*open.session, &object, &changes, full_row.unwrap_or(false)).await?;
     Ok(Guarded::Done { value })
+}
+
+/// Largest value shown in the cell viewer; bigger ones can be saved to a file.
+const VIEWER_LIMITS: CellLimits = CellLimits { max_text_bytes: 4 * 1024 * 1024, binary_head_bytes: 64 * 1024 };
+
+/// A cell's value for the viewer: text up to 4 MB, binary up to its first 64 KB.
+#[tauri::command]
+pub async fn cell_value(
+    state: State<'_, AppState>,
+    session_id: String,
+    object: ObjectRef,
+    key: Vec<ColumnValue>,
+    column: String,
+) -> CmdResult<Cell> {
+    ops::cell_value(&*state.session(&session_id).await?.session, &object, &key, &column, VIEWER_LIMITS).await
+}
+
+/// Writes a cell's complete value (binary as bytes, text as UTF-8) to a file chosen in the save dialog.
+#[tauri::command]
+pub async fn save_cell(
+    state: State<'_, AppState>,
+    session_id: String,
+    object: ObjectRef,
+    key: Vec<ColumnValue>,
+    column: String,
+    path: String,
+) -> CmdResult<u64> {
+    let path = std::path::PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(dq_core::DbError::invalid("Choose a file with the file dialog."));
+    }
+    let cell =
+        ops::cell_value(&*state.session(&session_id).await?.session, &object, &key, &column, CellLimits::FULL).await?;
+    let bytes = match &cell {
+        Cell::Binary { head_hex, .. } => (0..head_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&head_hex[i..i + 2], 16))
+            .collect::<Result<Vec<u8>, _>>()
+            .map_err(|_| dq_core::DbError::internal("invalid hex"))?,
+        other => other.to_text().unwrap_or_default().into_bytes(),
+    };
+    let len = bytes.len() as u64;
+    crate::state::blocking(move || {
+        std::fs::write(&path, bytes).map_err(|e| {
+            dq_core::DbError::new(dq_core::ErrorKind::Storage, format!("Cannot write {}: {e}", path.display()))
+        })
+    })
+    .await?;
+    Ok(len)
 }

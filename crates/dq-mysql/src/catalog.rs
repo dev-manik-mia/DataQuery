@@ -510,7 +510,7 @@ fn row_identity(index_columns: &[IndexColumn], columns: &[ColumnInfo]) -> Vec<St
         .unwrap_or_default()
 }
 
-/// InnoDB index sizes in bytes. Needs read access to `mysql.innodb_index_stats`;
+/// `InnoDB` index sizes in bytes. Needs read access to `mysql.innodb_index_stats`;
 /// without it the sizes are simply not shown.
 async fn index_sizes(conn: &mut Conn, object: &ObjectRef) -> Vec<(String, i64)> {
     let rows: Vec<Row> = conn
@@ -535,7 +535,7 @@ fn fk_rule(rule: Option<String>) -> Option<String> {
     rule.filter(|r| r != "RESTRICT" && r != "NO ACTION")
 }
 
-/// Foreign keys matching `predicate` over `k` (KEY_COLUMN_USAGE).
+/// Foreign keys matching `predicate` over `k` (`KEY_COLUMN_USAGE`).
 async fn foreign_keys(
     conn: &mut Conn,
     predicate: &str,

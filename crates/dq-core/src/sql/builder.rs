@@ -166,6 +166,28 @@ pub fn page_query(
     Ok(q)
 }
 
+/// One column of the rows matching `key` (at most two, to detect ambiguity).
+pub fn cell_query(
+    d: &dyn Dialect,
+    structure: &TableStructure,
+    key: &[ColumnValue],
+    column: &str,
+) -> DbResult<BoundQuery> {
+    let col = self::column(structure, column)?;
+    if key.is_empty() {
+        return Err(DbError::invalid("A row key is required."));
+    }
+    let mut p = Params { dialect: d, inline: false, values: Vec::new() };
+    let rows = RowFilter { matches: key.to_vec(), ..RowFilter::default() };
+    let where_ = where_clause(&mut p, structure, &rows)?;
+    let q = d.quote_ident(&col.name);
+    let select = if col.read_as_text { format!("{} AS {q}", d.cast_to_text(&q)) } else { q };
+    Ok(BoundQuery {
+        sql: format!("SELECT {select} FROM {}{where_} LIMIT 2", d.quoted_name(&structure.object)),
+        params: p.values,
+    })
+}
+
 pub fn count_query(d: &dyn Dialect, structure: &TableStructure, rows: &RowFilter) -> DbResult<BoundQuery> {
     let mut p = Params { dialect: d, inline: false, values: Vec::new() };
     let where_ = where_clause(&mut p, structure, rows)?;

@@ -77,6 +77,23 @@ pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFi
     Ok(RowCount { count, exact: true })
 }
 
+/// The full value of one cell, matched by the row key. Size-limited by `limits`.
+pub async fn cell_value(
+    session: &dyn Session,
+    object: &ObjectRef,
+    key: &[crate::edit::ColumnValue],
+    column: &str,
+    limits: CellLimits,
+) -> DbResult<crate::value::Cell> {
+    let structure = session.structure(object).await?;
+    let q = builder::cell_query(session.dialect(), &structure, key, column)?;
+    let (_, mut rows) = session.read_query(&object.database, &q.sql, &q.params, limits).await?;
+    if rows.len() != 1 {
+        return Err(DbError::not_found("The row changed or is no longer unique. Reload the data."));
+    }
+    rows.pop().and_then(|mut r| r.pop()).ok_or_else(|| DbError::internal("empty cell"))
+}
+
 pub async fn preview_changes(
     session: &dyn Session,
     object: &ObjectRef,

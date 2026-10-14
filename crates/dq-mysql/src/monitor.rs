@@ -1,6 +1,6 @@
-//! Monitoring from the process list, status variables, InnoDB lock views and
+//! Monitoring from the process list, status variables, `InnoDB` lock views and
 //! replication status. Each source needs its own privileges (PROCESS,
-//! REPLICATION CLIENT, performance_schema access); missing ones are reported.
+//! REPLICATION CLIENT, `performance_schema` access); missing ones are reported.
 
 use async_trait::async_trait;
 use dq_core::adapter::Session;
@@ -75,7 +75,7 @@ async fn has_process_privilege(conn: &mut Conn) -> bool {
     })
 }
 
-/// (waiting thread, blocking thread) pairs from InnoDB.
+/// (waiting thread, blocking thread) pairs from `InnoDB`.
 async fn lock_waits(conn: &mut Conn, flavor: Flavor) -> DbResult<Vec<(i64, i64)>> {
     let sql = match flavor {
         Flavor::Mysql => {

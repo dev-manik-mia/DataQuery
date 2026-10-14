@@ -433,7 +433,7 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     // XLSX export and cancellation.
     let xlsx = dir.path().join("orders.xlsx");
     assert_eq!(ops::export(&*s, &source, ExportFormat::Xlsx, &ExportOptions::default(), &xlsx, &none).await?.rows, 10);
-    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let control = TransferControl::new(cancelled, |_, _| {});
     let err =
         ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &control).await.unwrap_err();
@@ -747,4 +747,26 @@ async fn schema_changes_diff_and_migrations() {
     let prisma = found.iter().find(|f| f.framework == "Prisma").unwrap();
     assert!(prisma.entries.iter().any(|e| e.status == "failed" && e.name.as_deref() == Some("20260102_broken")));
     run_all(&*s, "DROP SCHEMA it_diff_a CASCADE; DROP SCHEMA it_diff_b CASCADE").await;
+}
+
+#[tokio::test]
+async fn full_cell_values_by_key() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let object = table("public", "type_samples");
+    let key = [ColumnValue { column: "id".into(), value: Some("1".into()) }];
+    let cell = ops::cell_value(&*s, &object, &key, "raw", dq_core::value::CellLimits::FULL).await.unwrap();
+    let Cell::Binary { length, head_hex } = cell else { panic!("binary expected") };
+    assert_eq!(head_hex.len() as u64, length * 2, "full value, not just the head");
+    assert!(
+        ops::cell_value(
+            &*s,
+            &object,
+            &[ColumnValue { column: "id".into(), value: Some("-5".into()) }],
+            "raw",
+            dq_core::value::CellLimits::FULL
+        )
+        .await
+        .is_err()
+    );
 }

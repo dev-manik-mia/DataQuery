@@ -1,5 +1,5 @@
 //! Framework migration tables (Prisma, Laravel, Django, Rails, Flyway, Knex,
-//! Alembic, TypeORM, Sequelize, golang-migrate). Detected from the schema
+//! Alembic, `TypeORM`, Sequelize, golang-migrate). Detected from the schema
 //! model, read with a bounded `SELECT` on a read-only connection.
 
 use serde::Serialize;
@@ -40,7 +40,7 @@ struct Detector {
     table: &'static str,
     /// Columns that must exist.
     columns: &'static [&'static str],
-    /// `SELECT` list: version, name, applied_at, status, batch (column names or `NULL`).
+    /// `SELECT` list: version, name, `applied_at`, status, batch (column names or `NULL`).
     select: [&'static str; 5],
     order_by: &'static str,
 }

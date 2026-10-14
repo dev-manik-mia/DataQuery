@@ -27,9 +27,16 @@ const MAX_INPUT_CHARS: usize = 20_000;
 #[ts(export)]
 pub enum AiRequest {
     /// Natural language → SQL.
-    Sql { question: String },
-    ExplainQuery { sql: String },
-    ExplainError { sql: String, error: String },
+    Sql {
+        question: String,
+    },
+    ExplainQuery {
+        sql: String,
+    },
+    ExplainError {
+        sql: String,
+        error: String,
+    },
     SummarizeSchema,
 }
 
@@ -86,7 +93,10 @@ fn clip(text: &str, max: usize) -> &str {
 
 /// Words of the question, to send the most relevant tables first.
 fn words(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| w.len() > 2).map(str::to_ascii_lowercase).collect()
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.len() > 2)
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 /// Table structures as compact text, relevant tables first, within the size budget.
@@ -108,7 +118,15 @@ fn schema_text(model: &SchemaModel, hint: &str) -> (String, Vec<String>) {
         let cols: Vec<String> = t
             .columns
             .iter()
-            .map(|c| format!("{} {}{}{}", c.name, c.data_type, if c.nullable { "" } else { " not null" }, if c.primary_key { " pk" } else { "" }))
+            .map(|c| {
+                format!(
+                    "{} {}{}{}",
+                    c.name,
+                    c.data_type,
+                    if c.nullable { "" } else { " not null" },
+                    if c.primary_key { " pk" } else { "" }
+                )
+            })
             .collect();
         let line = format!("{name}({})\n", cols.join(", "));
         if text.len() + line.len() > MAX_SCHEMA_CHARS {
@@ -118,7 +136,14 @@ fn schema_text(model: &SchemaModel, hint: &str) -> (String, Vec<String>) {
         included.push(name);
     }
     for fk in &model.foreign_keys {
-        let line = format!("fk {}.{}({}) -> {}({})\n", fk.source.schema.as_deref().unwrap_or(""), fk.source.name, fk.columns.join(","), fk.target.name, fk.target_columns.join(","));
+        let line = format!(
+            "fk {}.{}({}) -> {}({})\n",
+            fk.source.schema.as_deref().unwrap_or(""),
+            fk.source.name,
+            fk.columns.join(","),
+            fk.target.name,
+            fk.target_columns.join(",")
+        );
         if text.len() + line.len() > MAX_SCHEMA_CHARS {
             break;
         }
@@ -128,7 +153,13 @@ fn schema_text(model: &SchemaModel, hint: &str) -> (String, Vec<String>) {
 }
 
 /// Builds the prompt and the disclosure for a request.
-pub fn prepare(settings: &Settings, flavor: SqlFlavor, version: &str, model_schema: &SchemaModel, request: &AiRequest) -> DbResult<Prepared> {
+pub fn prepare(
+    settings: &Settings,
+    flavor: SqlFlavor,
+    version: &str,
+    model_schema: &SchemaModel,
+    request: &AiRequest,
+) -> DbResult<Prepared> {
     let dialect = match flavor {
         SqlFlavor::Postgres => "PostgreSQL",
         SqlFlavor::Mysql => "MySQL/MariaDB",
@@ -138,18 +169,40 @@ pub fn prepare(settings: &Settings, flavor: SqlFlavor, version: &str, model_sche
             if question.trim().is_empty() {
                 return Err(DbError::invalid("Ask a question first."));
             }
-            (question.as_str(), format!("Write one {dialect} query that answers:\n{}", clip(question, MAX_INPUT_CHARS)), vec!["Your question".to_owned()])
+            (
+                question.as_str(),
+                format!("Write one {dialect} query that answers:\n{}", clip(question, MAX_INPUT_CHARS)),
+                vec!["Your question".to_owned()],
+            )
         }
-        AiRequest::ExplainQuery { sql } => (sql.as_str(), format!("Explain what this query does, step by step, and point out problems:\n```sql\n{}\n```", clip(sql, MAX_INPUT_CHARS)), vec!["The SQL in the editor".to_owned()]),
+        AiRequest::ExplainQuery { sql } => (
+            sql.as_str(),
+            format!(
+                "Explain what this query does, step by step, and point out problems:\n```sql\n{}\n```",
+                clip(sql, MAX_INPUT_CHARS)
+            ),
+            vec!["The SQL in the editor".to_owned()],
+        ),
         AiRequest::ExplainError { sql, error } => (
             sql.as_str(),
-            format!("Explain this error and suggest a fix.\n```sql\n{}\n```\nError: {}", clip(sql, MAX_INPUT_CHARS), clip(error, 4_000)),
+            format!(
+                "Explain this error and suggest a fix.\n```sql\n{}\n```\nError: {}",
+                clip(sql, MAX_INPUT_CHARS),
+                clip(error, 4_000)
+            ),
             vec!["The SQL in the editor".to_owned(), "The error message".to_owned()],
         ),
-        AiRequest::SummarizeSchema => ("", "Summarize this schema: the main entities, how they relate, and anything unusual.".to_owned(), Vec::new()),
+        AiRequest::SummarizeSchema => (
+            "",
+            "Summarize this schema: the main entities, how they relate, and anything unusual.".to_owned(),
+            Vec::new(),
+        ),
     };
     let (schema, tables) = schema_text(model_schema, hint);
-    sent.insert(0, format!("Column names and types for {} table{}", tables.len(), if tables.len() == 1 { "" } else { "s" }));
+    sent.insert(
+        0,
+        format!("Column names and types for {} table{}", tables.len(), if tables.len() == 1 { "" } else { "s" }),
+    );
     let system = format!(
         "You help a developer working in a {dialect} database ({version}) inside a desktop SQL client. \
          Use only the tables and columns in the schema below. When you write SQL, put exactly one statement \
@@ -174,7 +227,7 @@ fn ai_error(message: impl AsRef<str>) -> DbError {
     DbError::new(ErrorKind::Network, message.as_ref()).with_code("AI")
 }
 
-/// The first ```sql block of an answer.
+/// The first fenced SQL code block of an answer.
 pub fn extract_sql(text: &str) -> Option<String> {
     let start = text.find("```sql").map(|i| i + 6).or_else(|| text.find("```").map(|i| i + 3))?;
     let rest = &text[start..];
@@ -191,9 +244,9 @@ pub async fn ask(settings: &Settings, api_key: Option<String>, prepared: Prepare
     let model = prepared.disclosure.model.clone();
     let text = match settings.ai_provider {
         AiProvider::Anthropic => {
-            let key = api_key.filter(|k| !k.trim().is_empty()).ok_or_else(|| {
-                DbError::invalid("Add your Anthropic API key in Settings → AI assistant.")
-            })?;
+            let key = api_key
+                .filter(|k| !k.trim().is_empty())
+                .ok_or_else(|| DbError::invalid("Add your Anthropic API key in Settings → AI assistant."))?;
             let mut body = json!({
                 "model": model,
                 "max_tokens": 16000,
@@ -206,18 +259,13 @@ pub async fn ask(settings: &Settings, api_key: Option<String>, prepared: Prepare
             if fallback {
                 body["fallbacks"] = json!("default");
             }
-            let mut request = client
-                .post(ANTHROPIC_URL)
-                .header("x-api-key", key)
-                .header("anthropic-version", "2023-06-01");
+            let mut request =
+                client.post(ANTHROPIC_URL).header("x-api-key", key).header("anthropic-version", "2023-06-01");
             if fallback {
                 request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
             }
-            let response = request
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| ai_error(format!("Cannot reach Anthropic: {e}")))?;
+            let response =
+                request.json(&body).send().await.map_err(|e| ai_error(format!("Cannot reach Anthropic: {e}")))?;
             let status = response.status();
             let value: Value = response.json().await.map_err(|e| ai_error(format!("Unreadable reply: {e}")))?;
             if !status.is_success() {
@@ -230,7 +278,14 @@ pub async fn ask(settings: &Settings, api_key: Option<String>, prepared: Prepare
             }
             value["content"]
                 .as_array()
-                .map(|blocks| blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"))
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter(|b| b["type"] == "text")
+                        .filter_map(|b| b["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
                 .unwrap_or_default()
         }
         AiProvider::OpenAiCompatible => {
@@ -276,20 +331,35 @@ mod tests {
     fn model() -> SchemaModel {
         let table = |name: &str| ModelTable {
             object: ObjectRef::new(NodeKind::Table, "app", Some("public".into()), name),
-            columns: vec![ModelColumn { name: "id".into(), data_type: "bigint".into(), nullable: false, primary_key: true }],
+            columns: vec![ModelColumn {
+                name: "id".into(),
+                data_type: "bigint".into(),
+                nullable: false,
+                primary_key: true,
+            }],
         };
         SchemaModel { tables: vec![table("audit_log"), table("customers"), table("orders")], ..SchemaModel::default() }
     }
 
     #[test]
     fn disclosure_lists_what_is_sent_and_relevant_tables_come_first() {
-        let p = prepare(&Settings::default(), SqlFlavor::Postgres, "PostgreSQL 17", &model(), &AiRequest::Sql { question: "Which customers have most orders?".into() }).unwrap();
+        let p = prepare(
+            &Settings::default(),
+            SqlFlavor::Postgres,
+            "PostgreSQL 17",
+            &model(),
+            &AiRequest::Sql { question: "Which customers have most orders?".into() },
+        )
+        .unwrap();
         assert_eq!(p.disclosure.model, DEFAULT_MODEL);
         assert_eq!(p.disclosure.sent, ["Column names and types for 3 tables", "Your question"]);
         assert!(p.disclosure.not_sent.iter().any(|n| n == "Row data"));
         assert_ne!(p.disclosure.tables[0], "public.audit_log");
         assert!(p.system.contains("public.orders(id bigint not null pk)"));
-        assert!(prepare(&Settings::default(), SqlFlavor::Mysql, "", &model(), &AiRequest::Sql { question: " ".into() }).is_err());
+        assert!(
+            prepare(&Settings::default(), SqlFlavor::Mysql, "", &model(), &AiRequest::Sql { question: " ".into() })
+                .is_err()
+        );
     }
 
     #[test]

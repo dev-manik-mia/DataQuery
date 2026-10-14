@@ -27,6 +27,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let store = Store::open(&data_dir.join("dataquery.db")).map_err(|e| e.message)?;
@@ -93,6 +95,8 @@ pub fn run() {
             commands::table::row_count,
             commands::table::preview_changes,
             commands::table::apply_changes,
+            commands::table::cell_value,
+            commands::table::save_cell,
             commands::transfer::export_data,
             commands::transfer::import_preview,
             commands::transfer::import_data,

@@ -480,7 +480,7 @@ async fn export_and_import_round_trip() -> DbResult<()> {
     // XLSX export and cancellation.
     let xlsx = dir.path().join("orders.xlsx");
     assert_eq!(ops::export(&*s, &source, ExportFormat::Xlsx, &ExportOptions::default(), &xlsx, &none).await?.rows, 10);
-    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let control = TransferControl::new(cancelled, |_, _| {});
     let err =
         ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &control).await.unwrap_err();

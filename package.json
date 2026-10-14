@@ -12,6 +12,7 @@
     "tauri": "tauri",
     "app": "tauri dev",
     "app:build": "tauri build",
+    "app:release": "tauri build --config src-tauri/tauri.release.conf.json",
     "bindings": "cargo test --workspace --lib export_bindings",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
