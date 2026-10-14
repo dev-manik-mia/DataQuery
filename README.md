@@ -1,7 +1,7 @@
 # DataQuery
 
 A fast, safe desktop database client: Tauri 2, a Rust core and a React + TypeScript UI.
-Supports **PostgreSQL**, **CockroachDB**, **MySQL**, **MariaDB**, **SQL Server**, **Oracle**, **ClickHouse**, **DuckDB**, **Snowflake**, **MongoDB**, **DynamoDB**, **Redis** and **Valkey**. Passwords live in the OS keychain, and there is no telemetry, account or cloud service.
+Supports **PostgreSQL**, **CockroachDB**, **MySQL**, **MariaDB**, **SQL Server**, **Oracle**, **ClickHouse**, **DuckDB**, **Snowflake**, **MongoDB**, **DynamoDB**, **Redis**, **Valkey**, **Cassandra** and **ScyllaDB**. Passwords live in the OS keychain, and there is no telemetry, account or cloud service.
 
 Feature status: [`feature_completed.md`](feature_completed.md) · Task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) · Designs: [`html/`](html)
 
@@ -39,7 +39,8 @@ npm run db:up        # PostgreSQL 17 :55432, MySQL 8.4 :53306, MariaDB 11.4 :533
                      # SQL Server 2022 :51433, Oracle 23ai Free :51521 (service FREEPDB1), CockroachDB :56257,
                      # ClickHouse 25.8 HTTP :58123, fakesnow (Snowflake emulator) :58000,
                      # MongoDB 8.0 replica set :57017, DynamoDB Local :58002,
-                     # Redis 8 :56379, Valkey 8 :56380 (password dataquery)
+                     # Redis 8 :56379, Valkey 8 :56380 (password dataquery),
+                     # Cassandra 5.0 :59042 (cassandra/cassandra), ScyllaDB 2025.1 :59043
 npm run db:down
 ```
 
@@ -81,6 +82,14 @@ Redis and Valkey connections take a host, an optional ACL user, a password and a
 `SCAN` (never `KEYS`); keys open in tabs with an editor per type and a `redis-cli`-style console, where
 `FLUSHALL`, `FLUSHDB`, `DEBUG`, `KEYS` and other dangerous commands ask for confirmation first.
 
+### Cassandra and ScyllaDB connections
+
+Cassandra and ScyllaDB connections take one or more contact points (`node1,node2:9043`), an optional user, a
+keyspace and an optional local datacenter. The editor shows consistency and page-size selectors and a banner that
+says whether the statement reads one partition or scans (`ALLOW FILTERING`); result headers mark partition (`PK`)
+and clustering (`CK ↑/↓`) columns. All test databases together need more than 8 GB of Docker memory; stop
+`cassandra` and `scylla` (or other groups) when memory is short.
+
 The SSH bastion reaches the databases by service name (`postgres:5432`, …) for the tunnel tests.
 
 ## Checks
@@ -110,6 +119,7 @@ crates/
   dq-mongodb    MongoDB adapter (official driver): mongosh-style statements, documents, killOp cancel.
   dq-dynamodb   DynamoDB adapter (own SigV4 client): PartiQL, documents, conditional writes.
   dq-redis      Redis and Valkey adapter (redis-rs): SCAN key browser, typed editors, redis-cli console.
+  dq-cassandra  Cassandra and ScyllaDB adapter (scylla driver): CQL, prepared binding, LWT edits, traces.
   dq-store      Local SQLite store (connections, settings, history, scripts, snippets) and keychain.
   dq-ssh        SSH tunnels (russh): jump hosts, password/key/agent auth, host-key verification.
 src-tauri/      Tauri app: thin async commands, adapter registry, connector (secrets, IAM tokens,
@@ -124,7 +134,7 @@ src/            React UI: components/ (design system), features/ (screens), stor
 ### Safety rules the code enforces
 
 - Values reach SQL only as bound parameters (also user `$n`/`?`/`@Pn`/`:n` parameters, FK navigation and column search). Identifiers are always quoted by the engine's `Dialect`; user-typed types, defaults and checks must be single expressions.
-- Read-only connections are read-only on the server session (PostgreSQL, CockroachDB, MySQL, ClickHouse `readonly=2`, DuckDB read-only file access), and the backend refuses grid edits, imports and schema changes. SQL Server, Oracle, Snowflake, MongoDB, DynamoDB, Redis and Valkey have no such session mode, so DataQuery also refuses writing statements there.
+- Read-only connections are read-only on the server session (PostgreSQL, CockroachDB, MySQL, ClickHouse `readonly=2`, DuckDB read-only file access), and the backend refuses grid edits, imports and schema changes. SQL Server, Oracle, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Cassandra and ScyllaDB have no such session mode, so DataQuery also refuses writing statements there.
 - Secrets (passwords, SSH passwords/passphrases, the AI key) live only in the keychain; cloud IAM tokens are fetched per connect and never stored.
 - Results are always bounded. Exports stream to disk.
 - Table views and exports run on **read-only** connections. Grid edits run in one transaction, and each change must affect exactly one row or everything rolls back.

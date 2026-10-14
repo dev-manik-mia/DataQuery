@@ -468,7 +468,7 @@ function About() {
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
         <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
-        <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon). Integration tests run against PostgreSQL 17, CockroachDB 25.2, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle 23ai Free, ClickHouse 25.8, DuckDB 1.5, MongoDB 8.0 (replica set) and an OpenSSH bastion; Snowflake against the fakesnow emulator and DynamoDB against DynamoDB Local only. Oracle needs Oracle Instant Client on this computer. Windows and Linux builds compile from the same code but have not been run." />
+        <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon). Integration tests run against PostgreSQL 17, CockroachDB 25.2, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle 23ai Free, ClickHouse 25.8, DuckDB 1.5, MongoDB 8.0 (replica set), Redis 8, Valkey 8, Cassandra 5.0, ScyllaDB 2025.1 and an OpenSSH bastion; Snowflake against the fakesnow emulator and DynamoDB against DynamoDB Local only. Oracle needs Oracle Instant Client on this computer. Windows and Linux builds compile from the same code but have not been run." />
       </Card>
       <UpdatesCard />
       <Card title={`Release notes · ${info?.version ?? ''}`} flush>
