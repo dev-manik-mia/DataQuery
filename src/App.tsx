@@ -20,6 +20,7 @@ import { formatCount, formatDuration } from '@/lib/format';
 import { CommandPalette } from '@/features/commands/CommandPalette';
 import { appCommands, commandKeys, openNewWindow } from '@/features/commands/commands';
 import { SchemaDiffPage } from '@/features/schema/SchemaDiffPage';
+import { checkForUpdate } from '@/features/settings/Updates';
 import { setLanguage, t } from '@/i18n';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
 import { useConnections, useEngine } from '@/stores/connections';
@@ -37,7 +38,15 @@ export function App() {
   const theme = useSettings((s) => s.settings.theme);
 
   useEffect(() => {
-    void useSettings.getState().load();
+    void useSettings
+      .getState()
+      .load()
+      .then(() => {
+        if (!useSettings.getState().settings.check_updates_on_launch) return;
+        checkForUpdate()
+          .then((u) => u && useUi.getState().toast(`DataQuery ${u.version} is available. Install it from Settings → About.`))
+          .catch(() => undefined);
+      });
     void useConnections.getState().load();
     void useLayout.getState().load();
     void useCompletion.getState().loadSnippets();

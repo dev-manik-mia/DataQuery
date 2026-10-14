@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 
 import { Button, Dialog, TextField } from '@/components/ui';
+import { t } from '@/i18n';
 import { ExportDialog } from '@/features/transfer/ExportDialog';
 import { useExportRequest } from '@/features/transfer/exportData';
 import { useUi } from '@/stores/ui';
@@ -29,9 +30,9 @@ function ConfirmationDialog() {
       initialFocus={needsName ? inputRef : undefined}
       footer={
         <>
-          <Button onClick={() => close(false)}>Cancel</Button>
+          <Button onClick={() => close(false)}>{t('action.cancel')}</Button>
           <Button variant={request.destructive ? 'danger' : 'primary'} disabled={!matches} onClick={() => close(true)}>
-            {request.destructive ? 'Run anyway' : 'Run on production'}
+            {request.destructive ? t('confirm.runAnyway') : t('confirm.runOnProduction')}
           </Button>
         </>
       }

@@ -96,14 +96,9 @@ function ResultActions({ result, index }: { result: ResultSet; index: number }) 
       <Button
         size="xs"
         title="Re-runs the statement on a read-only connection and streams every row to disk"
-        onClick={(e) =>
-          open(e, [
-            { label: 'Export CSV…', onSelect: () => void exportData({ type: 'query', sql: result.sql }, 'csv', base) },
-            { label: 'Export JSON…', onSelect: () => void exportData({ type: 'query', sql: result.sql }, 'json', base) },
-          ])
-        }
+        onClick={() => exportData({ type: 'query', sql: result.sql }, 'csv', base)}
       >
-        Export
+        Export…
       </Button>
       {menu && <Menu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
     </div>

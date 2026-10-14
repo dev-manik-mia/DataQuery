@@ -13,7 +13,7 @@ import type { SavedConnection } from '@/bindings/SavedConnection';
 
 type Args = Record<string, unknown>;
 
-const caps = { explorer: true, query_editor: true, grid_edit: true, import_export: true, cancel: true, ddl: true, schemas: true, materialized_views: true, explain: false, monitoring: false, transactions: false, schema_diff: false };
+const caps = { explorer: true, query_editor: true, grid_edit: true, import_export: true, cancel: true, ddl: true, schemas: true, materialized_views: true, explain: true, monitoring: true, transactions: true, schema_diff: true };
 const none = { ...caps, explorer: false, query_editor: false, grid_edit: false, import_export: false, cancel: false, ddl: false };
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
   ({ engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, file_based: port === null, capabilities: available ? caps : none }) as EngineInfo;
@@ -32,7 +32,7 @@ const ENGINES: EngineInfo[] = [
 ];
 
 const conn = (id: string, name: string, environment: string, host: string, database: string, folder: string | null, favorite: boolean, used: number | null): SavedConnection =>
-  ({ id, name, folder_id: folder, environment, favorite, has_password: true, created_at: 0, last_used_at: used, config: { engine: 'postgres', host, port: 5432, database, username: 'app_readonly', ssl_mode: 'verify-full', connect_timeout_secs: 10 } }) as SavedConnection;
+  ({ id, name, folder_id: folder, environment, favorite, has_password: true, created_at: 0, last_used_at: used, ssh_secrets: [], config: { engine: 'postgres', host, port: 5432, database, username: 'app_readonly', ssl_mode: 'verify-full', connect_timeout_secs: 10, tls_files: { ca_file: null, client_cert_file: null, client_key_file: null }, ssh: null, read_only: false, options: { keepalive_secs: 60, connect_retries: 0, idle_timeout_mins: 0, pool_size: 4 }, auth: { method: 'password' } } }) as SavedConnection;
 
 const now = Date.now();
 const CONNECTIONS = [
@@ -43,7 +43,7 @@ const CONNECTIONS = [
 ];
 
 const obj = (kind: string, database: string, schema: string | null, name: string, extra: Partial<Node> = {}): Node =>
-  ({ kind, database, schema, name, expandable: kind === 'database' || kind === 'schema', row_estimate: null, comment: null, current: false, ...extra }) as Node;
+  ({ kind, database, schema, name, expandable: ['database', 'schema', 'table', 'group'].includes(kind), row_estimate: null, comment: null, current: false, ...extra }) as Node;
 
 const text = (value: string): Cell => ({ kind: 'text', value });
 const num = (value: string): Cell => ({ kind: 'number', value });
@@ -71,7 +71,7 @@ const ORDER_COLS = [
 ] as const;
 
 function split(sql: string) {
-  const out: { from: number; to: number; kind: string; writes: boolean; destructive: string | null; has_params: boolean }[] = [];
+  const out: { from: number; to: number; kind: string; writes: boolean; destructive: string | null; has_params: boolean; param_count: number }[] = [];
   let start = 0;
   for (let i = 0; i <= sql.length; i += 1) {
     if (i === sql.length || sql[i] === ';') {
@@ -80,7 +80,8 @@ function split(sql: string) {
       if (chunk.trim()) {
         const body = chunk.trim();
         const destructive = /^\s*(drop)/i.test(body) ? 'drop' : /^\s*delete\b(?![\s\S]*\bwhere\b)/i.test(body) ? 'delete_without_where' : null;
-        out.push({ from: start + lead, to: start + lead + body.length, kind: 'select', writes: !/^\s*(select|with|show)/i.test(body), destructive, has_params: false });
+        const params = body.match(/\$\d+/g)?.map((m) => Number(m.slice(1))) ?? [];
+        out.push({ from: start + lead, to: start + lead + body.length, kind: 'select', writes: !/^\s*(select|with|show)/i.test(body), destructive, has_params: params.length > 0, param_count: Math.max(0, ...params) });
       }
       start = i + 1;
     }
@@ -94,14 +95,40 @@ const handlers: Record<string, (a: Args) => unknown> = {
   keychain_status: () => ({ available: true, backend: 'macOS Keychain', detail: null }),
   analyze_sql: (a) => split(String(a.sql)),
   format_sql: (a) => String(a.sql),
-  get_settings: () => ({ theme: 'dark', row_limit: 500, timeout_secs: 30, confirm_destructive: true, confirm_production_writes: true, keep_history: true, editor_font_size: 13, page_size: 100 }),
+  get_settings: () => ({
+    theme: 'dark',
+    language: 'en',
+    row_limit: 500,
+    timeout_secs: 30,
+    confirm_destructive: true,
+    confirm_production_writes: true,
+    keep_history: true,
+    editor_font_size: 13,
+    editor_font_family: 'JetBrains Mono',
+    editor_line_height: 150,
+    editor_ligatures: false,
+    keymap: {},
+    page_size: 100,
+    manual_commit: false,
+    mask_columns: true,
+    mask_patterns: ['password', 'token', 'secret'],
+    history_max_entries: 20000,
+    history_max_days: 0,
+    history_redact_literals: false,
+    autosave_scripts: true,
+    ai_enabled: true,
+    ai_provider: 'anthropic',
+    ai_model: '',
+    ai_endpoint: 'http://localhost:11434/v1',
+    check_updates_on_launch: false,
+  }),
   save_settings: (a) => a.settings,
   get_ui_state: () => null,
   set_ui_state: () => null,
   list_connections: () => ({ connections: CONNECTIONS, folders: [{ id: 'f1', name: 'Kestrel' }] }),
   connect: (a) => {
     const c = CONNECTIONS.find((x) => x.id === a.connectionId)!;
-    return { session_id: `s-${c.id}`, connection: c, capabilities: caps, flavor: 'postgres', server: { engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: c.config.database, read_only: false } };
+    return { session_id: `s-${c.id}`, connection: c, capabilities: caps, flavor: 'postgres', tunneled: false, insecure: null, server: { engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: c.config.database, read_only: false } };
   },
   reconnect: (a) => handlers.connect!({ connectionId: String(a.sessionId).replace(/^s-/, '') }),
   disconnect: () => null,
@@ -109,6 +136,8 @@ const handlers: Record<string, (a: Args) => unknown> = {
     const p = a.parent as Node | null;
     if (!p) return [obj('database', 'app_dev', null, 'app_dev', { current: true }), obj('database', 'analytics', null, 'analytics'), obj('database', 'postgres', null, 'postgres')];
     if (p.kind === 'database') return ['public', 'billing', 'audit'].map((s, i) => obj('schema', p.name, s, s, { row_estimate: [8, 3, 2][i]! }));
+    if (p.kind === 'table') return [obj('index', p.database, p.schema, `${p.name}_pkey`, { parent: p.name }), obj('trigger', p.database, p.schema, `${p.name}_touch`, { parent: p.name })];
+    if (p.kind === 'group') return [obj('function', p.database, p.schema, 'touch', { parent: '' }), obj('function', p.database, p.schema, 'add', { parent: 'a integer, b integer' })];
     return [
       obj('table', p.database, p.name, 'customers', { row_estimate: 12040 }),
       obj('table', p.database, p.name, 'invoices', { row_estimate: 3100 }),
@@ -118,11 +147,50 @@ const handlers: Record<string, (a: Args) => unknown> = {
       obj('table', p.database, p.name, 'sessions', { row_estimate: 1200000 }),
       obj('view', p.database, p.name, 'active_customers'),
       obj('materialized_view', p.database, p.name, 'daily_revenue', { row_estimate: 365 }),
+      obj('group', p.database, p.name, 'functions', { row_estimate: 2 }),
     ];
   },
   search_objects: (a) => ['orders', 'order_items'].filter((n) => n.includes(String(a.query))).map((n) => obj('table', 'app_dev', 'public', n)),
   qualified_name: (a) => `public.${(a.object as Node).name}`,
-  generate_select: (a) => `SELECT *\nFROM public.${(a.object as Node).name}\nLIMIT 100;`,
+  generate_sql: (a) => `-- ${String(a.kind)}\nSELECT *\nFROM public.${(a.object as Node).name}\nLIMIT 100;`,
+  object_dependencies: () => ({ uses: [{ object: obj('table', 'app_dev', 'public', 'customers'), relation: 'foreign key orders_customer_fk' }], used_by: [{ object: obj('view', 'app_dev', 'public', 'paid_orders'), relation: 'view' }] }),
+  schema_model: () => ({
+    truncated: false,
+    tables: ['customers', 'orders', 'invoices', 'line_items', 'products'].map((n) => ({ object: obj('table', 'app_dev', 'public', n), columns: [{ name: 'id', data_type: 'bigint', nullable: false, primary_key: true }, { name: `${n}_name`, data_type: 'text', nullable: true, primary_key: false }, { name: 'customer_id', data_type: 'bigint', nullable: true, primary_key: false }] })),
+    foreign_keys: [
+      { name: 'orders_customer_fk', source: obj('table', 'app_dev', 'public', 'orders'), columns: ['customer_id'], target: obj('table', 'app_dev', 'public', 'customers'), target_columns: ['id'], on_update: null, on_delete: null },
+      { name: 'invoices_customer_fk', source: obj('table', 'app_dev', 'public', 'invoices'), columns: ['customer_id'], target: obj('table', 'app_dev', 'public', 'customers'), target_columns: ['id'], on_update: null, on_delete: null },
+    ],
+  }),
+  explain: () => ({
+    analyzed: false,
+    planning_ms: 0.2,
+    execution_ms: null,
+    raw: '[...]',
+    plan: { label: 'Sort', detail: null, cost: 42.1, rows: 500, actual_ms: null, actual_rows: null, loops: null, props: [['Sort Key', 'total DESC']], children: [{ label: 'Seq Scan', detail: 'public.orders', cost: 30, rows: 500, actual_ms: null, actual_rows: null, loops: null, props: [['Filter', "(status = 'paid'::text)"]], children: [] }] },
+  }),
+  transaction: (a) => (a.action === 'begin' ? 'open' : 'auto'),
+  monitor_snapshot: () => ({
+    version: 'PostgreSQL 16.4',
+    connections: { used: 142, max: 200 },
+    active_queries: 7,
+    long_running: 2,
+    blocked: 1,
+    replication: { role: 'primary', lag_secs: 0.4, replicas: 1, state: 'streaming' },
+    processes: [
+      { pid: 48211, user: 'app', database: 'app', client: '10.0.0.4', state: 'active', duration_ms: 42000, query: 'UPDATE public.orders SET status = $1 WHERE id = $2', wait: null, blocked_by: [], active: true },
+      { pid: 48230, user: 'report', database: 'app', client: '10.0.0.9', state: 'active', duration_ms: 3100, query: 'SELECT * FROM public.orders WHERE id = 1 FOR UPDATE', wait: 'Lock: transactionid', blocked_by: [48211], active: true },
+    ],
+    locks: [{ pid: 48230, lock_type: 'transactionid', mode: 'ShareLock', granted: false, object: null }],
+    unavailable: [],
+  }),
+  server_settings: () => [{ name: 'max_connections', value: '200', unit: null, category: 'Connections', description: 'Sets the maximum number of concurrent connections.' }],
+  largest_tables: () => [{ object: obj('table', 'app_dev', 'public', 'sessions'), total_bytes: 734003200, table_bytes: 524288000, index_bytes: 209715200, rows: 1200000 }],
+  framework_migrations: () => [{ framework: 'Prisma', table: obj('table', 'app_dev', 'public', '_prisma_migrations'), entries: [{ version: 'a1', name: '20260101_init', applied_at: '2026-01-01 10:00:00', status: 'applied', batch: null }] }],
+  list_snippets: () => [{ id: 'sn1', name: 'Count rows', prefix: 'cnt', body: 'SELECT count(*) FROM ${1:table};', updated_at: now }],
+  ai_key_status: () => true,
+  ai_disclosure: () => ({ provider: 'Anthropic', model: 'claude-opus-5-5', sent: ['Column names and types for 5 tables', 'Your question'], not_sent: ['Credentials and connection details', 'Row data', 'Query results'], tables: ['public.orders', 'public.customers'], characters: 1800 }),
+  ai_ask: () => ({ text: 'Here is a query:\n```sql\nSELECT 1;\n```', sql: 'SELECT 1;', model: 'claude-opus-5-5', disclosure: null }),
   run_sql: (a) => {
     const sql = String(a.sql);
     const parts = split(sql);
@@ -143,19 +211,21 @@ const handlers: Record<string, (a: Args) => unknown> = {
         result: { columns: ORDER_COLS.map(([name, type_name, numeric]) => ({ name, type_name, numeric })), rows: Array.from({ length: 500 }, (_, i) => orderRow(i)), has_more: true, command: 'SELECT', affected: null, duration_ms: 142, notices: [] },
       };
     });
-    return { status: 'done', value: { outcomes, skipped: 0, duration_ms: 150 } };
+    return { status: 'done', value: { outcomes, skipped: 0, duration_ms: 150, tx: 'auto' } };
   },
   fetch_more: () => ({ rows: Array.from({ length: 500 }, (_, i) => orderRow(i + 500)), has_more: false, duration_ms: 40 }),
   cancel_query: () => true,
   table_structure: (a) => ({
     object: a.object,
-    columns: ORDER_COLS.map(([name, data_type, numeric]) => ({ name, data_type, numeric, nullable: name === 'discount' || name === 'notes', default: name === 'status' ? "'pending'::text" : name === 'created_at' ? 'now()' : null, primary_key: name === 'id', generated: name === 'id', editable: name !== 'id', comment: null })),
+    columns: ORDER_COLS.map(([name, data_type, numeric]) => ({ name, data_type, numeric, nullable: name === 'discount' || name === 'notes', default: name === 'status' ? "'pending'::text" : name === 'created_at' ? 'now()' : null, primary_key: name === 'id', generated: name === 'id', identity: name === 'id', editable: name !== 'id', comment: null })),
+    foreign_keys: [],
+    size: { total_bytes: 9437184, table_bytes: 7340032, index_bytes: 2097152 },
     constraints: [
       { kind: 'primary_key', name: 'orders_pkey', definition: 'PRIMARY KEY (id)' },
       { kind: 'foreign_key', name: 'orders_customer_fk', definition: 'FOREIGN KEY (customer_id) REFERENCES customers(id)' },
       { kind: 'check', name: 'orders_status_check', definition: "CHECK (status = ANY (ARRAY['pending'::text, 'paid'::text]))" },
     ],
-    indexes: [{ name: 'orders_created_at_idx', definition: 'CREATE INDEX orders_created_at_idx ON public.orders USING btree (created_at DESC)', unique: false, primary: false }],
+    indexes: [{ name: 'orders_created_at_idx', definition: 'CREATE INDEX orders_created_at_idx ON public.orders USING btree (created_at DESC)', unique: false, primary: false, columns: ['created_at'], size_bytes: 524288 }],
     row_identity: ['id'],
     full_row_key: [],
     comment: null,
@@ -177,7 +247,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
       { id: 1, connection_id: 'c2', connection_name: 'kestrel-staging', database: 'app', sql: 'ALTER TABLE public.orders ADD COLUMN refunded_at timestamptz;', executed_at: now - 86_400_000, duration_ms: 15, status: 'error', rows: null, error: 'permission denied for table orders' },
     ],
   }),
-  list_scripts: () => [{ id: 'sc1', name: 'paid-orders', sql: "SELECT * FROM public.orders WHERE status = 'paid';", connection_id: 'c1', created_at: now, updated_at: now }],
+  list_scripts: () => [{ id: 'sc1', name: 'paid-orders', sql: "SELECT * FROM public.orders WHERE status = 'paid';", connection_id: 'c1', created_at: now, updated_at: now, folder: 'Reports', tags: ['billing'], pinned: true }],
   test_connection: () => ({ engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: 'app_dev', read_only: false }),
   parse_url: () => {
     throw { kind: 'invalid_input', code: null, message: 'This is not a valid connection URL.', detail: null, hint: null, action: null, position: null };
