@@ -161,7 +161,7 @@ pub async fn inspect(session: &dyn Session, model: &SchemaModel) -> DbResult<Vec
             .collect::<Vec<_>>()
             .join(" ");
         let sql = format!(
-            "SELECT {}, {}, {}, {}, {} FROM {} ORDER BY {order} LIMIT {MAX_ROWS}",
+            "SELECT {}, {}, {}, {}, {} FROM {} ORDER BY {order}",
             cast(version),
             cast(name),
             cast(applied),
@@ -169,6 +169,7 @@ pub async fn inspect(session: &dyn Session, model: &SchemaModel) -> DbResult<Vec
             cast(batch),
             d.quoted_name(&table.object),
         );
+        let sql = d.paginate(&sql, true, 0, MAX_ROWS as u64);
         let (_, rows) = session.read_query(&table.object.database, &sql, &[], CellLimits::GRID).await?;
         let text = |row: &[crate::value::Cell], i: usize| row.get(i).and_then(crate::value::Cell::to_text);
         out.push(FrameworkMigrations {

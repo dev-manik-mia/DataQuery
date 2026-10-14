@@ -284,7 +284,11 @@ pub async fn import(
 
     // Pass 2: insert the valid rows.
     let dialect = session.dialect();
-    let batch_rows = options.batch_rows.clamp(1, 5_000) as usize;
+    // Stay inside the engine's limits on rows per INSERT and parameters per statement.
+    let batch_rows = (options.batch_rows.clamp(1, 5_000) as usize)
+        .min(dialect.max_insert_rows())
+        .min(dialect.max_params() / columns.len().max(1))
+        .max(1);
     let commit_rows = if options.commit_rows == 0 { usize::MAX } else { options.commit_rows as usize };
     let mut skip = invalid_rows.into_iter().peekable();
     let mut rows = transfer::rows(source, fields)?

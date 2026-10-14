@@ -72,7 +72,7 @@ pub fn select_list(d: &dyn Dialect, columns: &[ColumnInfo]) -> String {
         .iter()
         .map(|c| {
             let q = d.quote_ident(&c.name);
-            if c.read_as_text { format!("{} AS {q}", d.cast_to_text(&q)) } else { q }
+            if c.read_as_text { format!("{} AS {q}", d.text_expr(&q, &c.data_type)) } else { q }
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -134,22 +134,32 @@ fn order_clause(d: &dyn Dialect, structure: &TableStructure, sort: Option<&SortS
     Ok(format!(" ORDER BY {}", keys.join(", ")))
 }
 
-/// Unbounded select used by the table view (with `LIMIT`) and table export (without).
+/// Unbounded select used by the table view (paged) and table export (not).
 pub fn table_select(
     d: &dyn Dialect,
     structure: &TableStructure,
     rows: &RowFilter,
     sort: Option<&SortSpec>,
 ) -> DbResult<BoundQuery> {
+    Ok(ordered_select(d, structure, rows, sort)?.0)
+}
+
+/// The table select and whether it ends with `ORDER BY`.
+fn ordered_select(
+    d: &dyn Dialect,
+    structure: &TableStructure,
+    rows: &RowFilter,
+    sort: Option<&SortSpec>,
+) -> DbResult<(BoundQuery, bool)> {
     let mut p = Params { dialect: d, inline: false, values: Vec::new() };
     let where_ = where_clause(&mut p, structure, rows)?;
+    let order = order_clause(d, structure, sort)?;
     let sql = format!(
-        "SELECT {} FROM {}{where_}{}",
+        "SELECT {} FROM {}{where_}{order}",
         select_list(d, &structure.columns),
-        d.quoted_name(&structure.object),
-        order_clause(d, structure, sort)?
+        d.quoted_name(&structure.object)
     );
-    Ok(BoundQuery { sql, params: p.values })
+    Ok((BoundQuery { sql, params: p.values }, !order.is_empty()))
 }
 
 /// Page query; fetches one extra row to know whether another page exists.
@@ -161,8 +171,8 @@ pub fn page_query(
     offset: u64,
     limit: u32,
 ) -> DbResult<BoundQuery> {
-    let mut q = table_select(d, structure, rows, sort)?;
-    q.sql = format!("{} LIMIT {} OFFSET {offset}", q.sql, u64::from(limit) + 1);
+    let (mut q, ordered) = ordered_select(d, structure, rows, sort)?;
+    q.sql = d.paginate(&q.sql, ordered, offset, u64::from(limit) + 1);
     Ok(q)
 }
 
@@ -181,11 +191,9 @@ pub fn cell_query(
     let rows = RowFilter { matches: key.to_vec(), ..RowFilter::default() };
     let where_ = where_clause(&mut p, structure, &rows)?;
     let q = d.quote_ident(&col.name);
-    let select = if col.read_as_text { format!("{} AS {q}", d.cast_to_text(&q)) } else { q };
-    Ok(BoundQuery {
-        sql: format!("SELECT {select} FROM {}{where_} LIMIT 2", d.quoted_name(&structure.object)),
-        params: p.values,
-    })
+    let select = if col.read_as_text { format!("{} AS {q}", d.text_expr(&q, &col.data_type)) } else { q };
+    let sql = format!("SELECT {select} FROM {}{where_}", d.quoted_name(&structure.object));
+    Ok(BoundQuery { sql: d.paginate(&sql, false, 0, 2), params: p.values })
 }
 
 pub fn count_query(d: &dyn Dialect, structure: &TableStructure, rows: &RowFilter) -> DbResult<BoundQuery> {
@@ -197,29 +205,30 @@ pub fn count_query(d: &dyn Dialect, structure: &TableStructure, rows: &RowFilter
     })
 }
 
-/// `SELECT … LIMIT 100;` template for "Generate SELECT".
+/// `SELECT` template of the first 100 rows, for "Generate SELECT".
 pub fn select_template(d: &dyn Dialect, object: &ObjectRef, columns: &[String]) -> String {
     let list = if columns.is_empty() {
         "*".to_owned()
     } else {
         columns.iter().map(|c| d.display_ident(c)).collect::<Vec<_>>().join(", ")
     };
-    format!("SELECT {list}\nFROM {}\nLIMIT 100;", d.display_name(object))
+    let name = d.display_name(object);
+    if d.flavor() == super::SqlFlavor::Sqlserver {
+        return format!("SELECT TOP (100) {list}\nFROM {name};");
+    }
+    format!("SELECT {list}\nFROM {name}\n{};", d.paginate("", true, 0, 100).trim_start())
 }
 
-/// Placeholder text for templates: `$n` (PostgreSQL) or `?` (MySQL).
 fn template_placeholder(d: &dyn Dialect, n: usize) -> String {
-    match d.flavor() {
-        super::SqlFlavor::Postgres => format!("${n}"),
-        super::SqlFlavor::Mysql => "?".to_owned(),
-    }
+    d.template_placeholder(n)
 }
 
 /// `INSERT` template with a placeholder per insertable column. Never executed by the app.
 pub fn insert_template(d: &dyn Dialect, structure: &TableStructure) -> String {
     let cols: Vec<&ColumnInfo> = structure.columns.iter().filter(|c| c.editable && !c.generated).collect();
     if cols.is_empty() {
-        return format!("INSERT INTO {} DEFAULT VALUES;", d.display_name(&structure.object));
+        let first = structure.columns.first().map(|c| d.display_ident(&c.name));
+        return format!("{};", d.insert_defaults(&d.display_name(&structure.object), first.as_deref()));
     }
     let names: Vec<String> = cols.iter().map(|c| d.display_ident(&c.name)).collect();
     let values: Vec<String> = (1..=cols.len()).map(|n| template_placeholder(d, n)).collect();
@@ -334,7 +343,8 @@ fn build_one(p: &mut Params<'_>, structure: &TableStructure, change: &RowChange)
         RowChange::Insert { values } => {
             check_values(structure, values)?;
             if values.is_empty() {
-                (format!("INSERT INTO {table} DEFAULT VALUES"), Some(1))
+                let first = structure.columns.first().map(|c| d.quote_ident(&c.name));
+                (d.insert_defaults(&table, first.as_deref()), Some(1))
             } else {
                 let names: Vec<_> = values.iter().map(|v| d.quote_ident(&v.column)).collect();
                 let mut placeholders = Vec::with_capacity(values.len());
@@ -424,12 +434,7 @@ pub fn insert_batch(
     }
     let names: Vec<_> = cols.iter().map(|c| d.quote_ident(&c.name)).collect();
     Ok(BoundStatement {
-        sql: format!(
-            "INSERT INTO {} ({}) VALUES {}",
-            d.quoted_name(&structure.object),
-            names.join(", "),
-            tuples.join(", ")
-        ),
+        sql: d.multi_insert(&d.quoted_name(&structure.object), &names.join(", "), &tuples),
         params: p.values,
         expect_rows: Some(rows.len() as u64),
     })

@@ -321,7 +321,12 @@ pub fn file_sink(
                 dialect: target.dialect,
                 table,
                 columns: String::new(),
-                batch: options.sql_batch_rows.clamp(1, 10_000) as usize,
+                // Oracle 19c has no multi-row VALUES; one statement per row reads best there.
+                batch: if target.dialect.flavor() == crate::sql::SqlFlavor::Oracle {
+                    1
+                } else {
+                    (options.sql_batch_rows.clamp(1, 10_000) as usize).min(target.dialect.max_insert_rows())
+                },
             })
         }
     })
@@ -505,12 +510,9 @@ impl SqlSink {
         let d = self.dialect;
         match cell {
             Cell::Null | Cell::Unsupported { value: None, .. } => "NULL".into(),
-            Cell::Bool { value } => if *value { "TRUE" } else { "FALSE" }.into(),
+            Cell::Bool { value } => d.bool_literal(*value).into(),
             Cell::Number { value } if value.chars().all(|c| c.is_ascii_digit() || "+-.eE".contains(c)) => value.clone(),
-            Cell::Binary { head_hex, .. } => match d.flavor() {
-                crate::sql::SqlFlavor::Postgres => format!("'\\x{head_hex}'::bytea"),
-                crate::sql::SqlFlavor::Mysql => format!("X'{head_hex}'"),
-            },
+            Cell::Binary { head_hex, .. } => d.binary_literal(head_hex),
             other => d.quote_literal(&other.to_text().unwrap_or_default()),
         }
     }
