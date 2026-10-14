@@ -22,6 +22,24 @@ pub enum Role {
     Write,
 }
 
+/// Server family, detected from `version()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    Postgres,
+    Cockroach,
+}
+
+impl Flavor {
+    pub fn detect(version: &str) -> Self {
+        if version.contains("CockroachDB") { Self::Cockroach } else { Self::Postgres }
+    }
+}
+
+/// The database to connect to when the profile names none.
+fn default_database(engine: Engine) -> &'static str {
+    if engine == Engine::Cockroachdb { "defaultdb" } else { "postgres" }
+}
+
 pub struct Connection {
     pub client: Client,
     pub notices: mpsc::UnboundedReceiver<String>,
@@ -35,7 +53,7 @@ pub async fn open(params: &ConnectParams, database: &str, role: Role, tls: &Make
     pg.host(&config.host)
         .port(params.endpoint.map_or(config.port, |a| a.port()))
         .user(&config.username)
-        .dbname(if database.is_empty() { "postgres" } else { database })
+        .dbname(if database.is_empty() { default_database(config.engine) } else { database })
         .connect_timeout(Duration::from_secs(u64::from(config.connect_timeout_secs)))
         .keepalives(config.options.keepalive_secs > 0)
         .keepalives_idle(Duration::from_secs(u64::from(config.options.keepalive_secs.max(1))))
@@ -90,28 +108,51 @@ pub async fn open(params: &ConnectParams, database: &str, role: Role, tls: &Make
     Ok(Connection { client, notices })
 }
 
-pub async fn server_info(client: &Client, config: &ConnConfig, started: Instant) -> DbResult<ServerInfo> {
-    let row = client
-        .query_one(
-            "SELECT current_setting('server_version'), current_user::text, current_database()::text, \
-                    pg_is_in_recovery(), (SELECT version FROM pg_stat_ssl WHERE pid = pg_backend_pid())",
-            &[],
-        )
-        .await
-        .map_err(|e| map_error(&e, None))?;
-    let version: String = row.get(0);
-    let tls_version: Option<String> = row.get(4);
-    Ok(ServerInfo {
-        engine: Engine::Postgres,
-        version: format!("PostgreSQL {}", version.split_whitespace().next().unwrap_or(&version)),
-        latency_ms: started.elapsed().as_millis() as u64,
-        tls: tls_version.map(|v| TlsInfo {
-            version: Some(v),
-            verified: config.ssl_mode.verifies_chain(),
-            mode: config.ssl_mode,
-        }),
-        user: row.get(1),
-        database: row.get(2),
-        read_only: row.get::<_, bool>(3) || config.read_only,
-    })
+pub async fn server_info(client: &Client, config: &ConnConfig, started: Instant) -> DbResult<(ServerInfo, Flavor)> {
+    let err = |e: tokio_postgres::Error| map_error(&e, None);
+    let banner: String = client.query_one("SELECT version()", &[]).await.map_err(err)?.get(0);
+    let flavor = Flavor::detect(&banner);
+    let info = match flavor {
+        Flavor::Postgres => {
+            let row = client
+                .query_one(
+                    "SELECT current_setting('server_version'), current_user::text, current_database()::text, \
+                            pg_is_in_recovery(), (SELECT version FROM pg_stat_ssl WHERE pid = pg_backend_pid())",
+                    &[],
+                )
+                .await
+                .map_err(err)?;
+            let version: String = row.get(0);
+            let tls_version: Option<String> = row.get(4);
+            ServerInfo {
+                engine: config.engine,
+                version: format!("PostgreSQL {}", version.split_whitespace().next().unwrap_or(&version)),
+                latency_ms: started.elapsed().as_millis() as u64,
+                tls: tls_version.map(|v| TlsInfo {
+                    version: Some(v),
+                    verified: config.ssl_mode.verifies_chain(),
+                    mode: config.ssl_mode,
+                }),
+                user: row.get(1),
+                database: row.get(2),
+                read_only: row.get::<_, bool>(3) || config.read_only,
+            }
+        }
+        Flavor::Cockroach => {
+            let row = client.query_one("SELECT current_user::text, current_database()::text", &[]).await.map_err(err)?;
+            // `CockroachDB CCL v25.2.1 (aarch64-…)`
+            let version = banner.split_whitespace().find(|w| w.starts_with('v')).unwrap_or_default();
+            let tls = !matches!(config.ssl_mode, dq_core::config::SslMode::Disable | dq_core::config::SslMode::Prefer);
+            ServerInfo {
+                engine: config.engine,
+                version: format!("CockroachDB {}", version.trim_start_matches('v')),
+                latency_ms: started.elapsed().as_millis() as u64,
+                tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+                user: row.get(0),
+                database: row.get(1),
+                read_only: config.read_only,
+            }
+        }
+    };
+    Ok((info, flavor))
 }

@@ -85,9 +85,9 @@ pub async fn schemas(conn: &mut Conn, database: &str) -> DbResult<Vec<Node>> {
         .collect())
 }
 
-const RELATION_SELECT: &str = "SELECT s.name, o.name, o.type, \
-       (SELECT SUM(p.rows) FROM sys.partitions p WHERE p.object_id = o.object_id AND p.index_id IN (0, 1)), \
-       CAST(ep.value AS nvarchar(4000)) \
+const RELATION_SELECT: &str = "SELECT s.name AS schema_name, o.name, o.type, \
+       (SELECT SUM(p.rows) FROM sys.partitions p WHERE p.object_id = o.object_id AND p.index_id IN (0, 1)) AS estimate, \
+       CAST(ep.value AS nvarchar(4000)) AS comment \
 FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id \
 LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 \
      AND ep.name = 'MS_Description' \

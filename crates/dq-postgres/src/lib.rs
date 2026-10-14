@@ -1,5 +1,7 @@
 //! PostgreSQL adapter for DataQuery (versions 12–17, plus wire-compatible
-//! services such as Supabase, Neon and Timescale).
+//! services such as Supabase, Neon and Timescale). It also serves CockroachDB,
+//! which speaks the PostgreSQL protocol; the few catalog differences are
+//! handled where they occur (see `connect::Flavor`).
 
 mod catalog;
 mod connect;
@@ -19,10 +21,22 @@ use dq_core::result::ServerInfo;
 
 pub use session::PgSession;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PostgresAdapter;
+/// One adapter serves both engines; the server family is detected on connect.
+#[derive(Debug, Clone, Copy)]
+pub struct PostgresAdapter {
+    engine: Engine,
+}
+
+impl Default for PostgresAdapter {
+    fn default() -> Self {
+        Self::POSTGRES
+    }
+}
 
 impl PostgresAdapter {
+    pub const POSTGRES: Self = Self { engine: Engine::Postgres };
+    pub const COCKROACH: Self = Self { engine: Engine::Cockroachdb };
+
     pub const CAPABILITIES: Capabilities = Capabilities {
         explorer: true,
         query_editor: true,
@@ -50,7 +64,7 @@ impl PostgresAdapter {
 #[async_trait]
 impl DatabaseAdapter for PostgresAdapter {
     fn engine(&self) -> Engine {
-        Engine::Postgres
+        self.engine
     }
 
     fn capabilities(&self) -> Capabilities {

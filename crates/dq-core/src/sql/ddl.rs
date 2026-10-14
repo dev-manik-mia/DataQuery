@@ -265,16 +265,18 @@ fn mysql_modify(
     Ok(out)
 }
 
-/// SQL Server statement that drops the default constraint of `column`, if it has one.
+/// SQL Server statement that drops the default constraint of `column`, if it
+/// has one. It has no `;` inside, so it stays one statement when split.
 fn sqlserver_drop_default(d: &dyn Dialect, table: &ObjectRef, column: &str) -> String {
     let table_literal = d.quote_literal(&d.quoted_name(table));
     let column_literal = d.quote_literal(column);
+    let drop = d.quote_literal(&format!("ALTER TABLE {} DROP CONSTRAINT ", d.quoted_name(table)));
     format!(
         "DECLARE @dq_default sysname = (SELECT dc.name FROM sys.default_constraints dc \
          JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id \
-         WHERE dc.parent_object_id = OBJECT_ID({table_literal}) AND c.name = {column_literal});\n\
-         IF @dq_default IS NOT NULL EXEC(N'ALTER TABLE {} DROP CONSTRAINT ' + QUOTENAME(@dq_default))",
-        d.quoted_name(table).replace('\'', "''")
+         WHERE dc.parent_object_id = OBJECT_ID({table_literal}) AND c.name = {column_literal})\n\
+         DECLARE @dq_sql nvarchar(max) = {drop} + QUOTENAME(@dq_default)\n\
+         IF @dq_default IS NOT NULL EXEC (@dq_sql)"
     )
 }
 
