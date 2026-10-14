@@ -1,18 +1,20 @@
-import { useMemo, useRef, type KeyboardEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { Node } from '@/bindings/Node';
+import type { TableStructure } from '@/bindings/TableStructure';
+import type { TemplateKind } from '@/bindings/TemplateKind';
+import { CreateTableDialog, StructureEditDialog, type StructureEdit } from '@/features/schema/forms';
 import { Icon, IconButton, Input, Menu, Skeleton, useContextMenu, type MenuEntry } from '@/components/ui';
 import { copyText } from '@/lib/clipboard';
 import { formatCount } from '@/lib/format';
 import { api } from '@/lib/ipc';
+import { isRelation, KIND_LABEL, KIND_MARK, objectName } from '@/lib/objects';
 import { nodeKey, useExplorer } from '@/stores/explorer';
 import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
 import styles from './Explorer.module.css';
 
-const KIND_MARK: Partial<Record<Node['kind'], string>> = { table: 'T', view: 'V', materialized_view: 'M' };
-const KIND_LABEL: Record<Node['kind'], string> = { database: 'Database', schema: 'Schema', table: 'Table', view: 'View', materialized_view: 'Materialized view' };
 
 type Item =
   | { type: 'node'; node: Node; key: string; depth: number }
@@ -33,7 +35,7 @@ function useVisibleItems(): Item[] {
     const needle = filter.trim().toLowerCase();
     const out: Item[] = [];
     const matches = (node: Node): boolean => {
-      if (!needle || node.name.toLowerCase().includes(needle)) return true;
+      if (!needle || objectName(node).toLowerCase().includes(needle)) return true;
       return (children[nodeKey(node)] ?? []).some(matches);
     };
     const walk = (parent: Node | null, depth: number) => {
@@ -64,20 +66,44 @@ function useVisibleItems(): Item[] {
 export function Explorer({ width }: { width: number }) {
   const { expanded, selected, filter, toggle, refresh, select, setFilter } = useExplorer();
   const session = useWorkspace((s) => s.session);
-  const { openTableTab, openQueryTab } = useWorkspace();
+  const { openTableTab, openQueryTab, openContainerTab } = useWorkspace();
   const toast = useUi((s) => s.toast);
+  const navigate = useUi((s) => s.navigate);
   const items = useVisibleItems();
   const tree = useRef<HTMLDivElement>(null);
   const context = useContextMenu<Node>();
+  const [creating, setCreating] = useState<Node | null>(null);
+  const [editing, setEditing] = useState<{ node: Node; edit: StructureEdit; structure: TableStructure } | null>(null);
   const nodes = items.filter((i): i is Extract<Item, { type: 'node' }> => i.type === 'node');
 
+  /** Relations open their data; other leaves open their definition; containers expand. */
   const activate = (node: Node) => {
     select(nodeKey(node));
-    if (node.expandable) toggle(node);
-    else openTableTab(node, 'data');
+    if (isRelation(node)) openTableTab(node, 'data');
+    else if (node.expandable) toggle(node);
+    else openTableTab(node, 'ddl');
   };
 
   const sid = session ? { sessionId: session.session_id } : null;
+  const caps = session?.capabilities;
+
+  const template = async (node: Node, kind: TemplateKind) => {
+    if (!sid) return;
+    try {
+      openQueryTab({ sql: await api.generateSql(sid, node, kind), title: `${node.name} ${kind}` });
+    } catch (e) {
+      useUi.getState().toastError(e);
+    }
+  };
+
+  const editTable = async (node: Node, edit: StructureEdit) => {
+    if (!sid) return;
+    try {
+      setEditing({ node, edit, structure: await api.tableStructure(sid, node) });
+    } catch (e) {
+      useUi.getState().toastError(e);
+    }
+  };
 
   const actions = (node: Node): MenuEntry[] => {
     const copyName = async () => {
@@ -85,32 +111,70 @@ export function Explorer({ width }: { width: number }) {
       await copyText(await api.qualifiedName(sid, node));
       toast('Name copied');
     };
+    // The container of tables: the schema, or the database on engines without schemas.
+    const isContainer = node.kind === 'schema' || (node.kind === 'database' && !caps?.schemas);
+    const schema = node.kind === 'schema' ? node.name : null;
     if (node.kind === 'database' || node.kind === 'schema') {
       return [
         { label: 'Refresh', onSelect: () => refresh(node) },
         { label: 'Copy name', onSelect: () => void copyName() },
         { label: 'New query', onSelect: () => openQueryTab() },
+        ...(isContainer && !session?.server.read_only
+          ? [{ type: 'separator' as const }, { label: 'Create table…', onSelect: () => setCreating(node) }]
+          : []),
+        ...(isContainer
+          ? [
+              { type: 'separator' as const },
+              { label: 'ER diagram', onSelect: () => openContainerTab('diagram', node.database, schema) },
+              { label: 'Framework migrations', onSelect: () => openContainerTab('migrations', node.database, schema) },
+              ...(caps?.schema_diff ? [{ label: 'Compare with… (schema diff)', onSelect: () => navigate({ name: 'diff' }) }] : []),
+            ]
+          : []),
       ];
     }
+    if (node.kind === 'group') return [{ label: 'Refresh', onSelect: () => refresh(node) }];
+    if (!isRelation(node)) {
+      const owner = node.parent && (node.kind === 'index' || node.kind === 'trigger') ? node.parent : null;
+      return [
+        { label: 'Show definition', onSelect: () => openTableTab(node, 'ddl') },
+        { label: 'Copy name', onSelect: () => void copyName() },
+        ...(node.kind === 'index' && owner && !session?.server.read_only
+          ? [
+              { type: 'separator' as const },
+              {
+                label: 'Drop index…',
+                danger: true,
+                onSelect: () => void editTable({ ...node, kind: 'table', name: owner, parent: undefined }, { kind: 'drop-index', name: node.name }),
+              },
+            ]
+          : []),
+      ];
+    }
+    const table = node.kind === 'table';
+    const writable = table && !session?.server.read_only;
     return [
       { label: 'Open data', onSelect: () => openTableTab(node, 'data') },
       { label: 'Open structure', onSelect: () => openTableTab(node, 'structure') },
       { label: 'View DDL', onSelect: () => openTableTab(node, 'ddl') },
+      { label: 'Dependencies', onSelect: () => openTableTab(node, 'dependencies') },
       { type: 'separator' },
       { label: 'Copy qualified name', onSelect: () => void copyName() },
-      {
-        label: 'Generate SELECT',
-        onSelect: async () => {
-          if (!sid) return;
-          try {
-            openQueryTab({ sql: await api.generateSelect(sid, node), title: node.name });
-          } catch (e) {
-            useUi.getState().toastError(e);
-          }
-        },
-      },
-      { type: 'separator' },
-      { label: 'Generate INSERT / UPDATE / DELETE', disabled: true, hint: 'Planned · P1', onSelect: () => undefined },
+      { label: 'Generate SELECT', onSelect: () => void template(node, 'select') },
+      ...(table
+        ? [
+            { label: 'Generate INSERT', onSelect: () => void template(node, 'insert') },
+            { label: 'Generate UPDATE', onSelect: () => void template(node, 'update') },
+            { label: 'Generate DELETE', onSelect: () => void template(node, 'delete') },
+          ]
+        : []),
+      ...(node.expandable ? [{ type: 'separator' as const }, { label: 'Refresh indexes and triggers', onSelect: () => refresh(node) }] : []),
+      ...(writable
+        ? [
+            { type: 'separator' as const },
+            { label: 'Rename table…', onSelect: () => void editTable(node, { kind: 'rename-table' }) },
+            { label: 'Drop table…', danger: true, onSelect: () => void editTable(node, { kind: 'drop-table' }) },
+          ]
+        : []),
     ];
   };
 
@@ -191,7 +255,7 @@ export function Explorer({ width }: { width: number }) {
               aria-level={item.depth + 1}
               aria-expanded={node.expandable ? open : undefined}
               aria-selected={selected === item.key}
-              aria-label={`${KIND_LABEL[node.kind]} ${node.name}`}
+              aria-label={`${KIND_LABEL[node.kind]} ${objectName(node)}`}
               className={styles.node}
               data-container={node.expandable}
               data-current={node.current}
@@ -203,13 +267,23 @@ export function Explorer({ width }: { width: number }) {
                 context.open(e, node);
               }}
             >
-              <span className={styles.chevron}>{node.expandable && <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />}</span>
-              <span className={styles.kind}>{KIND_MARK[node.kind] ?? ''}</span>
-              <span className={styles.label}>{node.name}</span>
+              <span
+                className={styles.chevron}
+                onClick={(e) => {
+                  if (!node.expandable) return;
+                  e.stopPropagation();
+                  select(item.key);
+                  toggle(node);
+                }}
+              >
+                {node.expandable && <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />}
+              </span>
+              <span className={styles.kind}>{node.kind === 'group' ? <Icon name="folder" size={11} /> : KIND_MARK[node.kind]}</span>
+              <span className={styles.label}>{objectName(node)}</span>
               {count !== null && count > 0 && (
                 // Containers (schemas, and databases on engines without schemas) count objects; relations estimate rows.
-                <span className={styles.count} title={node.expandable ? `${count} tables and views` : `About ${formatCount(count)} rows (estimate)`}>
-                  {node.expandable ? formatCount(count) : `≈${compactCount(count)}`}
+                <span className={styles.count} title={isRelation(node) ? `About ${formatCount(count)} rows (estimate)` : `${count} objects`}>
+                  {isRelation(node) ? `≈${compactCount(count)}` : formatCount(count)}
                 </span>
               )}
             </div>
@@ -218,6 +292,30 @@ export function Explorer({ width }: { width: number }) {
         {items.length === 0 && <div className={styles.empty}>{filter ? 'No loaded objects match.' : ' '}</div>}
       </div>
       {context.menu && <Menu x={context.menu.x} y={context.menu.y} items={actions(context.menu.target)} onClose={context.close} label="Object actions" />}
+      {creating && session && (
+        <CreateTableDialog
+          container={creating}
+          flavor={session.flavor}
+          onClose={() => setCreating(null)}
+          onApplied={(table) => {
+            refresh(creating);
+            openTableTab(table, 'structure');
+          }}
+        />
+      )}
+      {editing && session && (
+        <StructureEditDialog
+          edit={editing.edit}
+          structure={editing.structure}
+          flavor={session.flavor}
+          onClose={() => setEditing(null)}
+          onApplied={() => {
+            // Refresh the parent so renamed or dropped objects disappear.
+            const parentKey = nodes.slice(0, nodes.findIndex((n) => n.key === nodeKey(editing.node))).reverse().find((n) => n.node.expandable && !isRelation(n.node));
+            refresh(parentKey?.node ?? null);
+          }}
+        />
+      )}
     </aside>
   );
 }

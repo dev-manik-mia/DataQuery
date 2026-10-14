@@ -8,7 +8,7 @@ import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import { errorMessage } from '@/lib/errors';
 import { uid } from '@/lib/id';
 
-export type SettingsSection = 'general' | 'editor' | 'results' | 'security' | 'engines' | 'about';
+export type SettingsSection = 'general' | 'editor' | 'keyboard' | 'results' | 'history' | 'security' | 'ai' | 'engines' | 'about';
 
 export type View =
   | { name: 'home' }
@@ -16,6 +16,7 @@ export type View =
   | { name: 'connection-form'; engine: Engine; connectionId?: string; prefill?: ParsedUrl }
   | { name: 'workspace' }
   | { name: 'history' }
+  | { name: 'diff' }
   | { name: 'settings'; section: SettingsSection };
 
 export type ToastTone = 'info' | 'positive' | 'critical';
@@ -41,6 +42,7 @@ interface UiState {
   confirmation: { request: ConfirmationRequest; resolve: (c: Confirmation | null) => void } | null;
   question: (AskOptions & { resolve: (ok: boolean) => void }) | null;
   paletteOpen: boolean;
+  commandsOpen: boolean;
 
   navigate: (view: View) => void;
   back: () => void;
@@ -50,6 +52,7 @@ interface UiState {
   requestConfirmation: (request: ConfirmationRequest) => Promise<Confirmation | null>;
   ask: (options: AskOptions) => Promise<boolean>;
   setPaletteOpen: (open: boolean) => void;
+  setCommandsOpen: (open: boolean) => void;
 }
 
 const TOAST_MS = 5000;
@@ -61,11 +64,13 @@ export const useUi = create<UiState>((set, get) => ({
   confirmation: null,
   question: null,
   paletteOpen: false,
+  commandsOpen: false,
 
   navigate: (view) => {
     const current = get().view;
-    const overlay = view.name === 'history' || view.name === 'settings';
-    const fromOverlay = current.name === 'history' || current.name === 'settings';
+    const overlays = ['history', 'settings', 'diff'];
+    const overlay = overlays.includes(view.name);
+    const fromOverlay = overlays.includes(current.name);
     set({ view, returnTo: overlay && !fromOverlay ? current : get().returnTo });
   },
   back: () => set({ view: get().returnTo }),
@@ -104,7 +109,8 @@ export const useUi = create<UiState>((set, get) => ({
       }),
     ),
 
-  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen, commandsOpen: false }),
+  setCommandsOpen: (commandsOpen) => set({ commandsOpen, paletteOpen: false }),
 }));
 
 /**

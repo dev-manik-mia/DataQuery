@@ -5,27 +5,40 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 
+import type { AiAnswer } from '@/bindings/AiAnswer';
+import type { AiDisclosure } from '@/bindings/AiDisclosure';
+import type { AiRequest } from '@/bindings/AiRequest';
 import type { AppInfo } from '@/bindings/AppInfo';
 import type { ApplyReport } from '@/bindings/ApplyReport';
+import type { Cell } from '@/bindings/Cell';
 import type { ColumnMapping } from '@/bindings/ColumnMapping';
+import type { ColumnValue } from '@/bindings/ColumnValue';
 import type { Confirmation } from '@/bindings/Confirmation';
 import type { ConnectionDraft } from '@/bindings/ConnectionDraft';
 import type { ConnectionImportReport } from '@/bindings/ConnectionImportReport';
 import type { ConnectionList } from '@/bindings/ConnectionList';
-import type { CsvOptions } from '@/bindings/CsvOptions';
-import type { CsvPreview } from '@/bindings/CsvPreview';
+import type { Dependencies } from '@/bindings/Dependencies';
+import type { DiffSide } from '@/bindings/DiffSide';
 import type { EngineInfo } from '@/bindings/EngineInfo';
+import type { ExplainResult } from '@/bindings/ExplainResult';
 import type { ExportFormat } from '@/bindings/ExportFormat';
+import type { ExportOptions } from '@/bindings/ExportOptions';
 import type { ExportReport } from '@/bindings/ExportReport';
 import type { ExportSource } from '@/bindings/ExportSource';
 import type { Folder } from '@/bindings/Folder';
+import type { FrameworkMigrations } from '@/bindings/FrameworkMigrations';
 import type { Guarded } from '@/bindings/Guarded';
 import type { HistoryPage } from '@/bindings/HistoryPage';
 import type { HistoryQuery } from '@/bindings/HistoryQuery';
+import type { ImportOptions } from '@/bindings/ImportOptions';
+import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { ImportReport } from '@/bindings/ImportReport';
+import type { ImportSource } from '@/bindings/ImportSource';
 import type { KeychainStatus } from '@/bindings/KeychainStatus';
+import type { MonitorSnapshot } from '@/bindings/MonitorSnapshot';
 import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
+import type { ObjectSize } from '@/bindings/ObjectSize';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import type { RowChange } from '@/bindings/RowChange';
 import type { RowCount } from '@/bindings/RowCount';
@@ -34,15 +47,25 @@ import type { RowsPage } from '@/bindings/RowsPage';
 import type { RunReport } from '@/bindings/RunReport';
 import type { SavedConnection } from '@/bindings/SavedConnection';
 import type { SavedScript } from '@/bindings/SavedScript';
+import type { SchemaApplyReport } from '@/bindings/SchemaApplyReport';
+import type { SchemaChange } from '@/bindings/SchemaChange';
+import type { SchemaDiff } from '@/bindings/SchemaDiff';
+import type { SchemaModel } from '@/bindings/SchemaModel';
 import type { ScriptDraft } from '@/bindings/ScriptDraft';
 import type { ServerInfo } from '@/bindings/ServerInfo';
+import type { ServerSetting } from '@/bindings/ServerSetting';
 import type { SessionInfo } from '@/bindings/SessionInfo';
 import type { Settings } from '@/bindings/Settings';
+import type { Snippet } from '@/bindings/Snippet';
+import type { SnippetDraft } from '@/bindings/SnippetDraft';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { StatementInfo } from '@/bindings/StatementInfo';
 import type { TablePage } from '@/bindings/TablePage';
 import type { TablePageRequest } from '@/bindings/TablePageRequest';
 import type { TableStructure } from '@/bindings/TableStructure';
+import type { TemplateKind } from '@/bindings/TemplateKind';
+import type { TxAction } from '@/bindings/TxAction';
+import type { TxStatus } from '@/bindings/TxStatus';
 
 import { toAppError } from './errors';
 
@@ -56,7 +79,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 /** Strips UI-only fields so only an `ObjectRef` crosses the boundary. */
 export function objectRef(o: ObjectRef): ObjectRef {
-  return { kind: o.kind, database: o.database, schema: o.schema, name: o.name };
+  return o.parent ? { kind: o.kind, database: o.database, schema: o.schema, name: o.name, parent: o.parent } : { kind: o.kind, database: o.database, schema: o.schema, name: o.name };
 }
 
 type Sid = { sessionId: string };
@@ -103,14 +126,21 @@ export const api = {
   searchObjects: ({ sessionId }: Sid, query: string) => call<Node[]>('search_objects', { sessionId, query }),
   qualifiedName: ({ sessionId }: Sid, object: ObjectRef) =>
     call<string>('qualified_name', { sessionId, object: objectRef(object) }),
-  generateSelect: ({ sessionId }: Sid, object: ObjectRef) =>
-    call<string>('generate_select', { sessionId, object: objectRef(object) }),
+  generateSql: ({ sessionId }: Sid, object: ObjectRef, kind: TemplateKind) =>
+    call<string>('generate_sql', { sessionId, object: objectRef(object), kind }),
+  dependencies: ({ sessionId }: Sid, object: ObjectRef) =>
+    call<Dependencies>('object_dependencies', { sessionId, object: objectRef(object) }),
+  schemaModel: ({ sessionId }: Sid, database: string, schema: string | null) =>
+    call<SchemaModel>('schema_model', { sessionId, database, schema }),
 
   // queries
-  runSql: ({ sessionId }: Sid, sql: string, confirmation: Confirmation | null) =>
-    call<Guarded<RunReport>>('run_sql', { sessionId, sql, confirmation }),
+  runSql: ({ sessionId }: Sid, sql: string, params: (string | null)[] | null, confirmation: Confirmation | null) =>
+    call<Guarded<RunReport>>('run_sql', { sessionId, sql, params, confirmation }),
   fetchMore: ({ sessionId }: Sid, limit: number) => call<RowsPage>('fetch_more', { sessionId, limit }),
   cancelQuery: ({ sessionId }: Sid) => call<boolean>('cancel_query', { sessionId }),
+  transaction: ({ sessionId }: Sid, action: TxAction) => call<TxStatus>('transaction', { sessionId, action }),
+  explain: ({ sessionId }: Sid, sql: string, params: (string | null)[] | null, analyze: boolean) =>
+    call<ExplainResult>('explain', { sessionId, sql, params, analyze }),
 
   // tables
   tableStructure: ({ sessionId }: Sid, object: ObjectRef) =>
@@ -125,32 +155,59 @@ export const api = {
     call<string>('preview_changes', { sessionId, object: objectRef(object), changes, fullRow }),
   applyChanges: ({ sessionId }: Sid, object: ObjectRef, changes: RowChange[], fullRow: boolean, confirmation: Confirmation | null) =>
     call<Guarded<ApplyReport>>('apply_changes', { sessionId, object: objectRef(object), changes, fullRow, confirmation }),
+  cellValue: ({ sessionId }: Sid, object: ObjectRef, key: ColumnValue[], column: string) =>
+    call<Cell>('cell_value', { sessionId, object: objectRef(object), key, column }),
+  saveCell: ({ sessionId }: Sid, object: ObjectRef, key: ColumnValue[], column: string, path: string) =>
+    call<number>('save_cell', { sessionId, object: objectRef(object), key, column, path }),
+
+  // schema
+  schemaChangePreview: ({ sessionId }: Sid, changes: SchemaChange[]) => call<string>('schema_change_preview', { sessionId, changes }),
+  applySchemaChanges: ({ sessionId }: Sid, changes: SchemaChange[], confirmation: Confirmation | null) =>
+    call<Guarded<SchemaApplyReport>>('apply_schema_changes', { sessionId, changes, confirmation }),
+  schemaDiff: (source: DiffSide, target: DiffSide) => call<SchemaDiff>('schema_diff', { source, target }),
+  frameworkMigrations: ({ sessionId }: Sid, database: string, schema: string | null) =>
+    call<FrameworkMigrations[]>('framework_migrations', { sessionId, database, schema }),
+
+  // monitoring
+  monitorSnapshot: ({ sessionId }: Sid, longRunningSecs: number) => call<MonitorSnapshot>('monitor_snapshot', { sessionId, longRunningSecs }),
+  serverSettings: ({ sessionId }: Sid, search: string | null) => call<ServerSetting[]>('server_settings', { sessionId, search }),
+  largestTables: ({ sessionId }: Sid, database: string, limit: number) => call<ObjectSize[]>('largest_tables', { sessionId, database, limit }),
+  killProcess: ({ sessionId }: Sid, pid: number, user: string | null, terminate: boolean, confirmation: Confirmation | null) =>
+    call<Guarded<boolean>>('kill_process', { sessionId, pid, user, terminate, confirmation }),
 
   // import / export
-  exportData: ({ sessionId }: Sid, source: ExportSource, format: ExportFormat, path: string) =>
-    call<ExportReport>('export_data', { sessionId, source, format, path }),
-  csvPreview: (path: string, options: CsvOptions) => call<CsvPreview>('csv_preview', { path, options }),
-  importCsv: (
+  exportData: ({ sessionId }: Sid, source: ExportSource, format: ExportFormat, options: ExportOptions, path: string, jobId: string) =>
+    call<ExportReport>('export_data', { sessionId, source, format, options, path, jobId }),
+  importPreview: (source: ImportSource) => call<ImportPreview>('import_preview', { source }),
+  importData: (
     { sessionId }: Sid,
     object: ObjectRef,
-    path: string,
-    options: CsvOptions,
+    source: ImportSource,
     mapping: ColumnMapping[],
+    options: ImportOptions,
+    jobId: string,
     confirmation: Confirmation | null,
-  ) =>
-    call<Guarded<ImportReport>>('import_csv', {
-      sessionId,
-      object: objectRef(object),
-      path,
-      options,
-      mapping,
-      confirmation,
-    }),
+  ) => call<Guarded<ImportReport>>('import_data', { sessionId, object: objectRef(object), source, mapping, options, jobId, confirmation }),
+  cancelTransfer: (jobId: string) => call<boolean>('cancel_transfer', { jobId }),
 
-  // history and scripts
+  // history, scripts, snippets
   listHistory: (query: HistoryQuery) => call<HistoryPage>('list_history', { query }),
-  clearHistory: () => call<void>('clear_history'),
+  clearHistory: (connectionId: string | null) => call<void>('clear_history', { connectionId }),
+  applyHistoryRetention: () => call<void>('apply_history_retention'),
   listScripts: () => call<SavedScript[]>('list_scripts'),
   saveScript: (draft: ScriptDraft) => call<SavedScript>('save_script', { draft }),
+  updateScriptSql: (id: string, sql: string) => call<void>('update_script_sql', { id, sql }),
   deleteScript: (id: string) => call<void>('delete_script', { id }),
+  listSnippets: () => call<Snippet[]>('list_snippets'),
+  saveSnippet: (draft: SnippetDraft) => call<Snippet>('save_snippet', { draft }),
+  deleteSnippet: (id: string) => call<void>('delete_snippet', { id }),
+
+  // AI assistant (opt-in; never runs SQL)
+  aiDisclosure: ({ sessionId }: Sid, request: AiRequest) => call<AiDisclosure>('ai_disclosure', { sessionId, request }),
+  aiAsk: ({ sessionId }: Sid, request: AiRequest) => call<AiAnswer>('ai_ask', { sessionId, request }),
+  aiKeyStatus: () => call<boolean>('ai_key_status'),
+  aiSetKey: (key: string | null) => call<void>('ai_set_key', { key }),
 };
+
+/** An empty row filter. */
+export const NO_FILTER: RowFilter = { filter: null, matches: [], searches: [] };

@@ -10,7 +10,7 @@ import { api } from '@/lib/ipc';
 export const ROOT = 'root';
 
 export function nodeKey(o: ObjectRef | null): string {
-  return o ? `${o.kind}\u0000${o.database}\u0000${o.schema ?? ''}\u0000${o.name}` : ROOT;
+  return o ? `${o.kind}\u0000${o.database}\u0000${o.schema ?? ''}\u0000${o.name}\u0000${o.parent ?? ''}` : ROOT;
 }
 
 interface ExplorerState {

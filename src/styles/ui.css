@@ -840,3 +840,43 @@ textarea.dq-input {
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
+
+/* Text button inside the status bar (e.g. the transaction mode). */
+.dq-status-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dq-status-link:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.dq-status-link:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-o);
+}
+
+/* A table row that is a button (navigable lists). */
+.dq-row-button {
+  width: 100%;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dq-row-button:hover {
+  background: var(--sunk);
+}
+
+.dq-row-button:focus-visible {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: calc(-1 * var(--ring-w));
+}

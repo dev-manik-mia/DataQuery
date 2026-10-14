@@ -1,21 +1,44 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { Button, EmptyState, Splitter } from '@/components/ui';
 import { openSqlFiles } from '@/features/editor/fileActions';
 import { QueryTabView } from '@/features/editor/QueryTabView';
 import { Explorer } from '@/features/explorer/Explorer';
+import { MonitorView } from '@/features/monitor/MonitorView';
+import { DiagramView } from '@/features/schema/DiagramView';
+import { MigrationsView } from '@/features/schema/MigrationsView';
 import { TableTabView } from '@/features/table/TableTabView';
+import { t } from '@/i18n';
 import { shortcutLabel } from '@/lib/platform';
 import { LAYOUT_LIMITS, useLayout } from '@/stores/layout';
-import { useWorkspace } from '@/stores/workspace';
+import { useWorkspace, type Tab } from '@/stores/workspace';
 
 import { TabBar } from './TabBar';
 import styles from './Workspace.module.css';
 
-/** Explorer, tab bar and the open tabs. Inactive tabs stay mounted to keep editor state. */
+function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
+  switch (tab.kind) {
+    case 'query':
+      return <QueryTabView tab={tab} active={active} />;
+    case 'table':
+      return <TableTabView tab={tab} active={active} />;
+    case 'diagram':
+      return <DiagramView tab={tab} active={active} />;
+    case 'migrations':
+      return <MigrationsView tab={tab} active={active} />;
+    case 'monitor':
+      return <MonitorView active={active} />;
+  }
+}
+
+/**
+ * Explorer, tab bar and the open tabs. Every tab stays mounted (editor state
+ * survives switching); with a split, each tab is placed in the left or right
+ * column of one grid, so moving it between panes never remounts it.
+ */
 export function Workspace() {
-  const { tabs, activeTabId, openQueryTab } = useWorkspace();
+  const { tabs, activeTabId, split, openQueryTab, focusPane } = useWorkspace();
   const { explorerWidth, set } = useLayout();
 
   // Drop .sql files anywhere on the window to open them.
@@ -30,21 +53,43 @@ export function Workspace() {
     };
   }, []);
 
+  const slot = (tab: Tab): ReactNode => {
+    const right = split?.rightTabId === tab.id;
+    const visible = right || tab.id === activeTabId;
+    return (
+      <div
+        key={tab.id}
+        className={styles.slot}
+        style={{ gridColumn: right ? 3 : 1, display: visible ? 'flex' : 'none' }}
+        data-focused={split ? (split.focus === (right ? 'right' : 'left')) : undefined}
+        onMouseDownCapture={() => split && focusPane(right ? 'right' : 'left')}
+      >
+        <TabContent tab={tab} active={visible} />
+      </div>
+    );
+  };
+
   return (
     <div className={styles.workspace}>
       <Explorer width={explorerWidth} />
       <Splitter axis="x" label="Resize explorer" size={explorerWidth} min={LAYOUT_LIMITS.explorer.min} max={LAYOUT_LIMITS.explorer.max} onResize={(w) => set({ explorerWidth: w })} />
       <main className={styles.main}>
         <TabBar />
-        {tabs.map((tab) =>
-          tab.kind === 'query' ? <QueryTabView key={tab.id} tab={tab} active={tab.id === activeTabId} /> : <TableTabView key={tab.id} tab={tab} active={tab.id === activeTabId} />,
-        )}
+        <div className={styles.panes} style={{ gridTemplateColumns: split ? 'minmax(0, 1fr) 1px minmax(0, 1fr)' : 'minmax(0, 1fr)' }}>
+          {tabs.map(slot)}
+          {split && <div className={styles.paneDivider} style={{ gridColumn: 2 }} aria-hidden />}
+          {split && !split.rightTabId && (
+            <div className={styles.slot} style={{ gridColumn: 3 }}>
+              <EmptyState title={t('workspace.emptyPane')}>{t('workspace.emptyPaneHint')}</EmptyState>
+            </div>
+          )}
+        </div>
         {tabs.length === 0 && (
-          <EmptyState title="No open tabs">
-            Open a table from the explorer or start a new query.
+          <EmptyState title={t('workspace.noTabs')}>
+            {t('workspace.noTabsHint')}
             <div style={{ marginTop: 12 }}>
               <Button variant="primary" shortcut={shortcutLabel('mod+t')} onClick={() => openQueryTab()}>
-                New query
+                {t('action.newQuery')}
               </Button>
             </div>
           </EmptyState>

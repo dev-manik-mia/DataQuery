@@ -3,9 +3,12 @@ import { create } from 'zustand';
 import type { Cell } from '@/bindings/Cell';
 import type { ColumnMeta } from '@/bindings/ColumnMeta';
 import type { DbError } from '@/bindings/DbError';
+import type { ExplainResult } from '@/bindings/ExplainResult';
 import type { ObjectRef } from '@/bindings/ObjectRef';
 import type { RunReport } from '@/bindings/RunReport';
 import type { SessionInfo } from '@/bindings/SessionInfo';
+import type { TxAction } from '@/bindings/TxAction';
+import type { TxStatus } from '@/bindings/TxStatus';
 import { toAppError } from '@/lib/errors';
 import { formatCount, plural } from '@/lib/format';
 import { uid } from '@/lib/id';
@@ -15,7 +18,7 @@ import { useExplorer } from './explorer';
 import { useSettings } from './settings';
 import { guarded, useUi } from './ui';
 
-export type TableView = 'data' | 'structure' | 'ddl';
+export type TableView = 'data' | 'structure' | 'ddl' | 'dependencies';
 
 export interface ResultSet {
   id: string;
@@ -45,12 +48,16 @@ export interface RunState {
   startedAt: number | null;
   results: ResultSet[];
   messages: RunMessage[];
-  active: number | 'messages';
+  active: ResultsTab;
   fetching: boolean;
   /** Absolute editor range of the error position, for the squiggle. */
   errorAt: number | null;
   lastDurationMs: number | null;
+  /** The last EXPLAIN, shown in the Plan tab of the results panel. */
+  plan: ExplainResult | null;
 }
+
+export type ResultsTab = number | 'messages' | 'plan';
 
 export interface QueryTab {
   id: string;
@@ -61,6 +68,10 @@ export interface QueryTab {
   savedSql: string;
   scriptId: string | null;
   filePath: string | null;
+  /** 1-based line numbers with a bookmark. */
+  bookmarks: number[];
+  /** Last values typed for `$1` / `?` parameters, by position. */
+  paramValues: string[];
   run: RunState;
 }
 
@@ -72,7 +83,28 @@ export interface TableTab {
   view: TableView;
 }
 
-export type Tab = QueryTab | TableTab;
+/** A schema (or MySQL database) as a whole: ER diagram or framework migrations. */
+export interface ContainerTab {
+  id: string;
+  kind: 'diagram' | 'migrations';
+  title: string;
+  database: string;
+  schema: string | null;
+}
+
+export interface MonitorTab {
+  id: string;
+  kind: 'monitor';
+  title: string;
+}
+
+export type Tab = QueryTab | TableTab | ContainerTab | MonitorTab;
+
+/** Which pane shows which tab when the editor area is split. */
+export interface SplitState {
+  rightTabId: string | null;
+  focus: 'left' | 'right';
+}
 
 const EMPTY_RUN: RunState = {
   status: 'idle',
@@ -83,6 +115,7 @@ const EMPTY_RUN: RunState = {
   fetching: false,
   errorAt: null,
   lastDurationMs: null,
+  plan: null,
 };
 
 export function isDirty(tab: Tab): boolean {
@@ -106,6 +139,9 @@ interface WorkspaceState {
   connectError: DbError | null;
   tabs: Tab[];
   activeTabId: string | null;
+  split: SplitState | null;
+  /** Transaction state of the query connection. */
+  tx: TxStatus;
 
   connect: (connectionId: string) => Promise<boolean>;
   /** Reopens the session's connections, keeping tabs and their SQL. */
@@ -113,16 +149,24 @@ interface WorkspaceState {
   disconnect: () => Promise<void>;
   openQueryTab: (options?: OpenQueryOptions) => string;
   openTableTab: (object: ObjectRef, view?: TableView) => void;
+  openContainerTab: (kind: ContainerTab['kind'], database: string, schema: string | null) => void;
+  openMonitorTab: () => void;
+  toggleSplit: () => void;
+  focusPane: (pane: 'left' | 'right') => void;
+  moveToOtherPane: (id: string) => void;
+  setBookmarks: (id: string, bookmarks: number[]) => void;
+  transaction: (action: TxAction) => Promise<void>;
+  explain: (tabId: string, sql: string, params: (string | null)[] | null, analyze: boolean) => Promise<void>;
   closeTab: (id: string) => Promise<void>;
   activate: (id: string) => void;
   cycleTab: (step: 1 | -1) => void;
   updateSql: (id: string, sql: string) => void;
   markSaved: (id: string, patch: { title?: string; scriptId?: string | null; filePath?: string | null }) => void;
   setTableView: (id: string, view: TableView) => void;
-  run: (tabId: string, sql: string, base: number) => Promise<void>;
+  run: (tabId: string, sql: string, base: number, params?: (string | null)[] | null) => Promise<void>;
   fetchMore: (tabId: string) => Promise<void>;
   cancel: () => Promise<void>;
-  setActiveResult: (tabId: string, active: number | 'messages') => void;
+  setActiveResult: (tabId: string, active: ResultsTab) => void;
 }
 
 function nextQueryTitle(tabs: Tab[]): string {
@@ -139,6 +183,8 @@ function newQueryTab(tabs: Tab[], options: OpenQueryOptions = {}): QueryTab {
     savedSql: options.scriptId || options.filePath ? (options.sql ?? '') : '',
     scriptId: options.scriptId ?? null,
     filePath: options.filePath ?? null,
+    bookmarks: [],
+    paramValues: [],
     run: EMPTY_RUN,
   };
 }
@@ -203,6 +249,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
   const patchRun = (id: string, patch: Partial<RunState> | ((run: RunState) => Partial<RunState>)) =>
     patchTab(id, (t) => (t.kind === 'query' ? { ...t, run: { ...t.run, ...(typeof patch === 'function' ? patch(t.run) : patch) } } : t));
 
+  /** Shows a tab in the focused pane. */
+  const showTab = (id: string) => {
+    const split = get().split;
+    if (split?.focus === 'right' && id !== get().activeTabId) set({ split: { ...split, rightTabId: id } });
+    else if (split?.rightTabId === id) set({ split: { ...split, focus: 'right' } });
+    else set({ activeTabId: id });
+  };
+  const addTab = (tab: Tab) => {
+    set({ tabs: [...get().tabs, tab] });
+    showTab(tab.id);
+  };
+
   return {
     session: null,
     link: 'connected',
@@ -210,6 +268,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     connectError: null,
     tabs: [],
     activeTabId: null,
+    split: null,
+    tx: 'auto',
 
     connect: async (connectionId) => {
       const current = get().session;
@@ -230,6 +290,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           connectingId: null,
           tabs: initial,
           activeTabId: initial.some((t) => t.id === saved?.activeTabId) ? (saved?.activeTabId ?? null) : (initial[0]?.id ?? null),
+          split: saved?.split && initial.some((t) => t.id === saved.split?.rightTabId) ? saved.split : null,
+          tx: 'auto',
         });
         useExplorer.getState().reset(session);
         useUi.getState().navigate({ name: 'workspace' });
@@ -250,6 +312,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         set((s) => ({
           session: fresh,
           link: 'connected',
+          tx: 'auto',
           tabs: s.tabs.map((t) => (t.kind === 'query' ? { ...t, run: { ...t.run, results: t.run.results.map((r) => ({ ...r, canFetchMore: false })) } } : t)),
         }));
         useExplorer.getState().reset(fresh);
@@ -263,27 +326,101 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     disconnect: async () => {
       const session = get().session;
       if (!session) return;
+      if (get().tx !== 'auto') {
+        const ok = await useUi.getState().ask({
+          title: 'Disconnect with an open transaction?',
+          body: 'Uncommitted changes in the open transaction are rolled back by the server when the connection closes.',
+          confirmLabel: 'Disconnect and roll back',
+          danger: true,
+        });
+        if (!ok) return;
+      }
       await persistNow();
-      set({ session: null, tabs: [], activeTabId: null });
+      set({ session: null, tabs: [], activeTabId: null, split: null, tx: 'auto' });
       useExplorer.getState().reset(null);
       await api.disconnect({ sessionId: session.session_id }).catch(() => undefined);
     },
 
     openQueryTab: (options) => {
       const tab = newQueryTab(get().tabs, options);
-      set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
+      addTab(tab);
       return tab.id;
     },
 
     openTableTab: (object, view = 'data') => {
+      // Indexes, functions and other non-relations only have a definition.
+      const shown: TableView = object.kind === 'table' || object.kind === 'view' || object.kind === 'materialized_view' ? view : 'ddl';
       const existing = get().tabs.find((t): t is TableTab => t.kind === 'table' && sameObject(t.object, object));
       if (existing) {
-        set({ activeTabId: existing.id });
-        if (existing.view !== view) get().setTableView(existing.id, view);
+        showTab(existing.id);
+        if (existing.view !== shown) get().setTableView(existing.id, shown);
         return;
       }
-      const tab: TableTab = { id: uid('tab'), kind: 'table', title: object.name, object, view };
-      set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
+      const tab: TableTab = { id: uid('tab'), kind: 'table', title: object.name, object, view: shown };
+      addTab(tab);
+    },
+
+    openContainerTab: (kind, database, schema) => {
+      const existing = get().tabs.find((t): t is ContainerTab => t.kind === kind && t.database === database && t.schema === schema);
+      if (existing) return showTab(existing.id);
+      const where = schema ?? database;
+      addTab({ id: uid('tab'), kind, database, schema, title: kind === 'diagram' ? `ER · ${where}` : `Migrations · ${where}` });
+    },
+
+    openMonitorTab: () => {
+      const existing = get().tabs.find((t) => t.kind === 'monitor');
+      if (existing) return showTab(existing.id);
+      addTab({ id: uid('tab'), kind: 'monitor', title: 'Monitoring' });
+    },
+
+    toggleSplit: () => {
+      const { split, tabs, activeTabId } = get();
+      if (split) return set({ split: null });
+      const other = tabs.find((t) => t.id !== activeTabId);
+      set({ split: { rightTabId: other?.id ?? null, focus: 'right' } });
+      if (!other) get().openQueryTab();
+    },
+
+    focusPane: (focus) => {
+      const split = get().split;
+      if (split) set({ split: { ...split, focus } });
+    },
+
+    moveToOtherPane: (id) => {
+      const { split, activeTabId, tabs } = get();
+      if (!split) {
+        const remaining = tabs.find((t) => t.id !== id);
+        return set({ split: { rightTabId: id, focus: 'right' }, activeTabId: activeTabId === id ? (remaining?.id ?? null) : activeTabId });
+      }
+      if (split.rightTabId === id) set({ split: { ...split, rightTabId: activeTabId === id ? null : split.rightTabId, focus: 'left' }, activeTabId: id });
+      else set({ split: { rightTabId: id, focus: 'right' }, activeTabId: activeTabId === id ? (tabs.find((t) => t.id !== id)?.id ?? null) : activeTabId });
+    },
+
+    setBookmarks: (id, bookmarks) => patchTab(id, (t) => (t.kind === 'query' ? { ...t, bookmarks } : t)),
+
+    transaction: async (action) => {
+      const session = get().session;
+      if (!session) return;
+      try {
+        set({ tx: await api.transaction({ sessionId: session.session_id }, action) });
+        useUi.getState().toast(action === 'begin' ? 'Transaction started.' : action === 'commit' ? 'Committed.' : 'Rolled back.', 'positive');
+      } catch (e) {
+        useUi.getState().toastError(e);
+        if (action !== 'begin') set({ tx: 'auto' });
+      }
+    },
+
+    explain: async (tabId, sql, params, analyze) => {
+      const session = get().session;
+      if (!session || !sql.trim()) return;
+      patchRun(tabId, { status: 'running', startedAt: Date.now() });
+      try {
+        const plan = await api.explain({ sessionId: session.session_id }, sql, params, analyze);
+        patchRun(tabId, { status: 'done', plan, active: 'plan' });
+      } catch (e) {
+        const error = toAppError(e).info;
+        patchRun(tabId, (run) => ({ status: 'done', active: 'messages', messages: [...run.messages, { id: uid('msg'), kind: 'error', statement: null, text: error.message, error }] }));
+      }
     },
 
     closeTab: async (id) => {
@@ -301,11 +438,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const tabs = get().tabs;
       const index = tabs.findIndex((t) => t.id === id);
       const remaining = tabs.filter((t) => t.id !== id);
-      const activeTabId = get().activeTabId === id ? (remaining[Math.min(index, remaining.length - 1)]?.id ?? null) : get().activeTabId;
+      const split = get().split;
+      if (split?.rightTabId === id) {
+        set({ tabs: remaining, split: { ...split, rightTabId: null, focus: 'left' } });
+        return;
+      }
+      const pick = remaining.filter((t) => t.id !== split?.rightTabId);
+      const activeTabId = get().activeTabId === id ? (pick[Math.min(index, pick.length - 1)]?.id ?? null) : get().activeTabId;
       set({ tabs: remaining, activeTabId });
     },
 
-    activate: (activeTabId) => set({ activeTabId }),
+    activate: (id) => showTab(id),
 
     cycleTab: (step) => {
       const { tabs, activeTabId } = get();
@@ -314,20 +457,24 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       set({ activeTabId: tabs[(i + step + tabs.length) % tabs.length]?.id ?? null });
     },
 
-    updateSql: (id, sql) => patchTab(id, (t) => (t.kind === 'query' ? { ...t, sql, run: t.run.errorAt === null ? t.run : { ...t.run, errorAt: null } } : t)),
+    updateSql: (id, sql) => {
+      patchTab(id, (t) => (t.kind === 'query' ? { ...t, sql, run: t.run.errorAt === null ? t.run : { ...t.run, errorAt: null } } : t));
+      scheduleAutosave(id);
+    },
 
     markSaved: (id, patch) =>
       patchTab(id, (t) => (t.kind === 'query' ? { ...t, savedSql: t.sql, title: patch.title ?? t.title, scriptId: patch.scriptId === undefined ? t.scriptId : patch.scriptId, filePath: patch.filePath === undefined ? t.filePath : patch.filePath } : t)),
 
     setTableView: (id, view) => patchTab(id, (t) => (t.kind === 'table' ? { ...t, view } : t)),
 
-    run: async (tabId, sql, base) => {
+    run: async (tabId, sql, base, params = null) => {
       const session = get().session;
       if (!session || !sql.trim()) return;
+      if (params) patchTab(tabId, (t) => (t.kind === 'query' ? { ...t, paramValues: params.map((p) => p ?? '') } : t));
       const before = (get().tabs.find((t) => t.id === tabId) as QueryTab | undefined)?.run ?? EMPTY_RUN;
       patchRun(tabId, { status: 'running', startedAt: Date.now(), errorAt: null });
       try {
-        const report = await guarded((c) => api.runSql({ sessionId: session.session_id }, sql, c), {
+        const report = await guarded((c) => api.runSql({ sessionId: session.session_id }, sql, params, c), {
           // Nothing runs while the confirmation dialog is open.
           onAsk: () => patchRun(tabId, { status: before.status === 'running' ? 'idle' : before.status }),
           onConfirmed: () => patchRun(tabId, { status: 'running', startedAt: Date.now() }),
@@ -337,6 +484,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           return;
         }
         patchRun(tabId, (run) => ({ status: 'done', ...digest(report, sql, base, run) }));
+        set({ tx: report.tx });
         noteLinkErrors(report.outcomes.map((o) => o.error));
       } catch (e) {
         const error = toAppError(e).info;
@@ -397,31 +545,40 @@ function noteLinkErrors(errors: (DbError | null)[]) {
 // ---------------------------------------------------------------------------
 
 type PersistedTab =
-  | { kind: 'query'; id: string; title: string; sql: string; savedSql: string; scriptId: string | null; filePath: string | null }
-  | { kind: 'table'; id: string; title: string; object: ObjectRef; view: TableView };
+  | { kind: 'query'; id: string; title: string; sql: string; savedSql: string; scriptId: string | null; filePath: string | null; bookmarks?: number[] }
+  | { kind: 'table'; id: string; title: string; object: ObjectRef; view: TableView }
+  | ContainerTab
+  | MonitorTab;
 
 interface PersistedWorkspace {
   tabs: PersistedTab[];
   activeTabId: string | null;
+  split?: SplitState | null;
 }
 
 function restoreTabs(saved: PersistedWorkspace | null): Tab[] {
   if (!saved || !Array.isArray(saved.tabs)) return [];
-  return saved.tabs.map((t) => (t.kind === 'query' ? { ...t, run: EMPTY_RUN } : t));
+  return saved.tabs.map((t) => (t.kind === 'query' ? { ...t, bookmarks: t.bookmarks ?? [], paramValues: [], run: EMPTY_RUN } : t));
 }
 
 function snapshot(): { key: string; value: PersistedWorkspace } | null {
-  const { session, tabs, activeTabId } = useWorkspace.getState();
+  const { session, tabs, activeTabId, split } = useWorkspace.getState();
   if (!session) return null;
   return {
     key: `workspace:${session.connection.id}`,
     value: {
       activeTabId,
-      tabs: tabs.map((t): PersistedTab =>
-        t.kind === 'query'
-          ? { kind: 'query', id: t.id, title: t.title, sql: t.sql, savedSql: t.savedSql, scriptId: t.scriptId, filePath: t.filePath }
-          : { kind: 'table', id: t.id, title: t.title, object: t.object, view: t.view },
-      ),
+      split,
+      tabs: tabs.map((t): PersistedTab => {
+        switch (t.kind) {
+          case 'query':
+            return { kind: 'query', id: t.id, title: t.title, sql: t.sql, savedSql: t.savedSql, scriptId: t.scriptId, filePath: t.filePath, bookmarks: t.bookmarks };
+          case 'table':
+            return { kind: 'table', id: t.id, title: t.title, object: t.object, view: t.view };
+          default:
+            return t;
+        }
+      }),
     },
   };
 }
@@ -440,7 +597,7 @@ async function persistNow() {
 }
 
 useWorkspace.subscribe((state, prev) => {
-  if (state.tabs === prev.tabs && state.activeTabId === prev.activeTabId) return;
+  if (state.tabs === prev.tabs && state.activeTabId === prev.activeTabId && state.split === prev.split) return;
   window.clearTimeout(timer);
   timer = window.setTimeout(() => void persistNow(), 600);
 });
@@ -450,4 +607,31 @@ window.addEventListener('beforeunload', () => void persistNow());
 export function resultSummary(result: ResultSet | undefined): string | null {
   if (!result) return null;
   return `${formatCount(result.rows.length)}${result.hasMore ? '+' : ''} rows`;
+}
+
+// ---------------------------------------------------------------------------
+// Autosave: tabs opened from a saved script write their SQL back (setting).
+// ---------------------------------------------------------------------------
+
+const autosaveTimers = new Map<string, number>();
+
+function scheduleAutosave(tabId: string) {
+  if (!useSettings.getState().settings.autosave_scripts) return;
+  window.clearTimeout(autosaveTimers.get(tabId));
+  autosaveTimers.set(
+    tabId,
+    window.setTimeout(() => {
+      autosaveTimers.delete(tabId);
+      const tab = useWorkspace.getState().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
+      if (!tab?.scriptId || tab.sql === tab.savedSql) return;
+      const sql = tab.sql;
+      api
+        .updateScriptSql(tab.scriptId, sql)
+        .then(() => {
+          const now = useWorkspace.getState().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
+          if (now?.sql === sql) useWorkspace.getState().markSaved(tabId, {});
+        })
+        .catch((e) => console.warn('autosave failed', e));
+    }, 1200),
+  );
 }

@@ -5,6 +5,7 @@ import type { Node } from '@/bindings/Node';
 import type { SavedScript } from '@/bindings/SavedScript';
 import { Eyebrow, Spinner } from '@/components/ui';
 import { api } from '@/lib/ipc';
+import { KIND_MARK } from '@/lib/objects';
 import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
@@ -12,7 +13,6 @@ import styles from './SearchPalette.module.css';
 
 type Result = { type: 'object'; node: Node } | { type: 'script'; script: SavedScript };
 
-const KIND = { table: 'T', view: 'V', materialized_view: 'M', schema: 'S', database: 'D' } as const;
 
 /** ⌘K: search tables and views in the connected database, and saved scripts. */
 export function SearchPalette() {
@@ -117,7 +117,7 @@ export function SearchPalette() {
               >
                 {r.type === 'object' ? (
                   <>
-                    <span className={styles.kind}>{KIND[r.node.kind]}</span>
+                    <span className={styles.kind}>{KIND_MARK[r.node.kind]}</span>
                     <span className="mono">{r.node.name}</span>
                     <span className={styles.detail}>{r.node.schema ?? r.node.database}</span>
                   </>

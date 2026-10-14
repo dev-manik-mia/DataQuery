@@ -6,7 +6,7 @@ import styles from '@/components/shell/Shell.module.css';
 import { StatusBar, StatusIndicator } from '@/components/shell/StatusBar';
 import { Toasts } from '@/components/shell/Toasts';
 import { Crumbs, TitleBar, TitleDivider } from '@/components/shell/TitleBar';
-import { Button, Chip, EngineMark, EnvironmentChip, Icon, Menu } from '@/components/ui';
+import { Button, Chip, EngineMark, EnvironmentChip, Icon, IconButton, Menu } from '@/components/ui';
 import { ConnectionForm } from '@/features/connections/ConnectionForm';
 import { ConnectionsHome } from '@/features/connections/ConnectionsHome';
 import { EnginePicker } from '@/features/connections/EnginePicker';
@@ -17,6 +17,10 @@ import { SettingsPage } from '@/features/settings/SettingsPage';
 import { Workspace } from '@/features/workspace/Workspace';
 import wsStyles from '@/features/workspace/Workspace.module.css';
 import { formatCount, formatDuration } from '@/lib/format';
+import { CommandPalette } from '@/features/commands/CommandPalette';
+import { appCommands, commandKeys, openNewWindow } from '@/features/commands/commands';
+import { SchemaDiffPage } from '@/features/schema/SchemaDiffPage';
+import { setLanguage, t } from '@/i18n';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
 import { useConnections, useEngine } from '@/stores/connections';
 import { useLayout } from '@/stores/layout';
@@ -24,12 +28,10 @@ import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
 import { noteSessionClosed, useWorkspace } from '@/stores/workspace';
 
-export const RUN_EVENT = 'dq:run';
-export type RunMode = 'statement' | 'script';
-
 export function App() {
   const view = useUi((s) => s.view);
   const paletteOpen = useUi((s) => s.paletteOpen);
+  const commandsOpen = useUi((s) => s.commandsOpen);
   const session = useWorkspace((s) => s.session);
   const theme = useSettings((s) => s.settings.theme);
 
@@ -50,7 +52,9 @@ export function App() {
     return () => media.removeEventListener('change', onChange);
   }, [theme]);
 
-  useGlobalShortcuts(view);
+  useGlobalShortcuts();
+  const language = useSettings((s) => s.settings.language);
+  setLanguage(language);
 
   const production = Boolean(session && session.connection.environment === 'Production' && view.name === 'workspace');
 
@@ -68,12 +72,14 @@ export function App() {
         {view.name === 'engines' && <EnginePicker />}
         {view.name === 'connection-form' && <ConnectionForm key={`${view.engine}:${view.connectionId ?? 'new'}`} engine={view.engine} connectionId={view.connectionId} prefill={view.prefill} />}
         {view.name === 'history' && <HistoryPage />}
+        {view.name === 'diff' && <SchemaDiffPage />}
         {view.name === 'settings' && <SettingsPage section={view.section} />}
       </div>
       {view.name === 'workspace' && session && <WorkspaceStatus />}
       <Toasts />
       <GlobalDialogs />
       {paletteOpen && <SearchPalette />}
+      {commandsOpen && <CommandPalette />}
     </div>
   );
 }
@@ -89,11 +95,19 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
 
   const navButtons = (
     <>
+      <IconButton label={`${t('nav.commandPalette')} (${shortcutLabel(commandKeys('palette.open') ?? 'shift+mod+p')})`} onClick={() => useUi.getState().setCommandsOpen(true)}>
+        <Icon name="command" />
+      </IconButton>
+      {session?.capabilities.monitoring && view.name === 'workspace' && (
+        <Button size="sm" onClick={() => useWorkspace.getState().openMonitorTab()}>
+          {t('nav.monitoring')}
+        </Button>
+      )}
       <Button size="sm" onClick={() => navigate({ name: 'history' })}>
-        History
+        {t('nav.history')}
       </Button>
       <Button size="sm" onClick={() => navigate({ name: 'settings', section: 'general' })}>
-        Settings
+        {t('nav.settings')}
       </Button>
     </>
   );
@@ -155,6 +169,8 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
             label="Connection"
             items={[
               { label: 'All connections', onSelect: home },
+              { label: t('action.newWindow'), hint: shortcutLabel(commandKeys('window.new') ?? ''), onSelect: openNewWindow },
+              { label: t('nav.schemaDiff'), onSelect: () => navigate({ name: 'diff' }) },
               { label: 'Edit connection', onSelect: () => navigate({ name: 'connection-form', engine: c.config.engine, connectionId: c.id }) },
               { type: 'separator' },
               { label: 'Reconnect', onSelect: () => void reconnect() },
@@ -172,7 +188,7 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
     );
   }
 
-  const backToWorkspace = session && (view.name === 'history' || view.name === 'settings') && (
+  const backToWorkspace = session && (view.name === 'history' || view.name === 'settings' || view.name === 'diff') && (
     <Button size="sm" onClick={back}>
       ← Back to {session.connection.name}
     </Button>
@@ -189,9 +205,45 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
       return <TitleBar onBrand={home} crumbs={<Crumbs items={[{ label: 'History' }]} />} actions={backToWorkspace || undefined} />;
     case 'settings':
       return <TitleBar onBrand={home} crumbs={<Crumbs items={[{ label: 'Settings' }]} />} actions={backToWorkspace || undefined} />;
+    case 'diff':
+      return <TitleBar onBrand={home} crumbs={<Crumbs items={[{ label: t('nav.schemaDiff') }]} />} actions={backToWorkspace || navButtons} />;
     default:
       return <TitleBar onBrand={home} actions={navButtons} />;
   }
+}
+
+/** Auto-commit / manual commit / open or failed transaction, with Commit and Rollback. */
+function TransactionStatus() {
+  const tx = useWorkspace((s) => s.tx);
+  const manual = useSettings((s) => s.settings.manual_commit);
+  const caps = useWorkspace((s) => s.session?.capabilities);
+  const { transaction } = useWorkspace.getState();
+  if (!caps?.transactions) return <span>{t('tx.auto')}</span>;
+  const label = tx === 'open' ? t('tx.open') : tx === 'failed' ? t('tx.failed') : manual ? t('tx.manual') : t('tx.auto');
+  return (
+    <>
+      <button
+        type="button"
+        className="dq-status-link"
+        style={{ color: tx === 'failed' ? 'var(--critical)' : tx === 'open' ? 'var(--caution)' : undefined }}
+        title={manual ? 'Statements open a transaction that stays open until Commit or Rollback. Click to switch to auto-commit.' : 'Each statement commits on its own. Click to switch to manual commit.'}
+        onClick={() => void useSettings.getState().update({ manual_commit: !manual })}
+      >
+        {tx !== 'auto' && '● '}
+        {label}
+      </button>
+      {tx === 'open' && (
+        <Button size="xs" onClick={() => void transaction('commit')}>
+          {t('action.commit')}
+        </Button>
+      )}
+      {tx !== 'auto' && (
+        <Button size="xs" onClick={() => void transaction('rollback')}>
+          {t('action.rollback')}
+        </Button>
+      )}
+    </>
+  );
 }
 
 function WorkspaceStatus() {
@@ -215,7 +267,8 @@ function WorkspaceStatus() {
           <span className="mono">
             {session.server.user}@{session.server.database}
           </span>
-          <span>{session.server.read_only ? 'Read-only server' : 'Auto-commit'}</span>
+          {session.server.read_only && <span>{session.connection.config.read_only ? 'Read-only connection' : 'Read-only server'}</span>}
+          <TransactionStatus />
           {session.server.tls && <span>TLS{session.server.tls.verified ? ' · verified' : ''}</span>}
         </>
       }
@@ -239,34 +292,33 @@ function WorkspaceStatus() {
   );
 }
 
-/** ⌘K anywhere; ⌘T, ⌘W, Ctrl+Tab and run shortcuts in the workspace. */
-function useGlobalShortcuts(view: View) {
+/** Shortcuts for every command in the registry (customizable in Settings → Keyboard). */
+function useGlobalShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ui = useUi.getState();
-      if (ui.confirmation || ui.question) return;
-      if (matchShortcut(e, 'mod+k')) {
+      if (ui.confirmation || ui.question || e.defaultPrevented) return;
+      if (e.ctrlKey && e.key === 'Tab' && ui.view.name === 'workspace') {
         e.preventDefault();
-        ui.setPaletteOpen(!ui.paletteOpen);
+        useWorkspace.getState().cycleTab(e.shiftKey ? -1 : 1);
         return;
       }
-      const ws = useWorkspace.getState();
-      if (view.name !== 'workspace' || !ws.session || ui.paletteOpen) return;
-      if (matchShortcut(e, 'mod+t')) {
+      const inEditor = Boolean((e.target as HTMLElement | null)?.closest?.('.cm-editor'));
+      for (const command of appCommands()) {
+        const keys = commandKeys(command.id);
+        if (!keys || !matchShortcut(e, keys)) continue;
+        // The SQL editor binds the query shortcuts itself.
+        if (inEditor && command.id.startsWith('query.')) return;
+        if ((ui.paletteOpen || ui.commandsOpen) && !['palette.open', 'search.open'].includes(command.id)) return;
+        if (!command.available) continue;
         e.preventDefault();
-        ws.openQueryTab();
-      } else if (matchShortcut(e, 'mod+w')) {
-        e.preventDefault();
-        if (ws.activeTabId) void ws.closeTab(ws.activeTabId);
-      } else if (e.ctrlKey && e.key === 'Tab') {
-        e.preventDefault();
-        ws.cycleTab(e.shiftKey ? -1 : 1);
-      } else if ((matchShortcut(e, 'mod+enter') || matchShortcut(e, 'shift+mod+enter')) && !(e.target as HTMLElement).closest('.cm-editor')) {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent<RunMode>(RUN_EVENT, { detail: e.shiftKey ? 'script' : 'statement' }));
+        if (command.id === 'search.open' && ui.paletteOpen) ui.setPaletteOpen(false);
+        else if (command.id === 'palette.open' && ui.commandsOpen) ui.setCommandsOpen(false);
+        else command.run();
+        return;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [view.name]);
+  }, []);
 }
