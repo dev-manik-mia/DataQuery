@@ -23,12 +23,21 @@ pub enum SqlFlavor {
     Duckdb,
     /// Snowflake SQL and Snowflake Scripting.
     Snowflake,
+    /// `MongoDB` shell statements: `db.orders.find({ … })`, `show collections`, `use app`.
+    Mongodb,
+    /// `PartiQL` as `DynamoDB` runs it: `SELECT * FROM "orders" WHERE "pk" = ?`.
+    Partiql,
 }
 
 impl SqlFlavor {
     /// Lexes like `PostgreSQL` (dollar quotes, `E''`, nested comments, `$n`).
     pub fn postgres_like(self) -> bool {
         matches!(self, Self::Postgres | Self::Duckdb)
+    }
+
+    /// Statements are not SQL: the document engines' own languages.
+    pub fn is_document(self) -> bool {
+        matches!(self, Self::Mongodb | Self::Partiql)
     }
 }
 
@@ -75,7 +84,8 @@ pub trait Dialect: Send + Sync {
     /// SQL Server, Oracle, `DuckDB`, Snowflake) or the database (`MySQL`, `ClickHouse`).
     fn container<'a>(&self, object: &'a ObjectRef) -> Option<&'a str> {
         match self.flavor() {
-            SqlFlavor::Mysql | SqlFlavor::Clickhouse => Some(object.database.as_str()),
+            SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb => Some(object.database.as_str()),
+            SqlFlavor::Partiql => None,
             SqlFlavor::Postgres
             | SqlFlavor::Sqlserver
             | SqlFlavor::Oracle
@@ -168,6 +178,8 @@ pub struct OracleDialect;
 pub struct ClickhouseDialect;
 pub struct DuckdbDialect;
 pub struct SnowflakeDialect;
+pub struct MongoDialect;
+pub struct PartiqlDialect;
 
 impl Dialect for PostgresDialect {
     fn flavor(&self) -> SqlFlavor {
@@ -673,6 +685,154 @@ impl Dialect for SnowflakeDialect {
     }
 }
 
+/// `MongoDB` shell syntax. Names are JSON strings (`db.getCollection("a.b")`);
+/// the SQL builders are never used for it, so the SQL-only methods return
+/// harmless shell text.
+impl Dialect for MongoDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Mongodb
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        serde_json::Value::String(ident.to_owned()).to_string()
+    }
+
+    /// A plain JavaScript identifier can follow `db.` directly.
+    fn needs_quotes(&self, ident: &str) -> bool {
+        let mut chars = ident.chars();
+        !(chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$'))
+            || MONGO_RESERVED.contains(&ident)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        self.quote_ident(value)
+    }
+
+    fn placeholder(&self, _index: usize, _column_type: &str) -> String {
+        "null".into()
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    fn comparable(&self, _data_type: &str) -> bool {
+        false
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("{{ {quoted_column}: {placeholder} }}")
+    }
+
+    fn paginate(&self, sql: &str, _ordered: bool, offset: u64, limit: u64) -> String {
+        if offset == 0 { format!("{sql}.limit({limit})") } else { format!("{sql}.skip({offset}).limit({limit})") }
+    }
+
+    fn template_placeholder(&self, _n: usize) -> String {
+        "null".into()
+    }
+
+    /// The adapter runs `BEGIN` / `COMMIT` / `ROLLBACK` on a driver session.
+    fn begin_transaction(&self) -> &'static str {
+        "BEGIN"
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn aborts_transaction_on_error(&self) -> bool {
+        true
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("BinData(0, \"{hex}\")")
+    }
+
+    fn bool_literal(&self, value: bool) -> &'static str {
+        if value { "true" } else { "false" }
+    }
+
+    /// `db.getCollection("orders")`, or `db.orders` when no quoting is needed.
+    fn quoted_name(&self, object: &ObjectRef) -> String {
+        format!("db.getCollection({})", self.quote_ident(&object.name))
+    }
+
+    fn display_name(&self, object: &ObjectRef) -> String {
+        if self.needs_quotes(&object.name) { self.quoted_name(object) } else { format!("db.{}", object.name) }
+    }
+}
+
+/// `PartiQL` for `DynamoDB`: double-quoted names, single-quoted strings, `?`
+/// parameters. There is no `LIMIT`: the adapter pages with the API's tokens.
+impl Dialect for PartiqlDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Partiql
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        format!("\"{}\"", ident.replace('"', "\"\""))
+    }
+
+    fn needs_quotes(&self, ident: &str) -> bool {
+        let mut chars = ident.chars();
+        !(chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            || is_reserved(ident, PARTIQL_RESERVED)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+
+    fn placeholder(&self, _index: usize, _column_type: &str) -> String {
+        "?".into()
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        matches!(data_type, "S" | "N" | "B")
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("contains({quoted_column}, {placeholder})")
+    }
+
+    fn paginate(&self, sql: &str, _ordered: bool, _offset: u64, _limit: u64) -> String {
+        sql.to_owned()
+    }
+
+    fn template_placeholder(&self, _n: usize) -> String {
+        "?".into()
+    }
+
+    /// Writes are queued until `COMMIT`, which sends them as one `ExecuteTransaction`.
+    fn begin_transaction(&self) -> &'static str {
+        "BEGIN"
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("'{hex}'")
+    }
+
+    fn bool_literal(&self, value: bool) -> &'static str {
+        if value { "true" } else { "false" }
+    }
+
+    /// `ExecuteTransaction` takes at most 100 statements.
+    fn max_insert_rows(&self) -> usize {
+        1
+    }
+}
+
 pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
     match flavor {
         SqlFlavor::Postgres => &PostgresDialect,
@@ -682,6 +842,8 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Clickhouse => &ClickhouseDialect,
         SqlFlavor::Duckdb => &DuckdbDialect,
         SqlFlavor::Snowflake => &SnowflakeDialect,
+        SqlFlavor::Mongodb => &MongoDialect,
+        SqlFlavor::Partiql => &PartiqlDialect,
     }
 }
 
@@ -695,6 +857,14 @@ fn join(container: Option<&str>, name: &str, quote: impl Fn(&str) -> String) -> 
 fn is_reserved(ident: &str, list: &[&str]) -> bool {
     list.iter().any(|k| k.eq_ignore_ascii_case(ident))
 }
+
+const MONGO_RESERVED: &[&str] = &["getCollection", "getName", "getSiblingDB", "runCommand", "aggregate"];
+
+/// Words that must be quoted as `PartiQL` names in `DynamoDB`.
+const PARTIQL_RESERVED: &[&str] = &[
+    "and", "as", "between", "by", "delete", "exists", "false", "from", "in", "insert", "into", "is", "missing", "not",
+    "null", "or", "order", "remove", "select", "set", "true", "update", "value", "where",
+];
 
 const POSTGRES_RESERVED: &[&str] = &[
     "all",

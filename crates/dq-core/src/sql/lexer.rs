@@ -77,6 +77,23 @@ impl Lexer<'_> {
         );
         let (ch, sf, duck) =
             (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
+        let (mongo, partiql) = (flavor == SqlFlavor::Mongodb, flavor == SqlFlavor::Partiql);
+        if mongo {
+            // JavaScript: three string quotes with backslash escapes, `//` comments, `$operators`.
+            match c {
+                b'\'' | b'"' | b'`' => return self.quoted(c, true),
+                b'/' if self.peek(1) == Some(b'/') => return self.line_comment(),
+                b'-' => return self.single(TokenKind::Punct),
+                b'$' => {
+                    self.pos += 1;
+                    while self.peek(0).is_some_and(is_word_continue) {
+                        self.pos += 1;
+                    }
+                    return TokenKind::Word;
+                }
+                _ => {}
+            }
+        }
         match c {
             b' ' | b'\t' | b'\n' | b'\r' | 0x0c => {
                 while matches!(self.peek(0), Some(b' ' | b'\t' | b'\n' | b'\r' | 0x0c)) {
@@ -107,7 +124,7 @@ impl Lexer<'_> {
                 self.q_quote(2)
             }
             b'$' if pg || (sf && self.peek(1) == Some(b'$')) => self.dollar(),
-            b'?' if my || duck || sf => self.single(TokenKind::Param),
+            b'?' if my || duck || sf || partiql => self.single(TokenKind::Param),
             b'@' if ms => self.at_sign(),
             b':' if (ora || sf) && self.peek(1).is_some_and(|c| c.is_ascii_digit()) => {
                 self.pos += 1;
