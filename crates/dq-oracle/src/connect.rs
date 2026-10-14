@@ -11,7 +11,6 @@ use std::sync::OnceLock;
 use dq_core::adapter::ConnectParams;
 use dq_core::config::SslMode;
 use dq_core::result::{ServerInfo, TlsInfo};
-use dq_core::sql::{Dialect, OracleDialect};
 use dq_core::{DbError, DbResult, ErrorKind};
 use oracle::{Connection, Connector, InitParams};
 
@@ -154,11 +153,6 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
     })
     .await
     .map_err(|e| DbError::internal(format!("connect task failed: {e}")))?
-}
-
-/// `"OWNER"."NAME"` for messages and generated SQL.
-pub fn qualified(owner: &str, name: &str) -> String {
-    format!("{}.{}", OracleDialect.quote_ident(owner), OracleDialect.quote_ident(name))
 }
 
 #[cfg(test)]
