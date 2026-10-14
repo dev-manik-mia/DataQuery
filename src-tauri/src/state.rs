@@ -87,6 +87,8 @@ pub struct AppState {
     pub registry: Registry,
     pub known_hosts: Arc<KnownHosts>,
     pub sessions: RwLock<HashMap<String, Arc<OpenSession>>>,
+    /// Cancel flags of running exports and imports, by job id.
+    pub transfers: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 impl AppState {
@@ -97,6 +99,7 @@ impl AppState {
             registry: Registry::new(),
             known_hosts: Arc::new(known_hosts),
             sessions: RwLock::new(HashMap::new()),
+            transfers: Mutex::new(HashMap::new()),
         }
     }
 

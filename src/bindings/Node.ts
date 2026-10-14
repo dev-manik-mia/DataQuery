@@ -9,4 +9,9 @@ row_estimate: number | null, comment: string | null,
 /**
  * For databases: true when this is the database the session connected to.
  */
-current: boolean, kind: NodeKind, database: string, schema: string | null, name: string, };
+current: boolean, kind: NodeKind, database: string, schema: string | null, name: string, 
+/**
+ * The owning table of an index or trigger, or the argument list of a
+ * function or procedure (which may be overloaded).
+ */
+parent?: string, };

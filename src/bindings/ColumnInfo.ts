@@ -10,6 +10,10 @@ data_type: string, nullable: boolean, default: string | null, primary_key: boole
  */
 generated: boolean, 
 /**
+ * Identity (PostgreSQL) or `AUTO_INCREMENT` (MySQL).
+ */
+identity: boolean, 
+/**
  * The grid can edit this column through a text round-trip.
  */
 editable: boolean, numeric: boolean, comment: string | null, };
