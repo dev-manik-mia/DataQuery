@@ -1,0 +1,21 @@
+[package]
+name = "dq-mysql"
+description = "MySQL and MariaDB adapter for DataQuery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dq-core.workspace = true
+async-trait.workspace = true
+mysql_async.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

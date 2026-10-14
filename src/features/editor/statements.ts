@@ -17,7 +17,7 @@ export const statementsField = StateField.define<StatementInfo[]>({
   },
 });
 
-const currentLine = Decoration.line({ class: 'rb-current-statement' });
+const currentLine = Decoration.line({ class: 'dq-current-statement' });
 
 function currentStatementDecorations(state: EditorState): DecorationSet {
   const selection = state.selection.main;
@@ -47,7 +47,7 @@ export const currentStatement = StateField.define<DecorationSet>({
 /** Server-reported error position, underlined to the end of the word. */
 export const setErrorAt = StateEffect.define<number | null>();
 
-const errorMark = Decoration.mark({ class: 'rb-error-mark' });
+const errorMark = Decoration.mark({ class: 'dq-error-mark' });
 
 export const errorField = StateField.define<DecorationSet>({
   create: () => Decoration.none,

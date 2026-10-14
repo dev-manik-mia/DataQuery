@@ -17,9 +17,9 @@ export function TitleBar({ onBrand, crumbs, center, actions, production }: Title
   const classes = [styles.titlebar, isMac && styles.titlebarMac, production && styles.titlebarProduction].filter(Boolean).join(' ');
   return (
     <header className={classes} data-tauri-drag-region>
-      <button type="button" className={styles.brand} onClick={onBrand} aria-label="RustBase — connections">
+      <button type="button" className={styles.brand} onClick={onBrand} aria-label="DataQuery — connections">
         <span className={styles.brandMark} aria-hidden />
-        RustBase
+        DataQuery
       </button>
       {crumbs}
       {center ? (

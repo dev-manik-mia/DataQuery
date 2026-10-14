@@ -56,12 +56,12 @@ export function Menu({ x, y, items, onClose, label = 'Actions' }: MenuProps) {
   };
 
   return createPortal(
-    <div ref={ref} className="rb-menu" role="menu" aria-label={label} style={position} onKeyDown={move}>
+    <div ref={ref} className="dq-menu" role="menu" aria-label={label} style={position} onKeyDown={move}>
       {items.map((item, i) => {
-        if (item.type === 'separator') return <div key={i} className="rb-menu__sep" role="separator" />;
+        if (item.type === 'separator') return <div key={i} className="dq-menu__sep" role="separator" />;
         if (item.type === 'label')
           return (
-            <div key={i} className="rb-menu__label">
+            <div key={i} className="dq-menu__label">
               {item.label}
             </div>
           );
@@ -71,14 +71,14 @@ export function Menu({ x, y, items, onClose, label = 'Actions' }: MenuProps) {
             type="button"
             role="menuitem"
             disabled={item.disabled}
-            className={`rb-menu__item${item.danger ? ' rb-menu__item--danger' : ''}`}
+            className={`dq-menu__item${item.danger ? ' dq-menu__item--danger' : ''}`}
             onClick={() => {
               onClose();
               item.onSelect();
             }}
           >
             {item.label}
-            {item.hint && <span className="rb-menu__hint">{item.hint}</span>}
+            {item.hint && <span className="dq-menu__hint">{item.hint}</span>}
           </button>
         );
       })}

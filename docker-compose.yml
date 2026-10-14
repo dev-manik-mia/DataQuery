@@ -4,26 +4,26 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: rustbase
-      POSTGRES_PASSWORD: rustbase
-      POSTGRES_DB: rustbase_test
+      POSTGRES_USER: dataquery
+      POSTGRES_PASSWORD: dataquery
+      POSTGRES_DB: dataquery_test
     ports: ["55432:5432"]
     volumes: ["./docker/postgres-seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rustbase -d rustbase_test"]
+      test: ["CMD-SHELL", "pg_isready -U dataquery -d dataquery_test"]
       interval: 2s
       retries: 30
 
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: rustbase
-      MYSQL_DATABASE: rustbase_test
-      MYSQL_USER: rustbase
-      MYSQL_PASSWORD: rustbase
+      MYSQL_ROOT_PASSWORD: dataquery
+      MYSQL_DATABASE: dataquery_test
+      MYSQL_USER: dataquery
+      MYSQL_PASSWORD: dataquery
     ports: ["53306:3306"]
     volumes: ["./docker/mysql-seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro"]
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-prustbase"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pdataquery"]
       interval: 2s
       retries: 60

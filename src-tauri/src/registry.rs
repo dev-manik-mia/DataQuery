@@ -3,16 +3,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rb_core::adapter::DatabaseAdapter;
-use rb_core::engine::{Capabilities, Engine};
-use rb_core::{DbError, DbResult};
+use dq_core::adapter::DatabaseAdapter;
+use dq_core::engine::{Capabilities, Engine};
+use dq_core::{DbError, DbResult};
 
 pub struct Registry(HashMap<Engine, Arc<dyn DatabaseAdapter>>);
 
 impl Registry {
     pub fn new() -> Self {
         let adapters: Vec<(Engine, Arc<dyn DatabaseAdapter>)> =
-            vec![(Engine::Postgres, Arc::new(rb_postgres::PostgresAdapter))];
+            vec![(Engine::Postgres, Arc::new(dq_postgres::PostgresAdapter))];
         Self(adapters.into_iter().collect())
     }
 

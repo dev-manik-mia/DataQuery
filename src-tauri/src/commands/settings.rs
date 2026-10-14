@@ -1,4 +1,4 @@
-use rb_store::Settings;
+use dq_store::Settings;
 use tauri::State;
 
 use super::CmdResult;

@@ -1,8 +1,8 @@
-use rb_core::config::{ParsedUrl, parse_connection_url};
-use rb_core::{DbError, ErrorKind};
-use rb_core::engine::{EngineInfo, catalog};
-use rb_core::sql::{SqlFlavor, StatementInfo, split_statements};
-use rb_store::KeychainStatus;
+use dq_core::config::{ParsedUrl, parse_connection_url};
+use dq_core::{DbError, ErrorKind};
+use dq_core::engine::{EngineInfo, catalog};
+use dq_core::sql::{SqlFlavor, StatementInfo, split_statements};
+use dq_store::KeychainStatus;
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;
@@ -23,7 +23,7 @@ pub struct AppInfo {
 #[tauri::command]
 pub async fn app_info() -> CmdResult<AppInfo> {
     Ok(AppInfo {
-        name: "RustBase",
+        name: "DataQuery",
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
@@ -87,7 +87,7 @@ pub async fn analyze_sql(sql: String, flavor: SqlFlavor) -> CmdResult<Vec<Statem
 /// Basic formatter: keywords upper-cased, one clause per line.
 #[tauri::command]
 pub async fn format_sql(sql: String, flavor: SqlFlavor) -> CmdResult<String> {
-    Ok(rb_core::sql::format::format_sql(&sql, flavor))
+    Ok(dq_core::sql::format::format_sql(&sql, flavor))
 }
 
 /// Parses a connection URL. The password is returned for the form only and is

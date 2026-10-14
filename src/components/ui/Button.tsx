@@ -18,12 +18,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   { variant = 'ghost', size = 'md', busy = false, shortcut, icon, className, children, disabled, type = 'button', ...rest },
   ref,
 ) {
-  const classes = ['rb-btn', `rb-btn--${variant}`, size !== 'md' && `rb-btn--${size}`, className].filter(Boolean).join(' ');
+  const classes = ['dq-btn', `dq-btn--${variant}`, size !== 'md' && `dq-btn--${size}`, className].filter(Boolean).join(' ');
   return (
     <button ref={ref} type={type} className={classes} disabled={disabled || busy} aria-busy={busy || undefined} {...rest}>
       {busy ? <Spinner current /> : icon}
       {children}
-      {shortcut && <span className="rb-btn__kbd">{shortcut}</span>}
+      {shortcut && <span className="dq-btn__kbd">{shortcut}</span>}
     </button>
   );
 });
@@ -40,7 +40,7 @@ export function IconButton({ label, bare = false, className, children, type = 'b
       type={type}
       aria-label={label}
       title={label}
-      className={['rb-icon-btn', bare && 'rb-icon-btn--bare', className].filter(Boolean).join(' ')}
+      className={['dq-icon-btn', bare && 'dq-icon-btn--bare', className].filter(Boolean).join(' ')}
       {...rest}
     >
       {children}

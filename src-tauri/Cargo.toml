@@ -1,22 +1,22 @@
 [package]
-name = "rustbase"
-description = "RustBase — a fast, safe desktop database client."
+name = "dataquery"
+description = "DataQuery — a fast, safe desktop database client."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "rustbase_lib"
+name = "dataquery_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
-rb-core.workspace = true
-rb-postgres.workspace = true
-rb-store.workspace = true
+dq-core.workspace = true
+dq-postgres.workspace = true
+dq-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.9", features = [] }

@@ -309,7 +309,7 @@ export function DataGrid({
                 draggable
                 title={onSort ? `Sort by ${c.name}` : c.name}
                 onClick={() => onSort?.(c.name)}
-                onDragStart={(e) => e.dataTransfer.setData('text/x-rb-column', String(ci))}
+                onDragStart={(e) => e.dataTransfer.setData('text/x-dq-column', String(ci))}
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDragOver(ci);
@@ -318,7 +318,7 @@ export function DataGrid({
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOver(null);
-                  dropColumn(Number(e.dataTransfer.getData('text/x-rb-column')), ci);
+                  dropColumn(Number(e.dataTransfer.getData('text/x-dq-column')), ci);
                 }}
               >
                 <span className={styles.headName}>

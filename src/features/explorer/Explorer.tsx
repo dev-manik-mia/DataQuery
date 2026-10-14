@@ -141,7 +141,7 @@ export function Explorer({ width }: { width: number }) {
     <aside className={styles.explorer} style={{ width }} aria-label="Explorer">
       <div className={styles.head}>
         <div className={styles.headRow}>
-          <span className="rb-eyebrow">Explorer</span>
+          <span className="dq-eyebrow">Explorer</span>
           <IconButton label="Refresh databases" onClick={() => refresh(null)}>
             <Icon name="refresh" size={12} />
           </IconButton>

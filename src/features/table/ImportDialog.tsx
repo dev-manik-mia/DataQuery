@@ -135,7 +135,7 @@ export function ImportDialog({ object, structure, onClose, onImported }: { objec
               </tbody>
             </table>
           </div>
-          <div className="rb-eyebrow">Column mapping</div>
+          <div className="dq-eyebrow">Column mapping</div>
           <div className={styles.mapping}>
             {targets.map((c) => (
               <div key={c.name} style={{ display: 'contents' }}>

@@ -76,21 +76,21 @@ export function SearchPalette() {
   const firstScript = results.findIndex((r) => r.type === 'script');
 
   return createPortal(
-    <div className="rb-scrim rb-scrim--top" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className={`rb-dialog ${styles.palette}`} role="dialog" aria-modal="true" aria-label="Search">
+    <div className="dq-scrim dq-scrim--top" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className={`dq-dialog ${styles.palette}`} role="dialog" aria-modal="true" aria-label="Search">
         <input
           ref={input}
           className={styles.input}
           role="combobox"
           aria-expanded
-          aria-controls="rb-search-results"
-          aria-activedescendant={results[index] ? `rb-search-${index}` : undefined}
+          aria-controls="dq-search-results"
+          aria-activedescendant={results[index] ? `dq-search-${index}` : undefined}
           placeholder={session ? 'Search tables, views and saved scripts' : 'Search saved scripts'}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
         />
-        <div className={styles.list} id="rb-search-results" role="listbox">
+        <div className={styles.list} id="dq-search-results" role="listbox">
           {results.length === 0 && (
             <div className={styles.empty}>{searching ? <Spinner /> : query.trim() ? 'No matches.' : 'Type to search.'}</div>
           )}
@@ -108,7 +108,7 @@ export function SearchPalette() {
               )}
               <button
                 type="button"
-                id={`rb-search-${i}`}
+                id={`dq-search-${i}`}
                 role="option"
                 aria-selected={i === index}
                 className={styles.item}

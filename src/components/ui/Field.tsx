@@ -13,18 +13,18 @@ export function FieldShell({ label, hint, error, className, children }: FieldShe
   const id = useId();
   const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
   return (
-    <div className={['rb-field', className].filter(Boolean).join(' ')}>
-      <label className="rb-field__label" htmlFor={id}>
+    <div className={['dq-field', className].filter(Boolean).join(' ')}>
+      <label className="dq-field__label" htmlFor={id}>
         {label}
       </label>
       {children(id, describedBy)}
       {error ? (
-        <span id={`${id}-error`} className="rb-field__error">
+        <span id={`${id}-error`} className="dq-field__error">
           {error}
         </span>
       ) : (
         hint && (
-          <span id={`${id}-hint`} className="rb-field__hint">
+          <span id={`${id}-hint`} className="dq-field__hint">
             {hint}
           </span>
         )
@@ -36,7 +36,7 @@ export function FieldShell({ label, hint, error, className, children }: FieldShe
 type Common = { label: ReactNode; hint?: ReactNode; error?: ReactNode; mono?: boolean; className?: string };
 
 function inputClass(mono?: boolean, small?: boolean) {
-  return ['rb-input', mono && 'rb-input--mono', small && 'rb-input--sm'].filter(Boolean).join(' ');
+  return ['dq-input', mono && 'dq-input--mono', small && 'dq-input--sm'].filter(Boolean).join(' ');
 }
 
 export function TextField({
@@ -64,9 +64,9 @@ export function TextField({
           />
         );
         return suffix ? (
-          <span className="rb-input-wrap">
+          <span className="dq-input-wrap">
             {input}
-            <span className="rb-input-wrap__suffix">{suffix}</span>
+            <span className="dq-input-wrap__suffix">{suffix}</span>
           </span>
         ) : (
           input

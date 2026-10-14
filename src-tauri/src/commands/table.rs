@@ -1,8 +1,8 @@
-use rb_core::edit::{ApplyReport, RowChange};
-use rb_core::node::ObjectRef;
-use rb_core::ops;
-use rb_core::schema::TableStructure;
-use rb_core::table::{RowCount, TablePage, TablePageRequest};
+use dq_core::edit::{ApplyReport, RowChange};
+use dq_core::node::ObjectRef;
+use dq_core::ops;
+use dq_core::schema::TableStructure;
+use dq_core::table::{RowCount, TablePage, TablePageRequest};
 use tauri::State;
 
 use super::{CmdResult, Guarded};

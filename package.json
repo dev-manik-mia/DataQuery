@@ -1,9 +1,9 @@
 {
-  "name": "rustbase",
+  "name": "dataquery",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "RustBase — a fast, safe desktop database client.",
+  "description": "DataQuery — a fast, safe desktop database client.",
   "license": "MIT OR Apache-2.0",
   "scripts": {
     "dev": "vite",
@@ -17,9 +17,9 @@
     "lint": "eslint src",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-    "test:integration": "RUSTBASE_TEST_PG=localhost:55432 RUSTBASE_TEST_MYSQL=localhost:53306 cargo test --workspace",
-    "db:up": "docker compose -p rustbase up -d",
-    "db:down": "docker compose -p rustbase down -v"
+    "test:integration": "DATAQUERY_TEST_PG=localhost:55432 DATAQUERY_TEST_MYSQL=localhost:53306 cargo test --workspace",
+    "db:up": "docker compose -p dataquery up -d",
+    "db:down": "docker compose -p dataquery down -v"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",

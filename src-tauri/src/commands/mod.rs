@@ -12,7 +12,7 @@ pub mod system;
 pub mod table;
 pub mod transfer;
 
-use rb_core::DbResult;
+use dq_core::DbResult;
 use serde::Serialize;
 use ts_rs::TS;
 

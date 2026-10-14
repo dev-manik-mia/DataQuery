@@ -35,7 +35,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, s
   };
 
   return (
-    <div role="radiogroup" aria-label={label} className={`rb-seg${size === 'md' ? ' rb-seg--md' : ''}`} onKeyDown={onKeyDown}>
+    <div role="radiogroup" aria-label={label} className={`dq-seg${size === 'md' ? ' dq-seg--md' : ''}`} onKeyDown={onKeyDown}>
       {options.map((o, i) => {
         const selected = o.value === value;
         return (
@@ -49,11 +49,11 @@ export function Segmented<T extends string>({ label, value, options, onChange, s
             aria-checked={selected}
             tabIndex={selected ? 0 : -1}
             disabled={o.disabled}
-            className={['rb-seg__opt', selected && o.selectedClassName].filter(Boolean).join(' ')}
+            className={['dq-seg__opt', selected && o.selectedClassName].filter(Boolean).join(' ')}
             onClick={() => onChange(o.value)}
           >
             {o.label}
-            {o.count !== undefined && <span className="rb-seg__count">{o.count}</span>}
+            {o.count !== undefined && <span className="dq-seg__count">{o.count}</span>}
           </button>
         );
       })}

@@ -1,9 +1,9 @@
 use std::time::Instant;
 
-use rb_core::result::{ExecOptions, RowsPage, StatementResult};
-use rb_core::sql::split_statements;
-use rb_core::{DbError, ErrorKind};
-use rb_store::{HistoryStatus, NewHistoryEntry};
+use dq_core::result::{ExecOptions, RowsPage, StatementResult};
+use dq_core::sql::split_statements;
+use dq_core::{DbError, ErrorKind};
+use dq_store::{HistoryStatus, NewHistoryEntry};
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;

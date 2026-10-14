@@ -1,6 +1,6 @@
-use rb_core::DbError;
-use rb_core::result::ServerInfo;
-use rb_store::{ConnectionDraft, Folder, PasswordChange, SavedConnection};
+use dq_core::DbError;
+use dq_core::result::ServerInfo;
+use dq_store::{ConnectionDraft, Folder, PasswordChange, SavedConnection};
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;

@@ -22,18 +22,18 @@ export function Tabs<T extends string | number>({
   trailing?: ReactNode;
 }) {
   return (
-    <div className="rb-tabs" role="tablist" aria-label={label}>
+    <div className="dq-tabs" role="tablist" aria-label={label}>
       {items.map((t) => (
         <button
           key={t.id}
           type="button"
           role="tab"
           aria-selected={t.id === value}
-          className={`rb-tabs__tab${t.critical ? ' rb-tabs__tab--critical' : ''}`}
+          className={`dq-tabs__tab${t.critical ? ' dq-tabs__tab--critical' : ''}`}
           onClick={() => onChange(t.id)}
         >
           {t.label}
-          {t.count !== undefined && <span className="rb-tabs__count">{t.count}</span>}
+          {t.count !== undefined && <span className="dq-tabs__count">{t.count}</span>}
         </button>
       ))}
       {trailing && (

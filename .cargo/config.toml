@@ -1,3 +1,3 @@
 [env]
-# ts-rs writes the generated TypeScript bindings here (run `cargo test -p rb-core`).
+# ts-rs writes the generated TypeScript bindings here (run `cargo test -p dq-core`).
 TS_RS_EXPORT_DIR = { value = "src/bindings", relative = true }

@@ -4,7 +4,7 @@ import type { EngineInfo } from '@/bindings/EngineInfo';
 export function EngineMark({ engine, size = 28 }: { engine: Pick<EngineInfo, 'mark' | 'hue' | 'name'>; size?: number }) {
   return (
     <span
-      className="rb-engine"
+      className="dq-engine"
       title={engine.name}
       aria-label={engine.name}
       role="img"

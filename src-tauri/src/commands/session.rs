@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use rb_core::engine::Capabilities;
-use rb_core::result::ServerInfo;
-use rb_core::sql::SqlFlavor;
-use rb_store::SavedConnection;
+use dq_core::engine::Capabilities;
+use dq_core::result::ServerInfo;
+use dq_core::sql::SqlFlavor;
+use dq_store::SavedConnection;
 use serde::Serialize;
 use tauri::State;
 use ts_rs::TS;

@@ -1,5 +1,5 @@
-use rb_core::node::{Node, ObjectRef};
-use rb_core::sql::builder::select_template;
+use dq_core::node::{Node, ObjectRef};
+use dq_core::sql::builder::select_template;
 use tauri::State;
 
 use super::CmdResult;

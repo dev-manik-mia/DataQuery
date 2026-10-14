@@ -136,7 +136,7 @@ function Editor() {
           {SHORTCUTS.map(([label, keys]) => (
             <div key={label} style={{ display: 'contents' }}>
               <span>{label}</span>
-              <span className="rb-kbd">{shortcutLabel(keys)}</span>
+              <span className="dq-kbd">{shortcutLabel(keys)}</span>
             </div>
           ))}
         </div>
@@ -207,7 +207,7 @@ function Security() {
         </div>
       </Card>
       <Card title="Data sharing" flush>
-        <Row title="Usage telemetry" help="Off. RustBase sends nothing unless you turn this on. There is no account and no cloud service.">
+        <Row title="Usage telemetry" help="Off. DataQuery sends nothing unless you turn this on. There is no account and no cloud service.">
           <Chip tone="mute">Off</Chip>
         </Row>
       </Card>
@@ -283,9 +283,9 @@ function About() {
   const platform = info ? `${info.os === 'macos' ? 'macOS' : info.os === 'windows' ? 'Windows' : 'Linux'} · ${info.arch}` : '…';
   return (
     <>
-      <PageHead eyebrow="Settings" title="About RustBase" />
+      <PageHead eyebrow="Settings" title="About DataQuery" />
       <Card flush>
-        <Row title="Version" help={info ? `RustBase ${info.version}` : '…'} />
+        <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
         <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
         <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon) against PostgreSQL 17 and MySQL 8.4. Windows and Linux builds compile from the same code but are not yet tested." />

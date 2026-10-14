@@ -89,7 +89,7 @@ function split(sql: string) {
 }
 
 const handlers: Record<string, (a: Args) => unknown> = {
-  app_info: () => ({ name: 'RustBase', version: '0.1.0', os: 'macos', arch: 'aarch64', license: 'MIT OR Apache-2.0' }),
+  app_info: () => ({ name: 'DataQuery', version: '0.1.0', os: 'macos', arch: 'aarch64', license: 'MIT OR Apache-2.0' }),
   list_engines: () => ENGINES,
   keychain_status: () => ({ available: true, backend: 'macOS Keychain', detail: null }),
   analyze_sql: (a) => split(String(a.sql)),

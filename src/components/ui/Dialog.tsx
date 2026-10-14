@@ -53,16 +53,16 @@ export function Dialog({ title, onClose, children, footer, wide, critical, top, 
   }, [initialFocus]);
 
   return createPortal(
-    <div className={`rb-scrim${top ? ' rb-scrim--top' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} className={['rb-dialog', wide && 'rb-dialog--wide', className].filter(Boolean).join(' ')}>
-        {critical && <div className="rb-dialog__critical-rule" aria-hidden />}
+    <div className={`dq-scrim${top ? ' dq-scrim--top' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} className={['dq-dialog', wide && 'dq-dialog--wide', className].filter(Boolean).join(' ')}>
+        {critical && <div className="dq-dialog__critical-rule" aria-hidden />}
         {title && (
-          <div className="rb-dialog__head">
-            <h2 className="rb-dialog__title">{title}</h2>
+          <div className="dq-dialog__head">
+            <h2 className="dq-dialog__title">{title}</h2>
           </div>
         )}
-        <div className="rb-dialog__body">{children}</div>
-        {footer && <div className="rb-dialog__foot">{footer}</div>}
+        <div className="dq-dialog__body">{children}</div>
+        {footer && <div className="dq-dialog__foot">{footer}</div>}
       </div>
     </div>,
     document.body,

@@ -57,8 +57,8 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
   useEffect(() => {
     if (!active) return;
     const onRun = (e: Event) => void ((e as CustomEvent<'statement' | 'script'>).detail === 'script' ? runScript() : runStatement());
-    window.addEventListener('rb:run', onRun);
-    return () => window.removeEventListener('rb:run', onRun);
+    window.addEventListener('dq:run', onRun);
+    return () => window.removeEventListener('dq:run', onRun);
   });
 
   const fileMenu: MenuEntry[] = [

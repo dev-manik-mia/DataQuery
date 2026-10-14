@@ -2,10 +2,10 @@
 //! not only in the UI: commands refuse to run until the request carries a
 //! matching confirmation.
 
-use rb_core::config::Environment;
-use rb_core::sql::StatementInfo;
-use rb_core::{DbError, DbResult};
-use rb_store::{SavedConnection, Settings};
+use dq_core::config::Environment;
+use dq_core::sql::StatementInfo;
+use dq_core::{DbError, DbResult};
+use dq_store::{SavedConnection, Settings};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -96,9 +96,9 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rb_core::config::{ConnConfig, SslMode};
-    use rb_core::engine::Engine;
-    use rb_core::sql::{SqlFlavor, split_statements};
+    use dq_core::config::{ConnConfig, SslMode};
+    use dq_core::engine::Engine;
+    use dq_core::sql::{SqlFlavor, split_statements};
 
     fn conn(env: Environment) -> SavedConnection {
         SavedConnection {

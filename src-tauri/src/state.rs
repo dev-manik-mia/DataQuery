@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rb_core::adapter::Session;
-use rb_core::{DbError, DbResult};
-use rb_store::{SavedConnection, SecretStore, Settings, Store};
+use dq_core::adapter::Session;
+use dq_core::{DbError, DbResult};
+use dq_store::{SavedConnection, SecretStore, Settings, Store};
 use tokio::sync::RwLock;
 
 use crate::registry::Registry;

@@ -851,6 +851,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dataquery"
+version = "0.1.0"
+dependencies = [
+ "dq-core",
+ "dq-postgres",
+ "dq-store",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-window-state",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1075,6 +1095,68 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "dq-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "csv",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ts-rs",
+ "url",
+]
+
+[[package]]
+name = "dq-mysql"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dq-core",
+ "mysql_async",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "dq-postgres"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dq-core",
+ "fallible-iterator 0.2.0",
+ "futures-util",
+ "postgres-protocol",
+ "rustls",
+ "rustls-native-certs",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tracing",
+ "webpki-roots",
+]
+
+[[package]]
+name = "dq-store"
+version = "0.1.0"
+dependencies = [
+ "dq-core",
+ "keyring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]
@@ -3401,68 +3483,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
-name = "rb-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "csv",
- "regex",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "ts-rs",
- "url",
-]
-
-[[package]]
-name = "rb-mysql"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "mysql_async",
- "rb-core",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "rb-postgres"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "fallible-iterator 0.2.0",
- "futures-util",
- "postgres-protocol",
- "rb-core",
- "rustls",
- "rustls-native-certs",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "tracing",
- "webpki-roots",
-]
-
-[[package]]
-name = "rb-store"
-version = "0.1.0"
-dependencies = [
- "keyring",
- "rb-core",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3614,26 +3634,6 @@ dependencies = [
  "hashlink",
  "libsqlite3-sys",
  "smallvec",
-]
-
-[[package]]
-name = "rustbase"
-version = "0.1.0"
-dependencies = [
- "rb-core",
- "rb-postgres",
- "rb-store",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-window-state",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ts-rs",
- "uuid",
 ]
 
 [[package]]

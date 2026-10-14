@@ -1,4 +1,4 @@
-use rb_store::{HistoryPage, HistoryQuery, SavedScript, ScriptDraft};
+use dq_store::{HistoryPage, HistoryQuery, SavedScript, ScriptDraft};
 use tauri::State;
 
 use super::CmdResult;
@@ -11,12 +11,12 @@ pub async fn list_history(state: State<'_, AppState>, query: HistoryQuery) -> Cm
 
 #[tauri::command]
 pub async fn clear_history(state: State<'_, AppState>) -> CmdResult<()> {
-    state.with_store(rb_store::Store::clear_history).await
+    state.with_store(dq_store::Store::clear_history).await
 }
 
 #[tauri::command]
 pub async fn list_scripts(state: State<'_, AppState>) -> CmdResult<Vec<SavedScript>> {
-    state.with_store(rb_store::Store::scripts).await
+    state.with_store(dq_store::Store::scripts).await
 }
 
 #[tauri::command]

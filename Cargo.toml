@@ -7,13 +7,13 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/rustbase/rustbase"
+repository = "https://github.com/dataquery/dataquery"
 
 [workspace.dependencies]
-rb-core = { path = "crates/rb-core" }
-rb-postgres = { path = "crates/rb-postgres" }
-rb-mysql = { path = "crates/rb-mysql" }
-rb-store = { path = "crates/rb-store" }
+dq-core = { path = "crates/dq-core" }
+dq-postgres = { path = "crates/dq-postgres" }
+dq-mysql = { path = "crates/dq-mysql" }
+dq-store = { path = "crates/dq-store" }
 
 async-trait = "0.1"
 base64 = "0.22"

@@ -1,4 +1,5 @@
 -- Sample schema used by integration tests and for trying the app locally.
+SET SESSION cte_max_recursion_depth = 10000;
 CREATE TABLE customers (
   id         BIGINT AUTO_INCREMENT PRIMARY KEY,
   email      VARCHAR(255) NOT NULL UNIQUE,
@@ -50,3 +51,8 @@ INSERT INTO type_samples VALUES
   (2, 0, -0.0000000001, NULL, NULL, NULL, NULL);
 
 INSERT INTO no_pk VALUES (1, 'x'), (1, 'x');
+
+-- A second database, so the explorer lists more than one.
+CREATE DATABASE billing;
+CREATE TABLE billing.invoices (id INT AUTO_INCREMENT PRIMARY KEY, amount DECIMAL(12,2) NOT NULL);
+GRANT ALL PRIVILEGES ON billing.* TO 'dataquery'@'%';

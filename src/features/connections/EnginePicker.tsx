@@ -53,7 +53,7 @@ export function EnginePicker() {
               const items = engines.filter((e) => e.group === group && matches(e));
               if (!items.length) return null;
               return (
-                <section key={group} className="rb-card" aria-label={name}>
+                <section key={group} className="dq-card" aria-label={name}>
                   <div className={styles.engineGroupHead}>
                     <span>{name}</span>
                     <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>

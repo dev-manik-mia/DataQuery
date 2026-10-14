@@ -23,7 +23,7 @@ import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
-export const RUN_EVENT = 'rb:run';
+export const RUN_EVENT = 'dq:run';
 export type RunMode = 'statement' | 'script';
 
 export function App() {

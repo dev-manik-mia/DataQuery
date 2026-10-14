@@ -4,8 +4,8 @@ import type { DbError } from '@/bindings/DbError';
 
 export function Alert({ tone = 'info', title, children }: { tone?: 'info' | 'positive' | 'caution' | 'critical'; title?: ReactNode; children?: ReactNode }) {
   return (
-    <div className={`rb-alert rb-alert--${tone}`} role={tone === 'critical' ? 'alert' : 'status'}>
-      {title && <div className="rb-alert__title">{title}</div>}
+    <div className={`dq-alert dq-alert--${tone}`} role={tone === 'critical' ? 'alert' : 'status'}>
+      {title && <div className="dq-alert__title">{title}</div>}
       {children}
     </div>
   );
@@ -26,9 +26,9 @@ export function ErrorAlert({ error, title }: { error: DbError; title?: ReactNode
 
 export function EmptyState({ title, children, tone }: { title: ReactNode; children?: ReactNode; tone?: 'error' }) {
   return (
-    <div className={`rb-state${tone ? ' rb-state--error' : ''}`}>
-      <div className="rb-state__title">{title}</div>
-      {children && <div className="rb-state__body">{children}</div>}
+    <div className={`dq-state${tone ? ' dq-state--error' : ''}`}>
+      <div className="dq-state__title">{title}</div>
+      {children && <div className="dq-state__body">{children}</div>}
     </div>
   );
 }

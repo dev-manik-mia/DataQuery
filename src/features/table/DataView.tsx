@@ -362,7 +362,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
       {pending.total > 0 && (
         <div className={styles.actionBar} role="region" aria-label="Pending changes">
           <div className={styles.actionText}>
-            <span className="rb-eyebrow">Pending changes · not yet sent</span>
+            <span className="dq-eyebrow">Pending changes · not yet sent</span>
             <span>
               {[pending.cells && plural(pending.cells, 'edited cell'), pending.inserts && plural(pending.inserts, 'new row'), pending.deletes && plural(pending.deletes, 'deleted row')]
                 .filter(Boolean)

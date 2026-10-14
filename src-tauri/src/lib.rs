@@ -1,4 +1,4 @@
-//! RustBase desktop application: Tauri setup and command registration.
+//! DataQuery desktop application: Tauri setup and command registration.
 
 mod commands;
 mod registry;
@@ -7,7 +7,7 @@ mod state;
 
 use std::sync::Arc;
 
-use rb_store::{KeyringSecrets, Store};
+use dq_store::{KeyringSecrets, Store};
 use tauri::Manager;
 use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
 
@@ -16,7 +16,7 @@ use crate::state::AppState;
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "rustbase=info,rb_=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "dataquery=info,dq_=info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -26,7 +26,7 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
-            let store = Store::open(&data_dir.join("rustbase.db")).map_err(|e| e.message)?;
+            let store = Store::open(&data_dir.join("dataquery.db")).map_err(|e| e.message)?;
             app.manage(AppState::new(store, Arc::new(KeyringSecrets)));
             app.set_menu(menu(app.handle())?)?;
             Ok(())
@@ -78,13 +78,13 @@ pub fn run() {
             commands::history::delete_script,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running RustBase");
+        .expect("error while running DataQuery");
 }
 
 /// Standard menus without "Close Window": ⌘W and ⌘T belong to editor tabs.
 fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let about = AboutMetadata {
-        name: Some("RustBase".into()),
+        name: Some("DataQuery".into()),
         version: Some(env!("CARGO_PKG_VERSION").into()),
         ..AboutMetadata::default()
     };
@@ -93,7 +93,7 @@ fn menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &Submenu::with_items(
                 app,
-                "RustBase",
+                "DataQuery",
                 true,
                 &[
                     &PredefinedMenuItem::about(app, None, Some(about))?,

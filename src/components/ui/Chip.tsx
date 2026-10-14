@@ -7,8 +7,8 @@ export type ChipTone = 'positive' | 'caution' | 'critical' | 'accent' | 'mute' |
 
 export function Chip({ tone, dot = false, small = false, children }: { tone: ChipTone; dot?: boolean; small?: boolean; children: ReactNode }) {
   return (
-    <span className={`rb-chip rb-chip--${tone}${small ? ' rb-chip--sm' : ''}`}>
-      {dot && <span className="rb-chip__dot" aria-hidden />}
+    <span className={`dq-chip dq-chip--${tone}${small ? ' dq-chip--sm' : ''}`}>
+      {dot && <span className="dq-chip__dot" aria-hidden />}
       {children}
     </span>
   );
