@@ -31,8 +31,6 @@ pub struct RowType {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Chunk {
     pub url: String,
-    #[serde(rename = "rowCount")]
-    pub row_count: Option<u64>,
 }
 
 /// The `data` of a finished query.
@@ -52,10 +50,6 @@ pub struct QueryData {
     pub qrmk: Option<String>,
     #[serde(rename = "statementTypeId")]
     pub statement_type: Option<i64>,
-    #[serde(rename = "queryId")]
-    pub query_id: Option<String>,
-    #[serde(rename = "getResultUrl")]
-    pub result_url: Option<String>,
 }
 
 impl QueryData {

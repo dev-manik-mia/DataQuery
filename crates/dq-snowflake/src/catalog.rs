@@ -95,6 +95,18 @@ fn relation_node(database: &str, r: &TextRow) -> Node {
     node
 }
 
+/// Views missing from `TABLES` (some Snowflake-compatible servers list them only in `VIEWS`).
+async fn extra_views(client: &Client, database: &str, schema: &str, known: &[Node]) -> Vec<Node> {
+    let sql = format!("SELECT TABLE_SCHEMA, TABLE_NAME, 'VIEW', NULL, COMMENT FROM {}.VIEWS WHERE TABLE_SCHEMA = ?", info_schema(database));
+    rows(client, &sql, &[schema])
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| relation_node(database, r))
+        .filter(|v| !known.iter().any(|k| k.object.name == v.object.name))
+        .collect()
+}
+
 pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResult<Vec<Node>> {
     let found = rows(
         client,
@@ -107,6 +119,8 @@ pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResul
     )
     .await?;
     let mut nodes: Vec<Node> = found.iter().map(|r| relation_node(database, r)).collect();
+    let views = extra_views(client, database, schema, &nodes).await;
+    nodes.extend(views);
     // Not every account (or emulator) exposes these views; a missing one just hides its group.
     for (group, view, column) in
         [(GROUP_SEQUENCES, "SEQUENCES", "SEQUENCE_SCHEMA"), (GROUP_FUNCTIONS, "FUNCTIONS", "FUNCTION_SCHEMA"), (GROUP_PROCEDURES, "PROCEDURES", "PROCEDURE_SCHEMA")]
@@ -158,18 +172,32 @@ pub async fn search(client: &Client, database: &str, query_text: &str, limit: u3
 
 async fn relation(client: &Client, object: &ObjectRef) -> DbResult<TextRow> {
     let schema = schema_of(object)?;
-    rows(
+    let is = info_schema(&object.database);
+    let table = rows(
         client,
-        &format!(
-            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ROW_COUNT, COMMENT FROM {}.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
-            info_schema(&object.database)
-        ),
+        &format!("SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, ROW_COUNT, COMMENT FROM {is}.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"),
         &[schema, &object.name],
     )
     .await?
     .into_iter()
-    .next()
-    .ok_or_else(|| not_found(object))
+    .next();
+    if let Some(table) = table {
+        return Ok(table);
+    }
+    rows(client, &format!("SELECT TABLE_SCHEMA, TABLE_NAME, 'VIEW', NULL, COMMENT FROM {is}.VIEWS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"), &[schema, &object.name])
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .ok_or_else(|| not_found(object))
+}
+
+/// `COLUMNS` with `DATETIME_PRECISION`, or without it where the server lacks the column.
+async fn column_rows(client: &Client, select: impl Fn(&str) -> String, binds: &[&str]) -> DbResult<Vec<TextRow>> {
+    match rows(client, &select("DATETIME_PRECISION"), binds).await {
+        Err(e) if e.message.contains("DATETIME_PRECISION") => rows(client, &select("NULL"), binds).await,
+        other => other,
+    }
 }
 
 pub async fn row_estimate(client: &Client, object: &ObjectRef) -> DbResult<Option<i64>> {
@@ -191,14 +219,16 @@ const NOT_EDITABLE: &[&str] = &["BINARY", "VARIANT", "OBJECT", "ARRAY", "GEOGRAP
 
 async fn columns(client: &Client, object: &ObjectRef, primary: &[String]) -> DbResult<Vec<ColumnInfo>> {
     let schema = schema_of(object)?;
-    let found = rows(
+    let is = info_schema(&object.database);
+    let found = column_rows(
         client,
-        &format!(
-            "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, IS_NULLABLE, \
-                    COLUMN_DEFAULT, COMMENT, DATETIME_PRECISION FROM {}.COLUMNS \
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            info_schema(&object.database)
-        ),
+        |precision| {
+            format!(
+                "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, IS_NULLABLE, \
+                        COLUMN_DEFAULT, COMMENT, {precision} FROM {is}.COLUMNS \
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION"
+            )
+        },
         &[schema, &object.name],
     )
     .await?;
@@ -327,16 +357,19 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
 }
 
 pub async fn schema_model(client: &Client, database: &str, schema: &str) -> DbResult<SchemaModel> {
-    let found = rows(
+    let is = info_schema(database);
+    let found = column_rows(
         client,
-        &format!(
-            "SELECT c.TABLE_NAME, t.TABLE_TYPE, c.COLUMN_NAME, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, c.NUMERIC_PRECISION, \
-                    c.NUMERIC_SCALE, c.IS_NULLABLE, c.DATETIME_PRECISION \
-             FROM {is}.COLUMNS c JOIN {is}.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME \
-             WHERE c.TABLE_SCHEMA = ? ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION LIMIT {}",
-            SchemaModel::MAX_COLUMNS,
-            is = info_schema(database)
-        ),
+        |precision| {
+            let precision = if precision == "NULL" { "NULL".to_owned() } else { format!("c.{precision}") };
+            format!(
+                "SELECT c.TABLE_NAME, COALESCE(t.TABLE_TYPE, 'VIEW'), c.COLUMN_NAME, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, \
+                        c.NUMERIC_PRECISION, c.NUMERIC_SCALE, c.IS_NULLABLE, {precision} \
+                 FROM {is}.COLUMNS c LEFT JOIN {is}.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME \
+                 WHERE c.TABLE_SCHEMA = ? ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION LIMIT {}",
+                SchemaModel::MAX_COLUMNS
+            )
+        },
         &[schema],
     )
     .await?;
