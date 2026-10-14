@@ -147,8 +147,11 @@ services:
       interval: 2s
       retries: 30
 
+  # Heavy optional servers run under profiles (see package.json db:up:wide / db:up:search):
+  # all test databases together need more than the default 8 GB of Docker memory.
   # Cassandra 5 with password authentication (user cassandra / cassandra); slow to start.
   cassandra:
+    profiles: ["wide"]
     image: cassandra:5.0
     environment:
       MAX_HEAP_SIZE: 768M
@@ -164,6 +167,7 @@ services:
       retries: 60
 
   scylla:
+    profiles: ["wide"]
     image: scylladb/scylla:2025.1
     command: ["--smp", "1", "--memory", "750M", "--overprovisioned", "1", "--developer-mode", "1", "--skip-wait-for-gossip-to-settle", "0"]
     ports: ["59043:9042"]
@@ -175,6 +179,7 @@ services:
 
   # Elasticsearch 8 with security on (user elastic / dataquery) but plain HTTP.
   elasticsearch:
+    profiles: ["search"]
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
     environment:
       discovery.type: single-node
@@ -189,6 +194,7 @@ services:
       retries: 60
 
   neo4j:
+    profiles: ["search"]
     image: neo4j:5-community
     environment:
       NEO4J_AUTH: neo4j/dataquery123
