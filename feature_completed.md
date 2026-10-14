@@ -1,7 +1,7 @@
 # DataQuery — Feature Status
 
 Status of every feature in [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) (the target scope).
-**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅ · ClickHouse ✅ · DuckDB ✅ · Snowflake ✅ (emulator-tested) · MongoDB 5–8 ✅ · DynamoDB ✅ (DynamoDB Local-tested) · Redis 6–8 ✅ · Valkey ✅ · Cassandra 4–5 ✅ · ScyllaDB ✅ · Elasticsearch / OpenSearch ✅ · Neo4j 5 ✅.
+**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅ · ClickHouse ✅ · DuckDB ✅ · Snowflake ✅ (emulator-tested) · MongoDB 5–8 ✅ · DynamoDB ✅ (DynamoDB Local-tested) · Redis 6–8 ✅ · Valkey ✅ · Dragonfly ✅ · Cassandra 4–5 ✅ · ScyllaDB ✅ · Elasticsearch / OpenSearch ✅ · Neo4j 5 ✅.
 
 Legend: ✅ Done · 🟡 Partial · ⬜ Not started · Pri = priority from the feature list.
 "Done" means it works end-to-end (UI → Tauri command → adapter) and, where it touches a database, is covered by integration tests against real servers.
@@ -35,7 +35,7 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | Snowflake integration against the fakesnow emulator | 6 | 〃 (port 58000) |
 | MongoDB 8.0 integration (single-node replica set) | 11 | 〃 (port 57017) |
 | DynamoDB integration against DynamoDB Local | 9 | 〃 (port 58002) |
-| Redis 8 and Valkey 8 integration (each test runs on both) | 10 | 〃 (ports 56379, 56380) |
+| Redis 8, Valkey 8 and Dragonfly 1.34 integration (each test runs on all three) | 10 | 〃 (ports 56379, 56380, 56381) |
 | Cassandra 5.0 and ScyllaDB 2025.1 integration (each test runs on both) | 13 | `npm run db:up:wide` then `npm run test:integration:wide` |
 | Elasticsearch 8.15 integration | 9 | `npm run db:up:search` then `npm run test:integration:search` |
 | Neo4j 5.26 community integration (HTTP Query API) | 11 | 〃 |
@@ -236,6 +236,7 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | DynamoDB | P2 | ✅ (tested against DynamoDB Local) — `dq-dynamodb` (own SigV4 client): region → tables with item counts; PartiQL editor with `?` parameters and paging; Documents view with PartiQL filters and attribute lists, insert/edit/delete as DynamoDB JSON with conditional writes; primary key/GSI/LSI listing; transactions queued until `COMMIT` and sent as one `ExecuteTransaction`; access keys or an AWS CLI profile; imports (`BatchWriteItem`) and exports |
 | Redis 6–8 | P1 | ✅ (tested on 8) — `dq-redis` (redis-rs, rustls): key browser (screen 12) with SCAN + MATCH/COUNT/TYPE and "Scan more" (KEYS is never sent), prefix groups, TTLs; STRING/HASH/LIST/SET/ZSET/STREAM viewers and editors with paging; TTL edit, memory usage, encoding, rename (RENAMENX), delete with confirmation; redis-cli console where FLUSHALL, FLUSHDB, DEBUG, KEYS and other dangerous commands ask first; command editor with result grids; MULTI/EXEC transactions; INFO/CLIENT LIST monitoring and CLIENT KILL |
 | Valkey | P2 | ✅ (tested on 8) — the Redis adapter, detected and labelled as Valkey |
+| Dragonfly | — | ✅ (tested on 1.34) — the Redis adapter, detected and labelled as Dragonfly; `dragonfly://` URLs. Dragonfly has no `OBJECT` command, so the key view shows no encoding |
 | Cassandra 4–5 | P2 | ✅ (tested on 5.0) — `dq-cassandra` (scylla driver, rustls): keyspaces → tables / materialized views / types / functions; CQL editor with consistency, serial consistency and page-size selectors, paging state kept in memory only, `PK` / `CK ↑↓` header markers, single-partition vs `ALLOW FILTERING` analysis banner; prepared binding by type (exact varint/decimal, collections and UDTs as JSON); grid edits as lightweight transactions (`IF EXISTS`), batches; table views without OFFSET; explain from the analysis and traced explain analyze; system tables monitoring; CQL schema changes |
 | ScyllaDB | P2 | ✅ (tested on 2025.1) — the Cassandra adapter, detected and labelled as ScyllaDB |
 | Elasticsearch / OpenSearch | P2 | ✅ (tested on Elasticsearch 8.15; OpenSearch detected but untested) — `dq-elasticsearch` (reqwest): cluster → indices / aliases / data streams; Kibana Dev Tools editor (`GET /orders/_search` + JSON body) with method/endpoint completion; hits, `_cat`, `_sql` and text responses as grids; read-only Documents view (Query DSL or query-string filters, `_source` fields, sort, search_after paging); Profile-API explain; `_tasks` monitoring with cancel; mapping-based structure and recreate-index DDL; `_bulk` imports; scroll exports; deleting indices or every document asks first |

@@ -210,6 +210,15 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 20. Engine: Dragonfly
+
+- [x] T20.1 `Engine::Dragonfly` in the catalog and `Engine::is_redis_like()` for the Redis-protocol engines (database numbers, optional user); `dragonfly://` / `dragonflys://` URLs.
+- [x] T20.2 `RedisAdapter::DRAGONFLY`; `INFO server` labels the server (`dragonfly_version` → "Dragonfly 1.34.2"); Dragonfly's `ACL WHOAMI` wording handled; no `OBJECT` command → no encoding shown.
+- [x] T20.3 Test database `dragonfly` (1.34.2, :56381, version check off); the Redis integration suite runs against Redis, Valkey and Dragonfly.
+- [x] T20.4 Found while testing: PostgreSQL "largest tables" panicked when a table was dropped during the size query; it now skips such tables.
+
+---
+
 ## Verification
 
 | Area | How it was verified |
