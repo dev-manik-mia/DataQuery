@@ -402,6 +402,8 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
           )}
         </span>
         <span style={{ flex: 1 }} />
+        {/* One group, so the actions wrap to a new row together on narrow tabs. */}
+        <div className={styles.toolbarGroup}>
         {editable && (
           <>
             <IconButton label="Undo edit" disabled={!undo.past.length} onClick={undoEdit}>
@@ -437,6 +439,7 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
         <IconButton label="Reload rows" onClick={() => void guardEdits(() => setReload((n) => n + 1))}>
           <Icon name="refresh" size={12} />
         </IconButton>
+        </div>
       </div>
       {matches.length > 0 && (
         <div className={styles.notice} role="status">

@@ -23,6 +23,13 @@
   flex-shrink: 0;
 }
 
+.toolbarGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
 .filter {
   display: flex;
   align-items: center;
