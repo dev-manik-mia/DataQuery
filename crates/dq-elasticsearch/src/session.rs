@@ -369,10 +369,8 @@ impl EsSession {
     fn document(hit: &Value, target: &str, types: &FieldTypes) -> Document {
         let id = hit["_id"].as_str().unwrap_or_default();
         let index = hit["_index"].as_str().unwrap_or_default();
-        let mut label = format!("_id: {}", Value::String(id.to_owned()));
-        if index != target {
-            label.push_str(&format!(" · {index}"));
-        }
+        let id_text = Value::String(id.to_owned());
+        let label = if index == target { format!("_id: {id_text}") } else { format!("_id: {id_text} · {index}") };
         let source = hit["_source"].as_object().cloned().unwrap_or_default();
         Document::new(
             id.to_owned(),

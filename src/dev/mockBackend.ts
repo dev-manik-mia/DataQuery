@@ -35,7 +35,8 @@ const ENGINES: EngineInfo[] = [
   engine('dynamodb', 'DynamoDB', 'Dy', 330, 'document', 'PartiQL', 443, 'AWS · PartiQL', 'P2', true),
   engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2', true),
   engine('scylladb', 'ScyllaDB', 'Sc', 330, 'wide_column', 'CQL', 9042, '9042 · CQL', 'P2', true),
-  engine('neo4j', 'Neo4j', 'N4', 190, 'search_graph', 'Cypher', 7687, '7687 · Cypher', 'P2'),
+  engine('elasticsearch', 'Elasticsearch', 'Es', 55, 'search_graph', 'Query DSL', 9200, '9200 · Query DSL', 'P2', true),
+  engine('neo4j', 'Neo4j', 'N4', 190, 'search_graph', 'Cypher', 7687, '7687 · Cypher', 'P2', true),
 ];
 
 const conn = (id: string, name: string, environment: string, host: string, database: string, folder: string | null, favorite: boolean, used: number | null): SavedConnection =>
@@ -50,6 +51,8 @@ const CONNECTIONS = [
   { ...conn('c5', 'events-mongo', 'Development', 'events.dev.kestrel.internal', 'analytics', 'f1', false, now - 2 * 86_400_000), config: { ...conn('c5', '', 'Development', 'events.dev.kestrel.internal', 'analytics', null, false, null).config, engine: 'mongodb', port: 27017 } } as SavedConnection,
   { ...conn('c6', 'cache-redis', 'Staging', 'cache.stg.kestrel.internal', '0', 'f1', false, now - 3_600_000), config: { ...conn('c6', '', 'Staging', 'cache.stg.kestrel.internal', '0', null, false, null).config, engine: 'redis', port: 6379 } } as SavedConnection,
   { ...conn('c7', 'telemetry-cassandra', 'Production', '10.0.4.12', 'telemetry', 'f1', false, now - 7 * 86_400_000), config: { ...conn('c7', '', 'Production', '10.0.4.12', 'telemetry', null, false, null).config, engine: 'cassandra', port: 9042 } } as SavedConnection,
+  { ...conn('c8', 'search-es', 'Staging', 'es.stg.kestrel.internal', '', 'f1', false, null), config: { ...conn('c8', '', 'Staging', 'es.stg.kestrel.internal', '', null, false, null).config, engine: 'elasticsearch', port: 9200 } } as SavedConnection,
+  { ...conn('c9', 'graph-neo4j', 'Development', 'graph.dev.kestrel.internal', 'neo4j', 'f1', false, null), config: { ...conn('c9', '', 'Development', 'graph.dev.kestrel.internal', 'neo4j', null, false, null).config, engine: 'neo4j', port: 7687 } } as SavedConnection,
 ];
 
 const CQL_KEYS = [
@@ -185,6 +188,14 @@ const handlers: Record<string, (a: Args) => unknown> = {
   list_connections: () => ({ connections: CONNECTIONS, folders: [{ id: 'f1', name: 'Kestrel' }] }),
   connect: (a) => {
     const c = CONNECTIONS.find((x) => x.id === a.connectionId)!;
+    if (c.config.engine === 'elasticsearch' || c.config.engine === 'neo4j') {
+      const es = c.config.engine === 'elasticsearch';
+      const features = es
+        ? { language: 'Query DSL', filter_example: '{ "match": { "status": "paid" } }', projection_example: '"email", "total"', sort: true, aggregation: false, validation: false, text_format: 'json', new_document: '{\n}', filtered_count: true }
+        : { language: 'Cypher', filter_example: "n.age > 30 AND n.name STARTS WITH 'A'", projection_example: 'n.name, n.age', sort: true, aggregation: false, validation: false, text_format: 'json', new_document: '{\n}', filtered_count: true };
+      const docCaps = { ...caps, grid_edit: false, ddl: false, schemas: false, materialized_views: false, transactions: !es, schema_diff: false };
+      return { session_id: `s-${c.id}`, connection: c, capabilities: docCaps, flavor: es ? 'query_dsl' : 'cypher', documents: features, keys: null, tunneled: false, insecure: null, server: { engine: c.config.engine, version: es ? 'Elasticsearch 8.15.3' : 'Neo4j 5.26.0 (community)', latency_ms: 6, tls: null, user: c.config.username, database: es ? 'kestrel-search' : 'neo4j', read_only: false } };
+    }
     if (c.config.engine === 'cassandra') {
       const cqlCaps = { ...caps, schemas: false, transactions: false, schema_diff: false };
       return { session_id: `s-${c.id}`, connection: c, capabilities: cqlCaps, flavor: 'cql', documents: null, keys: null, tunneled: false, insecure: null, server: { engine: 'cassandra', version: 'Cassandra 5.0.2', latency_ms: 12, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'analyst', database: 'telemetry', read_only: false } };
@@ -203,6 +214,14 @@ const handlers: Record<string, (a: Args) => unknown> = {
   disconnect: () => null,
   list_children: (a) => {
     const p = a.parent as Node | null;
+    if (String(a.sessionId) === 's-c8') return p ? [obj('table', p.name, null, 'orders', { row_estimate: 48213, expandable: false }), obj('table', p.name, null, 'customers', { row_estimate: 12040, expandable: false }), obj('view', p.name, null, 'orders-current', { expandable: false })] : [obj('database', 'kestrel-search', null, 'kestrel-search', { current: true })];
+    if (String(a.sessionId) === 's-c9') {
+      if (!p) return [obj('database', 'neo4j', null, 'neo4j', { current: true }), obj('database', 'system', null, 'system')];
+      if (p.kind === 'database') return [obj('group', p.name, null, 'labels', { row_estimate: 2 }), obj('group', p.name, null, 'relationships', { row_estimate: 1 }), obj('group', p.name, null, 'indexes', { row_estimate: 1 })];
+      if (p.name === 'labels') return [obj('table', p.database, null, 'Person', { row_estimate: 1204, expandable: false }), obj('table', p.database, null, 'Movie', { row_estimate: 38, expandable: false })];
+      if (p.name === 'relationships') return [obj('view', p.database, null, 'ACTED_IN', { row_estimate: 172, expandable: false })];
+      return [obj('index', p.database, null, 'person_name', { parent: 'Person', expandable: false })];
+    }
     if (String(a.sessionId) === 's-c6') return Array.from({ length: 16 }, (_, i) => obj('database', String(i), null, String(i), { current: i === 0, expandable: false }));
     if (String(a.sessionId) === 's-c5') {
       if (!p) return ['analytics', 'events', 'admin', 'config', 'local'].map((d, i) => obj('database', d, null, d, { current: i === 0 }));
