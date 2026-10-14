@@ -78,6 +78,19 @@ impl Lexer<'_> {
         let (ch, sf, duck) =
             (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
         let (mongo, partiql) = (flavor == SqlFlavor::Mongodb, flavor == SqlFlavor::Partiql);
+        if flavor == SqlFlavor::Cql {
+            // `//` comments, `$$…$$` function bodies, `?` markers.
+            match c {
+                b'/' if self.peek(1) == Some(b'/') => return self.line_comment(),
+                b'$' if self.peek(1) == Some(b'$') => {
+                    let end = self.src[self.pos + 2..].find("$$").map_or(self.bytes.len(), |i| self.pos + 2 + i + 2);
+                    self.pos = end;
+                    return TokenKind::String;
+                }
+                b'?' => return self.single(TokenKind::Param),
+                _ => {}
+            }
+        }
         if flavor == SqlFlavor::Redis {
             // `redis-cli` arguments: quotes with backslash escapes, no comments.
             match c {

@@ -19,7 +19,7 @@ use crate::keyvalue::KeyValueStore;
 use crate::monitor::Monitor;
 use crate::node::{Node, ObjectRef};
 use crate::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult};
-use crate::schema::{Dependencies, SchemaModel, TableStructure};
+use crate::schema::{Dependencies, KeyRole, SchemaModel, TableStructure};
 use crate::sql::Dialect;
 use crate::value::CellLimits;
 
@@ -179,12 +179,41 @@ pub trait Session: Send + Sync {
         None
     }
 
+    /// Partition and clustering columns of a table, in key order (CQL engines).
+    /// Empty for engines without them.
+    async fn key_roles(&self, object: &ObjectRef) -> DbResult<Vec<KeyRole>> {
+        let _ = object;
+        Ok(Vec::new())
+    }
+
+    /// Settings of the query connection the editor can change, e.g. CQL consistency.
+    fn options(&self) -> Vec<SessionOption> {
+        Vec::new()
+    }
+
+    /// Changes one of [`Session::options`] for the following statements.
+    async fn set_option(&self, name: &str, value: &str) -> DbResult<()> {
+        let _ = value;
+        Err(DbError::unsupported(format!("This connection has no setting `{name}`.")))
+    }
+
     /// Key browser operations, for key-value engines (Redis, Valkey).
     fn keys(&self) -> Option<&dyn KeyValueStore> {
         None
     }
 
     async fn close(&self);
+}
+
+/// A query-connection setting shown in the editor toolbar.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct SessionOption {
+    pub name: String,
+    pub label: String,
+    pub value: String,
+    /// Allowed values, in display order.
+    pub choices: Vec<String>,
 }
 
 /// Checks an affected-row count against a statement's expectation.

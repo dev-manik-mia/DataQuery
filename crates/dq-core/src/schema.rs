@@ -28,6 +28,26 @@ pub struct ColumnInfo {
     pub read_as_text: bool,
 }
 
+/// How a column takes part in a wide-column primary key (CQL).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum KeyRoleKind {
+    /// Part of the partition key (`PK`).
+    Partition,
+    /// A clustering column (`CK ↑` / `CK ↓`).
+    Clustering,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct KeyRole {
+    pub column: String,
+    pub role: KeyRoleKind,
+    /// Clustering order is descending.
+    pub descending: bool,
+}
+
 impl ColumnInfo {
     /// A document field the collection does not have yet: any type, inferred from the value.
     pub fn new_field(name: &str) -> Self {

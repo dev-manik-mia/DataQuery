@@ -67,7 +67,8 @@ impl ExplainDialect {
             | SqlFlavor::Snowflake
             | SqlFlavor::Mongodb
             | SqlFlavor::Partiql
-            | SqlFlavor::Redis => None,
+            | SqlFlavor::Redis
+            | SqlFlavor::Cql => None,
         }
     }
 

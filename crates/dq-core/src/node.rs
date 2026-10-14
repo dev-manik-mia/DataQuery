@@ -19,6 +19,8 @@ pub enum NodeKind {
     Procedure,
     /// A Redis key; `database` is the database index.
     Key,
+    /// A user-defined type (CQL UDT).
+    Type,
     /// A folder in the tree, e.g. "Functions"; `name` is one of the `GROUP_*` ids.
     Group,
 }
@@ -37,6 +39,7 @@ impl NodeKind {
 pub const GROUP_SEQUENCES: &str = "sequences";
 pub const GROUP_FUNCTIONS: &str = "functions";
 pub const GROUP_PROCEDURES: &str = "procedures";
+pub const GROUP_TYPES: &str = "types";
 
 /// Identifies a database object. For engines without schemas `schema` is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]

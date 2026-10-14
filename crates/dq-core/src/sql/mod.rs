@@ -3,6 +3,7 @@
 
 pub mod analyze;
 pub mod builder;
+pub mod cql;
 pub mod ddl;
 pub mod dialect;
 pub mod format;
@@ -15,6 +16,6 @@ pub use analyze::{
     split_statements, transaction_effect,
 };
 pub use dialect::{
-    ClickhouseDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect,
+    ClickhouseDialect, CqlDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PartiqlDialect,
     PostgresDialect, RedisDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
 };

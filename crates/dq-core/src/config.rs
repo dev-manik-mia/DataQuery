@@ -359,7 +359,11 @@ impl ConnConfig {
         }
         // MongoDB and Redis may run without authentication (Redis uses the `default` user);
         // DynamoDB checks its access key above.
-        let optional_user = matches!(self.engine, Engine::Mongodb | Engine::Dynamodb | Engine::Redis | Engine::Valkey);
+        // Cassandra and ScyllaDB accept anonymous logins unless an authenticator is set.
+        let optional_user = matches!(
+            self.engine,
+            Engine::Mongodb | Engine::Dynamodb | Engine::Redis | Engine::Valkey | Engine::Cassandra | Engine::Scylladb
+        );
         if self.username.trim().is_empty() && !optional_user {
             return Err(DbError::invalid("Username is required."));
         }

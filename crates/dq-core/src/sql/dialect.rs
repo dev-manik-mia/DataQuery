@@ -29,6 +29,8 @@ pub enum SqlFlavor {
     Partiql,
     /// Redis (and Valkey) commands, one per line, split like `redis-cli`.
     Redis,
+    /// Cassandra Query Language (Cassandra and `ScyllaDB`).
+    Cql,
 }
 
 impl SqlFlavor {
@@ -86,7 +88,10 @@ pub trait Dialect: Send + Sync {
     /// SQL Server, Oracle, `DuckDB`, Snowflake) or the database (`MySQL`, `ClickHouse`).
     fn container<'a>(&self, object: &'a ObjectRef) -> Option<&'a str> {
         match self.flavor() {
-            SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb => Some(object.database.as_str()),
+            // CQL keyspaces are the databases of the explorer.
+            SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb | SqlFlavor::Cql => {
+                Some(object.database.as_str())
+            }
             SqlFlavor::Partiql | SqlFlavor::Redis => None,
             SqlFlavor::Postgres
             | SqlFlavor::Sqlserver
@@ -134,6 +139,12 @@ pub trait Dialect: Send + Sync {
     }
 
     /// A failed statement aborts the open transaction until `ROLLBACK`.
+    /// The engine has no `OFFSET`: `paginate` asks for `offset + limit` rows and
+    /// the caller drops the first `offset` (CQL pages with paging state instead).
+    fn client_side_offset(&self) -> bool {
+        false
+    }
+
     fn aborts_transaction_on_error(&self) -> bool {
         self.flavor().postgres_like()
     }
@@ -193,6 +204,7 @@ pub struct SnowflakeDialect;
 pub struct MongoDialect;
 pub struct PartiqlDialect;
 pub struct RedisDialect;
+pub struct CqlDialect;
 
 impl Dialect for PostgresDialect {
     fn flavor(&self) -> SqlFlavor {
@@ -918,6 +930,94 @@ impl Dialect for RedisDialect {
     }
 }
 
+/// CQL (Cassandra, `ScyllaDB`): `"Name"` for case-sensitive names, `?` markers
+/// typed by the prepared statement, no `OFFSET` and no transactions.
+impl Dialect for CqlDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Cql
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        format!("\"{}\"", ident.replace('"', "\"\""))
+    }
+
+    /// Unquoted names are folded to lower case.
+    fn needs_quotes(&self, ident: &str) -> bool {
+        let mut chars = ident.chars();
+        !(chars.next().is_some_and(|c| c.is_ascii_lowercase())
+            && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+            || is_reserved(ident, CQL_RESERVED)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+
+    /// The adapter converts each text value to the marker's type from the prepared statement.
+    fn placeholder(&self, _index: usize, _column_type: &str) -> String {
+        "?".into()
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        format!("CAST({quoted_column} AS text)")
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        let t = base_type(data_type);
+        !(t.starts_with("frozen")
+            || t.starts_with("list")
+            || t.starts_with("set")
+            || t.starts_with("map")
+            || t.starts_with("tuple")
+            || matches!(t.as_str(), "counter" | "duration" | "vector"))
+    }
+
+    /// `LIKE` needs a SASI or SAI index; the server says so otherwise.
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("{quoted_column} LIKE {placeholder}")
+    }
+
+    /// No `OFFSET`; a `WHERE` on other than key columns needs `ALLOW FILTERING`,
+    /// which the table view asks for explicitly when it filters.
+    fn paginate(&self, sql: &str, _ordered: bool, offset: u64, limit: u64) -> String {
+        let filtering = if sql.contains(" WHERE ") { " ALLOW FILTERING" } else { "" };
+        format!("{sql} LIMIT {}{filtering}", offset + limit)
+    }
+
+    fn client_side_offset(&self) -> bool {
+        true
+    }
+
+    fn template_placeholder(&self, _n: usize) -> String {
+        "?".into()
+    }
+
+    fn begin_transaction(&self) -> &'static str {
+        "BEGIN BATCH"
+    }
+
+    fn commit_transaction(&self) -> &'static str {
+        "APPLY BATCH"
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("0x{hex}")
+    }
+
+    fn bool_literal(&self, value: bool) -> &'static str {
+        if value { "true" } else { "false" }
+    }
+
+    /// One row per `INSERT`; the adapter groups statements into batches.
+    fn max_insert_rows(&self) -> usize {
+        1
+    }
+}
+
 pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
     match flavor {
         SqlFlavor::Postgres => &PostgresDialect,
@@ -930,6 +1030,7 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Mongodb => &MongoDialect,
         SqlFlavor::Partiql => &PartiqlDialect,
         SqlFlavor::Redis => &RedisDialect,
+        SqlFlavor::Cql => &CqlDialect,
     }
 }
 
@@ -943,6 +1044,71 @@ fn join(container: Option<&str>, name: &str, quote: impl Fn(&str) -> String) -> 
 fn is_reserved(ident: &str, list: &[&str]) -> bool {
     list.iter().any(|k| k.eq_ignore_ascii_case(ident))
 }
+
+/// CQL reserved words (they must be quoted as names).
+const CQL_RESERVED: &[&str] = &[
+    "add",
+    "allow",
+    "alter",
+    "and",
+    "apply",
+    "asc",
+    "authorize",
+    "batch",
+    "begin",
+    "by",
+    "columnfamily",
+    "create",
+    "delete",
+    "desc",
+    "describe",
+    "drop",
+    "entries",
+    "execute",
+    "from",
+    "full",
+    "grant",
+    "if",
+    "in",
+    "index",
+    "infinity",
+    "insert",
+    "into",
+    "is",
+    "keyspace",
+    "limit",
+    "materialized",
+    "mbean",
+    "mbeans",
+    "modify",
+    "nan",
+    "norecursive",
+    "not",
+    "null",
+    "of",
+    "on",
+    "or",
+    "order",
+    "primary",
+    "rename",
+    "replace",
+    "revoke",
+    "schema",
+    "select",
+    "set",
+    "table",
+    "to",
+    "token",
+    "truncate",
+    "unlogged",
+    "unset",
+    "update",
+    "use",
+    "using",
+    "view",
+    "where",
+    "with",
+];
 
 const MONGO_RESERVED: &[&str] = &["getCollection", "getName", "getSiblingDB", "runCommand", "aggregate"];
 

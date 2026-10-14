@@ -19,6 +19,8 @@ use crate::value::CellLimits;
 pub const MAX_PAGE_SIZE: u32 = 5_000;
 /// Above this estimate an unfiltered table shows the estimate instead of counting.
 pub const EXACT_COUNT_THRESHOLD: i64 = 500_000;
+/// Deepest page offset for engines that skip rows client-side (CQL).
+pub const MAX_CLIENT_OFFSET: u64 = 100_000;
 
 /// Table structure with [`TableStructure::full_row_key`] filled in.
 pub async fn structure(session: &dyn Session, object: &ObjectRef) -> DbResult<TableStructure> {
@@ -58,10 +60,20 @@ pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResu
         return Err(DbError::invalid("Only tables and views have data."));
     }
     let limit = req.limit.clamp(1, MAX_PAGE_SIZE);
+    let dialect = session.dialect();
+    // Engines without OFFSET read the skipped rows too, so deep pages are capped.
+    if dialect.client_side_offset() && req.offset > MAX_CLIENT_OFFSET {
+        return Err(DbError::invalid(format!(
+            "Pages past row {MAX_CLIENT_OFFSET} are not available here; narrow the rows with a filter."
+        )));
+    }
     let structure = session.structure(&req.object).await?;
-    let q = builder::page_query(session.dialect(), &structure, &req.rows, req.sort.as_ref(), req.offset, limit)?;
+    let q = builder::page_query(dialect, &structure, &req.rows, req.sort.as_ref(), req.offset, limit)?;
     let started = Instant::now();
     let (columns, mut rows) = session.read_query(&req.object.database, &q.sql, &q.params, CellLimits::GRID).await?;
+    if dialect.client_side_offset() {
+        rows.drain(..rows.len().min(req.offset as usize));
+    }
     let has_more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     Ok(TablePage { columns, rows, offset: req.offset, has_more, duration_ms: elapsed_ms(started) })

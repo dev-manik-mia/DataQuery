@@ -138,6 +138,8 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             _ => TxEffect::None,
         },
         SqlFlavor::Clickhouse => TxEffect::None,
+        // CQL has no transactions; `BEGIN BATCH … APPLY BATCH` is one statement.
+        SqlFlavor::Cql => TxEffect::None,
         SqlFlavor::Redis => match word(0) {
             "MULTI" => TxEffect::Begin,
             "EXEC" | "DISCARD" => TxEffect::End,
@@ -233,11 +235,13 @@ struct Block {
     routine: bool,
     /// A Snowflake Scripting `DECLARE` section, open until its block's `END`.
     declare: bool,
+    /// A CQL `BEGIN … BATCH`, open until `APPLY BATCH`.
+    batch: bool,
 }
 
 impl Block {
     fn inside(&self) -> bool {
-        self.routine || self.depth > 0 || self.declare
+        self.routine || self.depth > 0 || self.declare || self.batch
     }
 
     fn observe(&mut self, src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) {
@@ -248,6 +252,17 @@ impl Block {
         }
         if flavor == SqlFlavor::Snowflake {
             self.observe_scripting(src, tokens, i, &word);
+            return;
+        }
+        if flavor == SqlFlavor::Cql {
+            match word.as_str() {
+                // `BEGIN [UNLOGGED | COUNTER] BATCH`; the `BATCH` of `APPLY BATCH` is later.
+                "BATCH" if self.head.len() <= 3 && self.head.first().is_some_and(|w| w == "BEGIN") => {
+                    self.batch = true;
+                }
+                "APPLY" => self.batch = false,
+                _ => {}
+            }
             return;
         }
         if flavor != SqlFlavor::Sqlserver {
@@ -332,7 +347,8 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
         | SqlFlavor::Snowflake
         | SqlFlavor::Mongodb
         | SqlFlavor::Partiql
-        | SqlFlavor::Redis => false,
+        | SqlFlavor::Redis
+        | SqlFlavor::Cql => false,
     };
     if !separator {
         return false;
@@ -432,6 +448,16 @@ fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool
     }
     let word = |i: usize| sig.get(i).filter(|t| t.kind == TokenKind::Word).map(|t| t.text(src).to_ascii_uppercase());
     let head = word(0).unwrap_or_default();
+    if flavor == SqlFlavor::Cql {
+        match head.as_str() {
+            // A batch of writes.
+            "BEGIN" => return (StatementKind::Merge, true, None),
+            // cqlsh session settings and catalog listings.
+            "CONSISTENCY" | "SERIAL" | "TRACING" | "PAGING" | "EXPAND" => return (StatementKind::Set, false, None),
+            "LIST" => return (StatementKind::Show, false, None),
+            _ => {}
+        }
+    }
     let mut kind = keyword_kind(&head);
     match (flavor, head.as_str()) {
         // A T-SQL `BEGIN` without `TRAN` opens a block; Oracle `BEGIN`/`DECLARE` run PL/SQL.

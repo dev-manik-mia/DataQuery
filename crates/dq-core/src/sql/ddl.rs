@@ -215,6 +215,10 @@ fn column_def(d: &dyn Dialect, c: &ColumnDef) -> DbResult<String> {
     name(&c.name, "Column names")?;
     let data_type = validate_type(d, &c.data_type)?;
     let clickhouse = d.flavor() == SqlFlavor::Clickhouse;
+    let cql = d.flavor() == SqlFlavor::Cql;
+    if cql && c.default.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+        return Err(DbError::unsupported("Cassandra columns have no defaults."));
+    }
     let data_type = if clickhouse { clickhouse_type(&data_type, c.nullable) } else { data_type };
     let mut out = format!("{} {data_type}", d.quote_ident(&c.name));
     if c.identity {
@@ -227,7 +231,8 @@ fn column_def(d: &dyn Dialect, c: &ColumnDef) -> DbResult<String> {
     if let Some(default) = c.default.as_deref().filter(|d| !d.trim().is_empty()) {
         let _ = write!(out, " DEFAULT {}", expression(d, default, "default")?);
     }
-    if !c.nullable && !clickhouse {
+    // ClickHouse spells it with `Nullable(…)`; CQL has no NOT NULL (key columns are never null).
+    if !c.nullable && !clickhouse && !cql {
         out.push_str(" NOT NULL");
     }
     Ok(out)
@@ -315,6 +320,9 @@ fn alter_column(
     Ok(match d.flavor() {
         SqlFlavor::Mongodb | SqlFlavor::Partiql | SqlFlavor::Redis => {
             return Err(DbError::unsupported("Document collections have no SQL schema to change."));
+        }
+        SqlFlavor::Cql => {
+            return Err(DbError::unsupported("Cassandra cannot change a column's type, nullability or default."));
         }
         SqlFlavor::Postgres => {
             let mut parts = Vec::new();
@@ -444,6 +452,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
     if flavor.is_document() {
         return Err(DbError::unsupported("Document collections have no SQL schema to change."));
     }
+    if flavor == SqlFlavor::Cql
+        && let Some(statements) = cql_statements(d, change)?
+    {
+        return Ok(statements);
+    }
     let table = d.quoted_name(change.table());
     let alter = |body: String| format!("ALTER TABLE {table} {body}");
     // sp_rename takes the current name as a string and the new name unquoted.
@@ -500,7 +513,8 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Clickhouse
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
-                | SqlFlavor::Redis => {
+                | SqlFlavor::Redis
+                | SqlFlavor::Cql => {
                     let target = ObjectRef { name: new_name.clone(), ..t.clone() };
                     vec![format!("RENAME TABLE {table} TO {}", d.quoted_name(&target))]
                 }
@@ -518,7 +532,8 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Snowflake
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
-                | SqlFlavor::Redis => format!("ADD COLUMN {def}"),
+                | SqlFlavor::Redis
+                | SqlFlavor::Cql => format!("ADD COLUMN {def}"),
             })]
         }
         SchemaChange::DropColumn { column, .. } => {
@@ -583,7 +598,8 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Clickhouse
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
-                | SqlFlavor::Redis => {
+                | SqlFlavor::Redis
+                | SqlFlavor::Cql => {
                     vec![format!("DROP INDEX {} ON {table}", d.quote_ident(n))]
                 }
             }
@@ -627,6 +643,60 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 (SqlFlavor::Mysql, ConstraintKind::Unique) => format!("DROP INDEX {q}"),
                 _ => format!("DROP CONSTRAINT {q}"),
             })]
+        }
+    })
+}
+
+/// CQL spellings, or an error for what Cassandra cannot do. `None` falls through
+/// to the shared SQL (create and drop table).
+fn cql_statements(d: &dyn Dialect, change: &SchemaChange) -> DbResult<Option<Vec<String>>> {
+    let table = d.quoted_name(change.table());
+    let alter = |body: String| Some(vec![format!("ALTER TABLE {table} {body}")]);
+    Ok(match change {
+        SchemaChange::CreateTable { primary_key, .. } if primary_key.is_empty() => {
+            return Err(DbError::invalid(
+                "Cassandra tables need a primary key: its first column is the partition key, the rest are clustering columns.",
+            ));
+        }
+        SchemaChange::CreateTable { .. } | SchemaChange::DropTable { .. } => None,
+        SchemaChange::AddColumn { column, .. } => alter(format!("ADD {}", column_def(d, column)?)),
+        SchemaChange::DropColumn { column, .. } => {
+            name(column, "The column")?;
+            alter(format!("DROP {}", d.quote_ident(column)))
+        }
+        // Only primary key columns can be renamed; the server says so for others.
+        SchemaChange::RenameColumn { column, new_name, .. } => {
+            name(column, "The column")?;
+            name(new_name, "The new name")?;
+            alter(format!("RENAME {} TO {}", d.quote_ident(column), d.quote_ident(new_name)))
+        }
+        SchemaChange::CreateIndex { name: n, columns, unique, .. } => {
+            name(n, "The index name")?;
+            let [column] = columns.as_slice() else {
+                return Err(DbError::unsupported("A Cassandra secondary index covers exactly one column."));
+            };
+            if *unique || column.descending {
+                return Err(DbError::unsupported("Cassandra indexes are neither unique nor ordered."));
+            }
+            name(&column.name, "Column names")?;
+            Some(vec![format!("CREATE INDEX {} ON {table} ({})", d.quote_ident(n), d.quote_ident(&column.name))])
+        }
+        SchemaChange::DropIndex { table: t, name: n } => {
+            name(n, "The index name")?;
+            let index = ObjectRef { name: n.clone(), ..t.clone() };
+            Some(vec![format!("DROP INDEX {}", d.quoted_name(&index))])
+        }
+        SchemaChange::RenameTable { .. } => {
+            return Err(DbError::unsupported("Cassandra cannot rename tables."));
+        }
+        SchemaChange::AlterColumn { .. } => {
+            return Err(DbError::unsupported("Cassandra cannot change a column's type, nullability or default."));
+        }
+        SchemaChange::AddForeignKey { .. }
+        | SchemaChange::AddUnique { .. }
+        | SchemaChange::AddCheck { .. }
+        | SchemaChange::DropConstraint { .. } => {
+            return Err(DbError::unsupported("Cassandra has no foreign keys, unique or check constraints."));
         }
     })
 }
