@@ -21,7 +21,15 @@ const MAX_NOTICE: usize = 64 * 1024;
 pub fn is_numeric_type(label: &str) -> bool {
     matches!(
         label,
-        "Number" | "long" | "integer" | "short" | "byte" | "double" | "float" | "half_float" | "scaled_float"
+        "Number"
+            | "long"
+            | "integer"
+            | "short"
+            | "byte"
+            | "double"
+            | "float"
+            | "half_float"
+            | "scaled_float"
             | "unsigned_long"
     )
 }
@@ -55,17 +63,19 @@ pub fn field(key: &str, path: &str, value: &Value, types: &FieldTypes, limits: C
             key,
             mapped.unwrap_or("Object"),
             cell(value, limits),
-            map.iter()
-                .map(|(k, v)| field(k, &format!("{path}.{k}"), v, types, limits))
-                .collect::<Vec<_>>()
-                .into_iter(),
+            map.iter().map(|(k, v)| field(k, &format!("{path}.{k}"), v, types, limits)).collect::<Vec<_>>().into_iter(),
         ),
         // Arrays hold values of the mapped type; the container is labelled `Array`.
         Value::Array(items) => DocField::container(
             key,
             "Array",
             cell(value, limits),
-            items.iter().enumerate().map(|(i, v)| field(&i.to_string(), path, v, types, limits)).collect::<Vec<_>>().into_iter(),
+            items
+                .iter()
+                .enumerate()
+                .map(|(i, v)| field(&i.to_string(), path, v, types, limits))
+                .collect::<Vec<_>>()
+                .into_iter(),
         ),
         _ => DocField::scalar(key, mapped.unwrap_or_else(|| json_label(value)), cell(value, limits)),
     }
@@ -163,7 +173,11 @@ pub fn grid(body: &crate::client::Body, limits: CellLimits) -> Grid {
             .iter()
             .map(|c| {
                 let t = c["type"].as_str().unwrap_or("").to_owned();
-                ColumnMeta { name: c["name"].as_str().unwrap_or("").to_owned(), numeric: is_numeric_type(&t), type_name: t }
+                ColumnMeta {
+                    name: c["name"].as_str().unwrap_or("").to_owned(),
+                    numeric: is_numeric_type(&t),
+                    type_name: t,
+                }
             })
             .collect();
         out.rows = rows
@@ -261,10 +275,13 @@ mod tests {
 
     #[test]
     fn other_shapes() {
-        let cat = grid(&parse_body(r#"[{"index":"a","docs.count":"3"},{"index":"b","docs.count":"4"}]"#), CellLimits::GRID);
+        let cat =
+            grid(&parse_body(r#"[{"index":"a","docs.count":"3"},{"index":"b","docs.count":"4"}]"#), CellLimits::GRID);
         assert_eq!((cat.columns.len(), cat.rows.len()), (2, 2));
         let sql = grid(
-            &parse_body(r#"{"columns":[{"name":"n","type":"long"},{"name":"s","type":"keyword"}],"rows":[[1,"a"],[2,null]]}"#),
+            &parse_body(
+                r#"{"columns":[{"name":"n","type":"long"},{"name":"s","type":"keyword"}],"rows":[[1,"a"],[2,null]]}"#,
+            ),
             CellLimits::GRID,
         );
         assert!(sql.columns[0].numeric);
@@ -273,7 +290,9 @@ mod tests {
         assert_eq!((text.columns[0].name.as_str(), text.rows.len()), ("response", 2));
         let obj = grid(&parse_body(r#"{"acknowledged":true}"#), CellLimits::GRID);
         assert_eq!(obj.rows, vec![vec![Cell::Bool { value: true }]]);
-        let bulk = parse_body(r#"{"errors":true,"items":[{"index":{"result":"created"}},{"index":{"error":{"reason":"bad"}}}]}"#);
+        let bulk = parse_body(
+            r#"{"errors":true,"items":[{"index":{"result":"created"}},{"index":{"error":{"reason":"bad"}}}]}"#,
+        );
         assert!(grid(&bulk, CellLimits::GRID).notices[0].contains("bad"));
         assert_eq!(affected(bulk.json()), Some(1));
         assert_eq!(affected(&serde_json::json!({"deleted": 4, "total": 4})), Some(4));
@@ -289,7 +308,8 @@ mod tests {
             &mut types,
         );
         let types: FieldTypes = types.into_iter().collect();
-        let f = object_fields(serde_json::json!({"n": 1, "c": {"a": "x"}}).as_object().unwrap(), &types, CellLimits::GRID);
+        let f =
+            object_fields(serde_json::json!({"n": 1, "c": {"a": "x"}}).as_object().unwrap(), &types, CellLimits::GRID);
         let by = |k: &str| f.iter().find(|x| x.key == k).unwrap();
         assert_eq!((by("n").type_label.as_str(), by("c").type_label.as_str()), ("long", "object"));
         assert_eq!(by("c").children[0].type_label, "keyword");

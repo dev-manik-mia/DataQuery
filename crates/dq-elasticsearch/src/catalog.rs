@@ -14,8 +14,21 @@ use crate::values::{FieldTypes, is_numeric_type, mapping_types};
 
 /// Index settings worth recreating; the rest are internal (uuid, creation date, version…).
 const KEPT_SETTINGS: &[&str] = &[
-    "number_of_shards", "number_of_replicas", "refresh_interval", "max_result_window", "analysis", "codec", "sort",
-    "similarity", "mapping", "default_pipeline", "final_pipeline", "hidden", "lifecycle", "routing_path", "mode",
+    "number_of_shards",
+    "number_of_replicas",
+    "refresh_interval",
+    "max_result_window",
+    "analysis",
+    "codec",
+    "sort",
+    "similarity",
+    "mapping",
+    "default_pipeline",
+    "final_pipeline",
+    "hidden",
+    "lifecycle",
+    "routing_path",
+    "mode",
 ];
 
 /// Percent-encodes a name for a URL path segment (index names are mostly safe already).
@@ -80,7 +93,9 @@ pub async fn aliases(client: &Client) -> DbResult<Vec<(String, String)>> {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|r| (r["alias"].as_str().unwrap_or_default().to_owned(), r["index"].as_str().unwrap_or_default().to_owned()))
+        .map(|r| {
+            (r["alias"].as_str().unwrap_or_default().to_owned(), r["index"].as_str().unwrap_or_default().to_owned())
+        })
         .collect();
     out.sort();
     Ok(out)
@@ -89,7 +104,12 @@ pub async fn aliases(client: &Client) -> DbResult<Vec<(String, String)>> {
 /// Data stream names; empty when the server has none or does not support them.
 pub async fn data_streams(client: &Client) -> Vec<String> {
     client.get("/_data_stream").await.ok().map_or_else(Vec::new, |v| {
-        v["data_streams"].as_array().into_iter().flatten().filter_map(|d| d["name"].as_str().map(str::to_owned)).collect()
+        v["data_streams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d["name"].as_str().map(str::to_owned))
+            .collect()
     })
 }
 
@@ -207,13 +227,22 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         if actions.is_empty() {
             return Err(DbError::not_found(format!("No alias named {}.", object.name)));
         }
-        return Ok(format!("POST /_aliases\n{}", serde_json::to_string_pretty(&json!({ "actions": actions })).unwrap_or_default()));
+        return Ok(format!(
+            "POST /_aliases\n{}",
+            serde_json::to_string_pretty(&json!({ "actions": actions })).unwrap_or_default()
+        ));
     }
     let name = segment(&object.name);
-    let (settings, mapping) = tokio::join!(client.get(&format!("/{name}/_settings")), client.get(&format!("/{name}/_mapping")));
+    let (settings_path, mapping_path) = (format!("/{name}/_settings"), format!("/{name}/_mapping"));
+    let (settings, mapping) = tokio::join!(client.get(&settings_path), client.get(&mapping_path));
     let (settings, mapping) = (settings?, mapping?);
-    let settings = settings.as_object().and_then(|m| m.values().next()).map(|i| i["settings"]["index"].clone()).unwrap_or_default();
-    let mappings = mapping.as_object().and_then(|m| m.values().next()).map(|i| i["mappings"].clone()).unwrap_or_default();
+    let settings = settings
+        .as_object()
+        .and_then(|m| m.values().next())
+        .map(|i| i["settings"]["index"].clone())
+        .unwrap_or_default();
+    let mappings =
+        mapping.as_object().and_then(|m| m.values().next()).map(|i| i["mappings"].clone()).unwrap_or_default();
     let body = json!({ "settings": kept_settings(&settings), "mappings": mappings });
     Ok(format!("PUT /{}\n{}", object.name, serde_json::to_string_pretty(&body).unwrap_or_default()))
 }
@@ -258,7 +287,8 @@ mod tests {
 
     #[test]
     fn keeps_defining_settings_only() {
-        let s = kept_settings(&json!({"number_of_shards": "1", "uuid": "x", "creation_date": "1", "analysis": {"a": 1}}));
+        let s =
+            kept_settings(&json!({"number_of_shards": "1", "uuid": "x", "creation_date": "1", "analysis": {"a": 1}}));
         assert_eq!(s, json!({"index": {"number_of_shards": "1", "analysis": {"a": 1}}}));
         assert_eq!(segment("logs-2026.10/x y"), "logs-2026.10%2Fx%20y");
     }

@@ -7,7 +7,9 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use dq_core::DbResult;
-use dq_core::monitor::{Gauge, Monitor, MonitorSnapshot, ObjectSize, Replication, ServerProcess, ServerSetting, short_query};
+use dq_core::monitor::{
+    Gauge, Monitor, MonitorSnapshot, ObjectSize, Replication, ServerProcess, ServerSetting, short_query,
+};
 use dq_core::node::{NodeKind, ObjectRef};
 use serde_json::Value;
 
@@ -80,11 +82,9 @@ impl Monitor for EsSession {
     async fn snapshot(&self, long_running_secs: u32) -> DbResult<MonitorSnapshot> {
         let client = &self.client;
         let mut unavailable = Vec::new();
-        let (tasks, http, health) = tokio::join!(
-            client.get(&format!("/_tasks?detailed=true&actions={ACTIONS}")),
-            client.get("/_nodes/stats/http"),
-            client.get("/_cluster/health"),
-        );
+        let tasks_path = format!("/_tasks?detailed=true&actions={ACTIONS}");
+        let (tasks, http, health) =
+            tokio::join!(client.get(&tasks_path), client.get("/_nodes/stats/http"), client.get("/_cluster/health"),);
         let (processes, active, long_running) = match tasks {
             Ok(t) => {
                 let (p, ids, long) = processes(&t, long_running_secs);
@@ -101,7 +101,12 @@ impl Monitor for EsSession {
         };
         let connections = match http {
             Ok(h) => {
-                let open: i64 = h["nodes"].as_object().into_iter().flatten().filter_map(|(_, n)| n["http"]["current_open"].as_i64()).sum();
+                let open: i64 = h["nodes"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(_, n)| n["http"]["current_open"].as_i64())
+                    .sum();
                 Some(Gauge { used: open, max: 0 })
             }
             Err(e) => {
@@ -145,13 +150,16 @@ impl Monitor for EsSession {
                     continue;
                 }
                 let value = value.as_str().map_or_else(|| value.to_string(), str::to_owned);
-                seen.insert(name.clone(), ServerSetting {
-                    name: name.clone(),
-                    value,
-                    unit: None,
-                    category: Some(section.to_owned()),
-                    description: None,
-                });
+                seen.insert(
+                    name.clone(),
+                    ServerSetting {
+                        name: name.clone(),
+                        value,
+                        unit: None,
+                        category: Some(section.to_owned()),
+                        description: None,
+                    },
+                );
             }
         }
         let mut out: Vec<ServerSetting> = seen.into_values().collect();

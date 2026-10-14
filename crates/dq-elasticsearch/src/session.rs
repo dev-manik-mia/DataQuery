@@ -7,11 +7,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex as SyncMutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter};
-use dq_core::document::{DocField, DocIndex, Document, DocumentFeatures, DocumentPage, DocumentRows, DocumentStore, FindRequest};
+use dq_core::document::{
+    DocField, DocIndex, Document, DocumentFeatures, DocumentPage, DocumentRows, DocumentStore, FindRequest,
+};
 use dq_core::explain::ExplainResult;
 use dq_core::monitor::Monitor;
 use dq_core::node::{Node, NodeKind, ObjectRef};
@@ -99,7 +101,8 @@ fn target(req: &Request) -> Option<String> {
 }
 
 fn parse_json(text: &str, what: &str) -> DbResult<Value> {
-    serde_json::from_str(text).map_err(|e| DbError::new(ErrorKind::Syntax, format!("The {what} is not valid JSON: {e}")))
+    serde_json::from_str(text)
+        .map_err(|e| DbError::new(ErrorKind::Syntax, format!("The {what} is not valid JSON: {e}")))
 }
 
 /// The search body of a request (`{}` when empty).
@@ -229,7 +232,11 @@ pub fn next_cursor(cursor: &Cursor, shown: &[Value], has_more: bool) -> Option<C
     match cursor {
         Cursor::From(from) => {
             let next = from + shown.len() as u64;
-            if next + shown.len() as u64 <= MAX_WINDOW { Some(Cursor::From(next)) } else { after().or(Some(Cursor::From(next))) }
+            if next + shown.len() as u64 <= MAX_WINDOW {
+                Some(Cursor::From(next))
+            } else {
+                after().or(Some(Cursor::From(next)))
+            }
         }
         Cursor::After(_) => after(),
     }
@@ -252,7 +259,9 @@ pub fn import_value(text: &str, data_type: &str) -> Value {
             "false" | "0" | "no" => Value::Bool(false),
             _ => Value::String(text.to_owned()),
         },
-        "object" | "nested" | "flattened" => serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned())),
+        "object" | "nested" | "flattened" => {
+            serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned()))
+        }
         "" => {
             let t = text.trim();
             if matches!(t, "true" | "false") {
@@ -282,14 +291,20 @@ impl EsSession {
             .await
             .ok()
             .and_then(|a| a["username"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| if params.config.username.is_empty() { "anonymous".into() } else { params.config.username.clone() });
+            .unwrap_or_else(|| {
+                if params.config.username.is_empty() { "anonymous".into() } else { params.config.username.clone() }
+            });
         let config = &params.config;
         let tls = config.ssl_mode != dq_core::config::SslMode::Disable;
         let info = ServerInfo {
             engine: config.engine,
             version: format!("{product} {number}"),
             latency_ms,
-            tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user,
             database: root["cluster_name"].as_str().unwrap_or("cluster").to_owned(),
             read_only: config.read_only,
@@ -383,7 +398,8 @@ impl EsSession {
             if hits.is_empty() {
                 break Ok(rows.rows());
             }
-            let batch: Vec<Vec<DocField>> = hits.iter().map(|h| values::hit_fields(h, &none, CellLimits::FULL)).collect();
+            let batch: Vec<Vec<DocField>> =
+                hits.iter().map(|h| values::hit_fields(h, &none, CellLimits::FULL)).collect();
             if let Err(e) = rows.push(&batch) {
                 break Err(e);
             }
@@ -396,7 +412,10 @@ impl EsSession {
         };
         if let Some(id) = scroll_id {
             let body = json!({ "scroll_id": id }).to_string();
-            let _ = self.client.call(&Call { method: "DELETE", path: "/_search/scroll", body: &body, ..Call::default() }).await;
+            let _ = self
+                .client
+                .call(&Call { method: "DELETE", path: "/_search/scroll", body: &body, ..Call::default() })
+                .await;
         }
         result
     }
@@ -416,7 +435,8 @@ impl Session for EsSession {
         let cluster = &self.info.database;
         match parent {
             None => {
-                let mut node = Node::container(ObjectRef::new(NodeKind::Database, cluster.clone(), None, cluster.clone()));
+                let mut node =
+                    Node::container(ObjectRef::new(NodeKind::Database, cluster.clone(), None, cluster.clone()));
                 node.current = true;
                 Ok(vec![node])
             }
@@ -458,7 +478,8 @@ impl Session for EsSession {
     async fn fetch_more(&self, limit: u32) -> DbResult<RowsPage> {
         let started = Instant::now();
         let mut cursor = self.cursor.lock().await;
-        let rows: Vec<Row> = cursor.drain(..cursor.len().min(limit as usize)).collect();
+        let take = cursor.len().min(limit as usize);
+        let rows: Vec<Row> = cursor.drain(..take).collect();
         Ok(RowsPage { rows, has_more: !cursor.is_empty(), duration_ms: elapsed(started) })
     }
 
@@ -504,7 +525,8 @@ impl Session for EsSession {
     async fn schema_model(&self, database: &str, _schema: Option<&str>) -> DbResult<SchemaModel> {
         let all = self.client.get("/_mapping").await?;
         let mut model = SchemaModel::default();
-        let mut names: Vec<&String> = all.as_object().into_iter().flatten().map(|(k, _)| k).filter(|k| !k.starts_with('.')).collect();
+        let mut names: Vec<&String> =
+            all.as_object().into_iter().flatten().map(|(k, _)| k).filter(|k| !k.starts_with('.')).collect();
         names.sort();
         for name in names {
             if model.tables.len() >= SchemaModel::MAX_TABLES {
@@ -522,7 +544,9 @@ impl Session for EsSession {
                     primary_key: false,
                 })
                 .collect();
-            model.tables.push(ModelTable { object: ObjectRef::new(NodeKind::Table, database, None, name.clone()), columns });
+            model
+                .tables
+                .push(ModelTable { object: ObjectRef::new(NodeKind::Table, database, None, name.clone()), columns });
         }
         Ok(model)
     }
@@ -536,18 +560,45 @@ impl Session for EsSession {
     ) -> DbResult<(Vec<ColumnMeta>, Vec<Row>)> {
         no_params(params)?;
         let req = self.statement(sql)?;
-        let grid = values::grid(&self.client.call(&Call { method: &req.method, path: &req.path, body: &req.body, ndjson: is_ndjson(&req), ..Call::default() }).await?, limits);
+        let grid = values::grid(
+            &self
+                .client
+                .call(&Call {
+                    method: &req.method,
+                    path: &req.path,
+                    body: &req.body,
+                    ndjson: is_ndjson(&req),
+                    ..Call::default()
+                })
+                .await?,
+            limits,
+        );
         Ok((grid.columns, grid.rows))
     }
 
     /// Exports: searches page through every hit with the scroll API; other requests return one response.
-    async fn stream_query(&self, _database: &str, sql: &str, params: Params<'_>, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         no_params(params)?;
         let req = self.statement(sql)?;
         if is_search(&req) {
             return self.scroll(&req, on_batch).await;
         }
-        let body = self.client.call(&Call { method: &req.method, path: &req.path, body: &req.body, ndjson: is_ndjson(&req), ..Call::default() }).await?;
+        let body = self
+            .client
+            .call(&Call {
+                method: &req.method,
+                path: &req.path,
+                body: &req.body,
+                ndjson: is_ndjson(&req),
+                ..Call::default()
+            })
+            .await?;
         let grid = values::grid(&body, CellLimits::FULL);
         let n = grid.rows.len() as u64;
         on_batch(&grid.columns, grid.rows)?;
@@ -564,7 +615,13 @@ impl Session for EsSession {
     }
 
     /// Explain profiles the search (it runs); a plain explain validates the query and shows the Lucene query.
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         no_params(params)?;
         let req = self.statement(sql)?;
         if !is_search(&req) {
@@ -580,7 +637,8 @@ impl Session for EsSession {
             return explain::profile_plan(response.json(), true);
         }
         let query = body.remove("query").unwrap_or_else(|| json!({ "match_all": {} }));
-        let response = self.client.post(&format!("{index}/_validate/query?explain=true"), &json!({ "query": query })).await?;
+        let response =
+            self.client.post(&format!("{index}/_validate/query?explain=true"), &json!({ "query": query })).await?;
         explain::validate_plan(&response)
     }
 
@@ -610,10 +668,8 @@ impl DocumentStore for EsSession {
         let cursor = Cursor::parse(request.cursor.as_deref())?;
         let body = find_body(request, &cursor)?;
         let index = &request.object.name;
-        let (response, types) = tokio::join!(
-            self.client.post(&format!("/{}/_search", segment(index)), &Value::Object(body)),
-            self.field_types(index)
-        );
+        let (path, body) = (format!("/{}/_search", segment(index)), Value::Object(body));
+        let (response, types) = tokio::join!(self.client.post(&path, &body), self.field_types(index));
         let response = response?;
         let mut hits = response["hits"]["hits"].as_array().cloned().unwrap_or_default();
         let has_more = hits.len() > request.limit() as usize;
@@ -650,14 +706,26 @@ impl DocumentStore for EsSession {
     }
 
     fn find_statement(&self, request: &FindRequest) -> DbResult<String> {
-        let mut body = find_body(&FindRequest { limit: request.limit().min(100), cursor: None, ..request.clone() }, &Cursor::From(0))?;
+        let mut body = find_body(
+            &FindRequest { limit: request.limit().min(100), cursor: None, ..request.clone() },
+            &Cursor::From(0),
+        )?;
         body.remove("track_total_hits");
         body.insert("size".into(), json!(request.limit().min(100)));
-        Ok(format!("POST /{}/_search\n{}", request.object.name, serde_json::to_string_pretty(&Value::Object(body)).unwrap_or_default()))
+        Ok(format!(
+            "POST /{}/_search\n{}",
+            request.object.name,
+            serde_json::to_string_pretty(&Value::Object(body)).unwrap_or_default()
+        ))
     }
 
     /// Imports with `_bulk` (one call per batch the caller hands over).
-    async fn insert_rows(&self, object: &ObjectRef, columns: &[ColumnInfo], rows: Vec<Vec<Option<String>>>) -> DbResult<u64> {
+    async fn insert_rows(
+        &self,
+        object: &ObjectRef,
+        columns: &[ColumnInfo],
+        rows: Vec<Vec<Option<String>>>,
+    ) -> DbResult<u64> {
         if self.info.read_only {
             return Err(read_only_error());
         }
@@ -680,7 +748,14 @@ impl DocumentStore for EsSession {
         }
         let body = self
             .client
-            .call(&Call { method: "POST", path: "/_bulk?refresh=wait_for", body: &ndjson, ndjson: true, timeout_secs: 300, ..Call::default() })
+            .call(&Call {
+                method: "POST",
+                path: "/_bulk?refresh=wait_for",
+                body: &ndjson,
+                ndjson: true,
+                timeout_secs: 300,
+                ..Call::default()
+            })
             .await?;
         let response = body.json();
         let written = values::affected(response).unwrap_or(0);
@@ -720,12 +795,15 @@ mod tests {
         assert_eq!(b["query"], json!({ "match_all": {} }));
         assert_eq!(b["size"], json!(21));
         assert!(b.get("from").is_none());
-        let b = find_body(&req("status:paid AND total:>100", "\"email\", total", "created_at desc, id"), &Cursor::From(40)).unwrap();
+        let b =
+            find_body(&req("status:paid AND total:>100", "\"email\", total", "created_at desc, id"), &Cursor::From(40))
+                .unwrap();
         assert_eq!(b["query"]["query_string"]["query"], "status:paid AND total:>100");
         assert_eq!(b["_source"], json!(["email", "total"]));
         assert_eq!(b["sort"], json!([{ "created_at": "desc" }, { "id": "asc" }]));
         assert_eq!(b["from"], json!(40));
-        let b = find_body(&req(r#"{ "term": { "s": "a" } }"#, "", r#"{ "n": "desc" }"#), &Cursor::After(json!([5]))).unwrap();
+        let b = find_body(&req(r#"{ "term": { "s": "a" } }"#, "", r#"{ "n": "desc" }"#), &Cursor::After(json!([5])))
+            .unwrap();
         assert_eq!((b["query"].clone(), b["search_after"].clone()), (json!({ "term": { "s": "a" } }), json!([5])));
         assert!(find_body(&req("{ bad", "", ""), &Cursor::From(0)).is_err());
         assert!(find_body(&req("", "", ""), &Cursor::From(9_990)).is_err());
@@ -738,7 +816,10 @@ mod tests {
         assert_eq!(next_cursor(&Cursor::From(0), &hits, true), Some(Cursor::From(2)));
         assert_eq!(next_cursor(&Cursor::From(0), &hits, false), None);
         assert_eq!(next_cursor(&Cursor::From(9_998), &hits, true), Some(Cursor::After(json!([4]))));
-        assert_eq!(Cursor::parse(Some(&Cursor::After(json!([4, "a"])).encode())).unwrap(), Cursor::After(json!([4, "a"])));
+        assert_eq!(
+            Cursor::parse(Some(&Cursor::After(json!([4, "a"])).encode())).unwrap(),
+            Cursor::After(json!([4, "a"]))
+        );
         assert_eq!(Cursor::parse(None).unwrap(), Cursor::From(0));
         assert!(Cursor::parse(Some("{}")).is_err());
     }

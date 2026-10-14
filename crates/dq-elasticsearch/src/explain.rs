@@ -42,9 +42,13 @@ pub fn profile_plan(response: &Value, analyzed: bool) -> DbResult<ExplainResult>
             let mut kids = Vec::new();
             for search in shard["searches"].as_array().into_iter().flatten() {
                 kids.extend(search["query"].as_array().into_iter().flatten().map(|q| node(q, "type", "")));
-                kids.extend(search["collector"].as_array().into_iter().flatten().map(|c| node(c, "name", "Collector: ")));
+                kids.extend(
+                    search["collector"].as_array().into_iter().flatten().map(|c| node(c, "name", "Collector: ")),
+                );
             }
-            kids.extend(shard["aggregations"].as_array().into_iter().flatten().map(|a| node(a, "type", "Aggregation: ")));
+            kids.extend(
+                shard["aggregations"].as_array().into_iter().flatten().map(|a| node(a, "type", "Aggregation: ")),
+            );
             let total: f64 = kids.iter().filter_map(|k| k.actual_ms).sum();
             PlanNode {
                 label: "Shard".into(),
@@ -85,7 +89,10 @@ pub fn validate_plan(response: &Value) -> DbResult<ExplainResult> {
         .map(|e| PlanNode {
             label: "Index".into(),
             detail: e["index"].as_str().map(str::to_owned),
-            props: e["explanation"].as_str().map(|x| vec![("Lucene query".to_owned(), x.to_owned())]).unwrap_or_default(),
+            props: e["explanation"]
+                .as_str()
+                .map(|x| vec![("Lucene query".to_owned(), x.to_owned())])
+                .unwrap_or_default(),
             ..PlanNode::default()
         })
         .collect();
@@ -128,8 +135,10 @@ mod tests {
 
     #[test]
     fn validate_explains_or_fails() {
-        let ok = validate_plan(&json!({"valid": true, "explanations": [{"index": "o", "valid": true, "explanation": "status:paid"}]}))
-            .unwrap();
+        let ok = validate_plan(
+            &json!({"valid": true, "explanations": [{"index": "o", "valid": true, "explanation": "status:paid"}]}),
+        )
+        .unwrap();
         assert_eq!(ok.plan.unwrap().children[0].props[0].1, "status:paid");
         assert!(validate_plan(&json!({"valid": false, "explanations": [{"error": "bad"}]})).is_err());
     }

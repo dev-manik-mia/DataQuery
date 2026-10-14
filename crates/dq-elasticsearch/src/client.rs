@@ -255,7 +255,8 @@ mod tests {
         );
         let e = server_error(400, &body, None);
         assert_eq!((e.kind, e.message.as_str()), (ErrorKind::InvalidInput, "failed to create query: bad"));
-        let e = server_error(400, &parse_body(r#"{"error":{"type":"parsing_exception","reason":"Unknown key"}}"#), None);
+        let e =
+            server_error(400, &parse_body(r#"{"error":{"type":"parsing_exception","reason":"Unknown key"}}"#), None);
         assert_eq!(e.kind, ErrorKind::Syntax);
         assert_eq!(server_error(401, &parse_body(""), None).kind, ErrorKind::Auth);
         assert_eq!(server_error(409, &parse_body("{}"), None).kind, ErrorKind::Constraint);
