@@ -15,7 +15,10 @@ fn scalar(v: &Value) -> String {
 fn plan_node(v: &Value) -> PlanNode {
     let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).map(str::to_owned);
     let mut out = PlanNode {
-        label: text("name").or_else(|| text("operator_name")).or_else(|| text("operator_type")).unwrap_or_else(|| "operator".into()),
+        label: text("name")
+            .or_else(|| text("operator_name"))
+            .or_else(|| text("operator_type"))
+            .unwrap_or_else(|| "operator".into()),
         actual_rows: v.get("operator_cardinality").and_then(Value::as_f64),
         actual_ms: v.get("operator_timing").and_then(Value::as_f64).map(|s| s * 1000.0),
         ..PlanNode::default()
@@ -29,7 +32,8 @@ fn plan_node(v: &Value) -> PlanNode {
             }
         }
     }
-    out.children = v.get("children").and_then(Value::as_array).map(|c| c.iter().map(plan_node).collect()).unwrap_or_default();
+    out.children =
+        v.get("children").and_then(Value::as_array).map(|c| c.iter().map(plan_node).collect()).unwrap_or_default();
     out
 }
 
@@ -39,7 +43,11 @@ pub fn parse(raw: &str, analyzed: bool) -> DbResult<ExplainResult> {
     let pretty = serde_json::to_string_pretty(&json).unwrap_or_else(|_| raw.to_owned());
     let (plan, execution_ms) = if analyzed {
         // `{ "latency": s, "children": [...] }`
-        let children: Vec<PlanNode> = json.get("children").and_then(Value::as_array).map(|c| c.iter().map(plan_node).collect()).unwrap_or_default();
+        let children: Vec<PlanNode> = json
+            .get("children")
+            .and_then(Value::as_array)
+            .map(|c| c.iter().map(plan_node).collect())
+            .unwrap_or_default();
         let mut root = PlanNode { label: "query".into(), children, ..PlanNode::default() };
         if root.children.len() == 1 {
             root = root.children.remove(0);
@@ -47,7 +55,8 @@ pub fn parse(raw: &str, analyzed: bool) -> DbResult<ExplainResult> {
         (root, json.get("latency").and_then(Value::as_f64).map(|s| s * 1000.0))
     } else {
         // `[ {root operator} ]`
-        let root = json.as_array().and_then(|a| a.first()).map(plan_node).ok_or_else(|| DbError::internal("empty plan"))?;
+        let root =
+            json.as_array().and_then(|a| a.first()).map(plan_node).ok_or_else(|| DbError::internal("empty plan"))?;
         (root, None)
     };
     Ok(ExplainResult { plan: Some(plan), raw: pretty, analyzed, planning_ms: None, execution_ms })

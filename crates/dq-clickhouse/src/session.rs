@@ -52,7 +52,9 @@ pub fn bind(sql: &str, values: Params<'_>) -> DbResult<Vec<(String, Option<Strin
             values.len()
         )));
     }
-    let numbered = |n: &String| n.strip_prefix('p').and_then(|d| d.parse::<usize>().ok()).filter(|i| (1..=values.len()).contains(i));
+    let numbered = |n: &String| {
+        n.strip_prefix('p').and_then(|d| d.parse::<usize>().ok()).filter(|i| (1..=values.len()).contains(i))
+    };
     if names.iter().all(|n| numbered(n).is_some()) {
         return Ok(names.iter().map(|n| (n.clone(), values[numbered(n).unwrap_or(1) - 1].clone())).collect());
     }
@@ -90,7 +92,12 @@ impl ChSession {
         let row = client
             .text_rows(
                 "SELECT version(), currentUser(), currentDatabase(), toString(getSetting('readonly'))",
-                &Request { database: Some(database), session_id: Some(&session_id), timeout_secs: 30, ..Request::default() },
+                &Request {
+                    database: Some(database),
+                    session_id: Some(&session_id),
+                    timeout_secs: 30,
+                    ..Request::default()
+                },
             )
             .await?
             .into_iter()
@@ -107,12 +114,23 @@ impl ChSession {
             engine: config.engine,
             version: format!("ClickHouse {}", field(0)),
             latency_ms: started.elapsed().as_millis() as u64,
-            tls: tls.then(|| dq_core::result::TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| dq_core::result::TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user: field(1),
             database: field(2),
             read_only: config.read_only || field(3) != "0",
         };
-        Ok(Self { client, read_only: info.read_only, info, session_id, query: Mutex::new(None), running: SyncMutex::new(None) })
+        Ok(Self {
+            client,
+            read_only: info.read_only,
+            info,
+            session_id,
+            query: Mutex::new(None),
+            running: SyncMutex::new(None),
+        })
     }
 
     fn set_running(&self, id: Option<String>) {
@@ -121,7 +139,13 @@ impl ChSession {
         }
     }
 
-    async fn run(&self, cursor: &mut Option<Cursor>, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
+    async fn run(
+        &self,
+        cursor: &mut Option<Cursor>,
+        sql: &str,
+        params: Params<'_>,
+        options: ExecOptions,
+    ) -> DbResult<StatementResult> {
         let started = Instant::now();
         let bound = bind(sql, params)?;
         let query_id = uuid::Uuid::new_v4().to_string();
@@ -146,7 +170,7 @@ impl ChSession {
                         rows: Vec::new(),
                         has_more: false,
                         command,
-                        affected: if insert { rows.written_rows } else { None },
+                        affected: if insert { rows.written } else { None },
                         duration_ms: started.elapsed().as_millis() as u64,
                         notices: Vec::new(),
                     },
@@ -194,14 +218,23 @@ impl ChSession {
     async fn close_cursor(&self, cursor: &mut Option<Cursor>) {
         if let Some(open) = cursor.take() {
             drop(open.rows);
-            let request = Request { params: vec![("id".into(), Some(open.query_id))], timeout_secs: 30, ..Request::default() };
+            let request =
+                Request { params: vec![("id".into(), Some(open.query_id))], timeout_secs: 30, ..Request::default() };
             let _ = self.client.text_rows("KILL QUERY WHERE query_id = {id:String} SYNC", &request).await;
         }
     }
 
-    async fn read_batches(&self, database: &str, sql: &str, params: Params<'_>, limits: CellLimits, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn read_batches(
+        &self,
+        database: &str,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         let database = if database.is_empty() { self.info.database.as_str() } else { database };
-        let request = Request { database: Some(database), read_only: true, params: bind(sql, params)?, ..Request::default() };
+        let request =
+            Request { database: Some(database), read_only: true, params: bind(sql, params)?, ..Request::default() };
         let mut rows = Rows::open(self.client.send(sql, &request).await?, None).await?;
         let meta = column_meta(&rows.names, &rows.types);
         let mut batch = Vec::with_capacity(STREAM_BATCH);
@@ -253,7 +286,8 @@ impl Session for ChSession {
     async fn fetch_more(&self, limit: u32) -> DbResult<RowsPage> {
         let started = Instant::now();
         let mut cursor = self.query.lock().await;
-        let mut open = cursor.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
+        let mut open =
+            cursor.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
         let (rows, has_more) = read_rows(&mut open, limit.clamp(1, ExecOptions::MAX_ROW_LIMIT)).await?;
         if has_more {
             *cursor = Some(open);
@@ -286,7 +320,13 @@ impl Session for ChSession {
         catalog::schema_model(&self.client, database).await
     }
 
-    async fn read_query(&self, database: &str, sql: &str, params: Params<'_>, limits: CellLimits) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
+    async fn read_query(
+        &self,
+        database: &str,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+    ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         self.read_batches(database, sql, params, limits, &mut |meta, batch| {
@@ -300,7 +340,13 @@ impl Session for ChSession {
         Ok((columns, rows))
     }
 
-    async fn stream_query(&self, database: &str, sql: &str, params: Params<'_>, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         self.read_batches(database, sql, params, CellLimits::FULL, on_batch).await
     }
 
@@ -318,10 +364,14 @@ impl Session for ChSession {
         let mut counts = Vec::new();
         for statement in statements {
             let statement = statement?;
-            let request = Request { database: Some(database), params: bind(&statement.sql, &statement.params)?, ..Request::default() };
+            let request = Request {
+                database: Some(database),
+                params: bind(&statement.sql, &statement.params)?,
+                ..Request::default()
+            };
             let mut rows = Rows::open(self.client.send(&statement.sql, &request).await?, None).await?;
             while rows.next().await?.is_some() {}
-            let affected = rows.written_rows.unwrap_or(0);
+            let affected = rows.written.unwrap_or(0);
             if statement.expect_rows.is_some() {
                 check_affected(&statement, affected)?;
             }
@@ -330,9 +380,17 @@ impl Session for ChSession {
         Ok(counts)
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         if analyze {
-            return Err(DbError::unsupported("ClickHouse has no EXPLAIN ANALYZE. Use Explain, or check system.query_log after running the query."));
+            return Err(DbError::unsupported(
+                "ClickHouse has no EXPLAIN ANALYZE. Use Explain, or check system.query_log after running the query.",
+            ));
         }
         let sql = format!("EXPLAIN json = 1, indexes = 1, description = 1 {}", sql.trim().trim_end_matches(';'));
         let result = self.execute(&sql, params, ExecOptions { row_limit: 10_000, timeout_secs }).await?;
@@ -356,7 +414,9 @@ mod tests {
 
     #[test]
     fn binds_numbered_and_named_parameters() {
-        let generated = bind("SELECT * FROM t WHERE b = {p2:String} AND a = {p1:String}", &[Some("1".into()), Some("2".into())]).unwrap();
+        let generated =
+            bind("SELECT * FROM t WHERE b = {p2:String} AND a = {p1:String}", &[Some("1".into()), Some("2".into())])
+                .unwrap();
         assert_eq!(generated, [("p2".to_owned(), Some("2".to_owned())), ("p1".to_owned(), Some("1".to_owned()))]);
         let named = bind("SELECT {id:UInt64}, {name:String}, {id:UInt64}", &[Some("7".into()), None]).unwrap();
         assert_eq!(named, [("id".to_owned(), Some("7".to_owned())), ("name".to_owned(), None)]);

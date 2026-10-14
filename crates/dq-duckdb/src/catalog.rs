@@ -137,7 +137,12 @@ pub fn table_children(conn: &Connection, table: &ObjectRef) -> DbResult<Vec<Node
     )?;
     Ok(found
         .iter()
-        .map(|r| Node::leaf(ObjectRef::new(NodeKind::Index, table.database.clone(), table.schema.clone(), r.string(0)).with_parent(&table.name)))
+        .map(|r| {
+            Node::leaf(
+                ObjectRef::new(NodeKind::Index, table.database.clone(), table.schema.clone(), r.string(0))
+                    .with_parent(&table.name),
+            )
+        })
         .collect())
 }
 
@@ -193,8 +198,20 @@ pub fn row_estimate(conn: &Connection, object: &ObjectRef) -> DbResult<Option<i6
 }
 
 const NUMERIC: &[&str] = &[
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
-    "FLOAT", "DOUBLE", "DECIMAL", "REAL",
+    "TINYINT",
+    "SMALLINT",
+    "INTEGER",
+    "BIGINT",
+    "HUGEINT",
+    "UTINYINT",
+    "USMALLINT",
+    "UINTEGER",
+    "UBIGINT",
+    "UHUGEINT",
+    "FLOAT",
+    "DOUBLE",
+    "DECIMAL",
+    "REAL",
 ];
 
 /// A constraint of a table: kind, columns, check text, referenced table and columns.
@@ -211,19 +228,19 @@ fn constraints(conn: &Connection, object: &ObjectRef) -> DbResult<Vec<Constraint
     let schema = schema_of(object)?;
     let found = rows(
         conn,
-        &format!(
-            "SELECT constraint_type, constraint_name, array_to_string(constraint_column_names, chr(31)), constraint_text, \
-                    referenced_table, array_to_string(referenced_column_names, chr(31)) \
-             FROM duckdb_constraints() WHERE database_name = ? AND schema_name = ? AND table_name = ? \
-               AND constraint_type <> 'NOT NULL' ORDER BY constraint_index"
-        ),
+        "SELECT constraint_type, constraint_name, array_to_string(constraint_column_names, chr(31)), constraint_text, \
+                referenced_table, array_to_string(referenced_column_names, chr(31)) \
+         FROM duckdb_constraints() WHERE database_name = ? AND schema_name = ? AND table_name = ? \
+           AND constraint_type <> 'NOT NULL' ORDER BY constraint_index",
         &[&object.database, &schema, &object.name],
     )?;
     Ok(found
         .iter()
         .map(|r| Constraint {
             kind: r.string(0),
-            name: r.text(1).unwrap_or_else(|| format!("{}_{}", object.name, r.string(0).to_lowercase().replace(' ', "_"))),
+            name: r
+                .text(1)
+                .unwrap_or_else(|| format!("{}_{}", object.name, r.string(0).to_lowercase().replace(' ', "_"))),
             columns: list(r.text(2)),
             text: r.string(3),
             referenced_table: r.text(4),
@@ -254,7 +271,9 @@ fn columns(conn: &Connection, object: &ObjectRef, primary: &[String]) -> DbResul
                 default: r.text(3),
                 generated,
                 identity: generated,
-                editable: base != "BLOB" && !data_type.ends_with("[]") && !["STRUCT", "MAP", "UNION"].contains(&base.as_str()),
+                editable: base != "BLOB"
+                    && !data_type.ends_with("[]")
+                    && !["STRUCT", "MAP", "UNION"].contains(&base.as_str()),
                 numeric: NUMERIC.contains(&base.as_str()),
                 comment: r.text(4).filter(|c| !c.is_empty()),
                 read_as_text: false,
@@ -329,7 +348,8 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
     let rel = relation(conn, object)?;
     let kind = if rel.string(2) == "view" { NodeKind::View } else { NodeKind::Table };
     let all = constraints(conn, object)?;
-    let primary: Vec<String> = all.iter().find(|c| c.kind == "PRIMARY KEY").map(|c| c.columns.clone()).unwrap_or_default();
+    let primary: Vec<String> =
+        all.iter().find(|c| c.kind == "PRIMARY KEY").map(|c| c.columns.clone()).unwrap_or_default();
     let columns = columns(conn, object, &primary)?;
     let list_of = |cols: &[String]| cols.iter().map(|c| D.display_ident(c)).collect::<Vec<_>>().join(", ");
     let mut constraint_infos = Vec::new();
@@ -356,10 +376,17 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
         .filter(|c| c.kind == "UNIQUE")
         .find(|c| c.columns.iter().all(|n| columns.iter().any(|col| &col.name == n && !col.nullable)))
         .map(|c| c.columns.clone());
-    let row_identity =
-        if kind == NodeKind::Table { if primary.is_empty() { unique_key.unwrap_or_default() } else { primary } } else { Vec::new() };
+    let row_identity = if kind == NodeKind::Table {
+        if primary.is_empty() { unique_key.unwrap_or_default() } else { primary }
+    } else {
+        Vec::new()
+    };
     let schema = schema_of(object)?;
-    let foreign_keys = foreign_keys(conn, "database_name = ? AND schema_name = ? AND table_name = ?", &[&object.database, &schema, &object.name])?;
+    let foreign_keys = foreign_keys(
+        conn,
+        "database_name = ? AND schema_name = ? AND table_name = ?",
+        &[&object.database, &schema, &object.name],
+    )?;
     Ok(TableStructure {
         object: ObjectRef { kind, ..object.clone() },
         columns,
@@ -380,10 +407,18 @@ pub fn dependencies(conn: &Connection, object: &ObjectRef) -> DbResult<Dependenc
     }
     let schema = schema_of(object)?;
     let mut deps = Dependencies::default();
-    for fk in foreign_keys(conn, "database_name = ? AND schema_name = ? AND table_name = ?", &[&object.database, &schema, &object.name])? {
+    for fk in foreign_keys(
+        conn,
+        "database_name = ? AND schema_name = ? AND table_name = ?",
+        &[&object.database, &schema, &object.name],
+    )? {
         deps.uses.push(Dependency { object: fk.target, relation: format!("foreign key {}", fk.name) });
     }
-    for fk in foreign_keys(conn, "database_name = ? AND schema_name = ? AND referenced_table = ?", &[&object.database, &schema, &object.name])? {
+    for fk in foreign_keys(
+        conn,
+        "database_name = ? AND schema_name = ? AND referenced_table = ?",
+        &[&object.database, &schema, &object.name],
+    )? {
         deps.used_by.push(Dependency { object: fk.source, relation: format!("foreign key {}", fk.name) });
     }
     // Views that mention the name in their definition: DuckDB keeps no view dependencies.
@@ -403,7 +438,11 @@ pub fn dependencies(conn: &Connection, object: &ObjectRef) -> DbResult<Dependenc
 }
 
 pub fn schema_model(conn: &Connection, database: &str, schema: Option<&str>) -> DbResult<SchemaModel> {
-    let filter = if schema.is_some() { "AND c.schema_name = ?" } else { "AND c.schema_name NOT IN ('information_schema', 'pg_catalog')" };
+    let filter = if schema.is_some() {
+        "AND c.schema_name = ?"
+    } else {
+        "AND c.schema_name NOT IN ('information_schema', 'pg_catalog')"
+    };
     let mut params: Vec<&dyn ToSql> = vec![&database];
     if let Some(s) = &schema {
         params.push(s);
@@ -426,12 +465,23 @@ pub fn schema_model(conn: &Connection, database: &str, schema: Option<&str>) -> 
     let mut model = SchemaModel::default();
     for r in &found {
         let (s, name) = (r.string(0), r.string(1));
-        if model.tables.last().is_none_or(|t: &ModelTable| t.object.name != name || t.object.schema.as_deref() != Some(&s)) {
+        if model
+            .tables
+            .last()
+            .is_none_or(|t: &ModelTable| t.object.name != name || t.object.schema.as_deref() != Some(&s))
+        {
             let kind = if r.string(6) == "view" { NodeKind::View } else { NodeKind::Table };
-            model.tables.push(ModelTable { object: ObjectRef::new(kind, database, Some(s), name), columns: Vec::new() });
+            model
+                .tables
+                .push(ModelTable { object: ObjectRef::new(kind, database, Some(s), name), columns: Vec::new() });
         }
         if let Some(table) = model.tables.last_mut() {
-            table.columns.push(ModelColumn { name: r.string(2), data_type: r.string(3), nullable: r.flag(4), primary_key: r.flag(5) });
+            table.columns.push(ModelColumn {
+                name: r.string(2),
+                data_type: r.string(3),
+                nullable: r.flag(4),
+                primary_key: r.flag(5),
+            });
         }
     }
     model.truncated = model.tables.len() > SchemaModel::MAX_TABLES || found.len() >= SchemaModel::MAX_COLUMNS;
@@ -447,17 +497,27 @@ pub fn schema_model(conn: &Connection, database: &str, schema: Option<&str>) -> 
 pub fn ddl(conn: &Connection, object: &ObjectRef) -> DbResult<String> {
     let schema = schema_of(object)?;
     let sql = match object.kind {
-        NodeKind::Table => "SELECT sql FROM duckdb_tables() WHERE database_name = ? AND schema_name = ? AND table_name = ?",
-        NodeKind::View => "SELECT sql FROM duckdb_views() WHERE database_name = ? AND schema_name = ? AND view_name = ?",
-        NodeKind::Index => "SELECT sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND index_name = ?",
-        NodeKind::Sequence => "SELECT sql FROM duckdb_sequences() WHERE database_name = ? AND schema_name = ? AND sequence_name = ?",
+        NodeKind::Table => {
+            "SELECT sql FROM duckdb_tables() WHERE database_name = ? AND schema_name = ? AND table_name = ?"
+        }
+        NodeKind::View => {
+            "SELECT sql FROM duckdb_views() WHERE database_name = ? AND schema_name = ? AND view_name = ?"
+        }
+        NodeKind::Index => {
+            "SELECT sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = ? AND index_name = ?"
+        }
+        NodeKind::Sequence => {
+            "SELECT sql FROM duckdb_sequences() WHERE database_name = ? AND schema_name = ? AND sequence_name = ?"
+        }
         NodeKind::Function => {
             "SELECT 'CREATE MACRO ' || function_name || '(' || array_to_string(parameters, ', ') || ') AS ' || macro_definition \
              FROM duckdb_functions() WHERE database_name = ? AND schema_name = ? AND function_name = ? LIMIT 1"
         }
         _ => return Err(DbError::invalid("This object has no definition.")),
     };
-    let text = first(conn, sql, &[&object.database, &schema, &object.name])?.and_then(|r| r.text(0)).ok_or_else(|| not_found(object))?;
+    let text = first(conn, sql, &[&object.database, &schema, &object.name])?
+        .and_then(|r| r.text(0))
+        .ok_or_else(|| not_found(object))?;
     let text = text.trim().trim_end_matches(';');
     Ok(format!("{text};\n"))
 }

@@ -7,18 +7,20 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dq_clickhouse::ClickhouseAdapter;
 use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
+use dq_core::edit::ColumnValue;
 use dq_core::engine::Engine;
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops::{self, ImportMapping};
 use dq_core::result::ExecOptions;
 use dq_core::table::{ColumnSearch, RowFilter, SortSpec, TablePageRequest};
-use dq_core::edit::ColumnValue;
-use dq_core::transfer::{CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl};
+use dq_core::transfer::{
+    CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
+};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
-use dq_clickhouse::ClickhouseAdapter;
 
 const DB: &str = "dataquery_test";
 const OPTS: ExecOptions = ExecOptions { row_limit: 500, timeout_secs: 30 };
@@ -231,33 +233,73 @@ async fn pages_and_transfers() -> DbResult<()> {
     let page = ops::table_page(&*s, &req).await?;
     assert_eq!((page.rows.len(), page.has_more), (100, true));
     assert_eq!(ops::row_count(&*s, &req.object, &req.rows).await?.count, 400);
-    let search = RowFilter { searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }], ..RowFilter::default() };
+    let search = RowFilter {
+        searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &search).await?.count, 400);
-    let literal = RowFilter { searches: vec![ColumnSearch { column: "status".into(), contains: "_aid".into() }], ..RowFilter::default() };
+    let literal = RowFilter {
+        searches: vec![ColumnSearch { column: "status".into(), contains: "_aid".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &literal).await?.count, 0);
-    let by_id = RowFilter { matches: vec![ColumnValue { column: "id".into(), value: Some("7".into()) }], ..RowFilter::default() };
+    let by_id = RowFilter {
+        matches: vec![ColumnValue { column: "id".into(), value: Some("7".into()) }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &by_id).await?.count, 1);
-    let nulls = RowFilter { matches: vec![ColumnValue { column: "discount".into(), value: None }], ..RowFilter::default() };
+    let nulls =
+        RowFilter { matches: vec![ColumnValue { column: "discount".into(), value: None }], ..RowFilter::default() };
     assert_eq!(ops::row_count(&*s, &req.object, &nulls).await?.count, 400);
     let other = ObjectRef::new(NodeKind::Table, "billing", None, "invoices");
-    let page = ops::table_page(&*s, &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 }).await?;
+    let page = ops::table_page(
+        &*s,
+        &TablePageRequest { object: other, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 },
+    )
+    .await?;
     assert_eq!(page.rows.len(), 2);
 
     let dir = tempfile::tempdir().unwrap();
     let none = TransferControl::none();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: table("orders"), rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() }, sort: None };
+    let source = ExportSource::Table {
+        object: table("orders"),
+        rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() },
+        sort: None,
+    };
     assert_eq!(ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &none).await?.rows, 10);
     s.execute("DROP TABLE IF EXISTS it_import", &[], OPTS).await?;
-    s.execute("CREATE TABLE it_import (id UInt64, status String, total Decimal(12, 2)) ENGINE = MergeTree ORDER BY id", &[], OPTS).await?;
-    let csv_source = ImportSource::Csv { path: csv.to_string_lossy().into_owned(), options: CsvOptions { empty_as_null: true, ..CsvOptions::default() } };
-    let map: Vec<ImportMapping> =
-        [("id", 0), ("status", 2), ("total", 3)].iter().map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) }).collect();
-    assert_eq!(ops::import(&*s, &table("it_import"), &csv_source, &map, &ImportOptions::default(), &none).await?.rows, 10);
+    s.execute(
+        "CREATE TABLE it_import (id UInt64, status String, total Decimal(12, 2)) ENGINE = MergeTree ORDER BY id",
+        &[],
+        OPTS,
+    )
+    .await?;
+    let csv_source = ImportSource::Csv {
+        path: csv.to_string_lossy().into_owned(),
+        options: CsvOptions { empty_as_null: true, ..CsvOptions::default() },
+    };
+    let map: Vec<ImportMapping> = [("id", 0), ("status", 2), ("total", 3)]
+        .iter()
+        .map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) })
+        .collect();
+    assert_eq!(
+        ops::import(&*s, &table("it_import"), &csv_source, &map, &ImportOptions::default(), &none).await?.rows,
+        10
+    );
     let sql_file = dir.path().join("rows.sql");
-    ops::export(&*s, &ExportSource::Table { object: table("it_import"), rows: RowFilter::default(), sort: None }, ExportFormat::SqlInsert, &ExportOptions::default(), &sql_file, &none).await?;
+    ops::export(
+        &*s,
+        &ExportSource::Table { object: table("it_import"), rows: RowFilter::default(), sort: None },
+        ExportFormat::SqlInsert,
+        &ExportOptions::default(),
+        &sql_file,
+        &none,
+    )
+    .await?;
     s.execute("TRUNCATE TABLE it_import", &[], OPTS).await?;
-    for statement in dq_core::sql::split_statements(&std::fs::read_to_string(&sql_file).unwrap(), s.dialect().flavor()) {
+    for statement in dq_core::sql::split_statements(&std::fs::read_to_string(&sql_file).unwrap(), s.dialect().flavor())
+    {
         let script = std::fs::read_to_string(&sql_file).unwrap();
         s.execute(statement.text(&script), &[], OPTS).await?;
     }
@@ -286,7 +328,9 @@ async fn explain_monitoring_and_schema_changes() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let pid = loop {
         let snapshot = monitor.snapshot(1).await.unwrap();
-        if let Some(p) = snapshot.processes.iter().find(|p| p.query.as_deref().is_some_and(|q| q.contains("sleepEachRow"))) {
+        if let Some(p) =
+            snapshot.processes.iter().find(|p| p.query.as_deref().is_some_and(|q| q.contains("sleepEachRow")))
+        {
             break p.pid;
         }
         assert!(Instant::now() < deadline, "the slow query never showed up");
@@ -298,14 +342,23 @@ async fn explain_monitoring_and_schema_changes() {
     assert!(monitor.largest_tables(DB, 5).await.unwrap().iter().any(|t| t.object.name == "orders"));
 
     s.execute("DROP TABLE IF EXISTS it_accounts", &[], OPTS).await.unwrap();
-    let col = |name: &str, ty: &str| ColumnDef { name: name.into(), data_type: ty.into(), nullable: true, default: None, identity: false };
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
     let changes = vec![
         SchemaChange::CreateTable {
             table: table("it_accounts"),
             columns: vec![ColumnDef { nullable: false, ..col("id", "UInt64") }, col("email", "String")],
             primary_key: vec!["id".into()],
         },
-        SchemaChange::AddColumn { table: table("it_accounts"), column: ColumnDef { default: Some("0".into()), nullable: false, ..col("qty", "UInt32") } },
+        SchemaChange::AddColumn {
+            table: table("it_accounts"),
+            column: ColumnDef { default: Some("0".into()), nullable: false, ..col("qty", "UInt32") },
+        },
         SchemaChange::RenameColumn { table: table("it_accounts"), column: "qty".into(), new_name: "quantity".into() },
     ];
     for change in &changes {

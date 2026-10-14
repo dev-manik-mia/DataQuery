@@ -11,7 +11,9 @@ pub fn map_error(e: &duckdb::Error) -> DbError {
         "Constraint Error" => (ErrorKind::Constraint, None),
         "INTERRUPT Error" => (ErrorKind::Cancelled, None),
         "Permission Error" => (ErrorKind::Permission, Some("The database was opened read-only.")),
-        "IO Error" => (ErrorKind::Storage, Some("Check that the file exists and that no other program holds a write lock on it.")),
+        "IO Error" => {
+            (ErrorKind::Storage, Some("Check that the file exists and that no other program holds a write lock on it."))
+        }
         "TransactionContext Error" => (ErrorKind::Server, Some("Roll back the failed transaction to continue.")),
         "Invalid Input Error" => (ErrorKind::InvalidInput, None),
         _ => (ErrorKind::Server, None),

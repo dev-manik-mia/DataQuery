@@ -19,14 +19,23 @@ pub fn type_label(t: &RowType) -> String {
     match t.kind.as_str() {
         "fixed" => format!("NUMBER({},{scale})", t.precision.unwrap_or(38)),
         "real" => "FLOAT".into(),
-        "text" => t.length.filter(|l| *l > 0 && *l < 16_777_216).map_or_else(|| "VARCHAR".into(), |l| format!("VARCHAR({l})")),
+        "text" => {
+            t.length.filter(|l| *l > 0 && *l < 16_777_216).map_or_else(|| "VARCHAR".into(), |l| format!("VARCHAR({l})"))
+        }
         "timestamp_ntz" | "timestamp_ltz" | "timestamp_tz" => format!("{}({scale})", t.kind.to_ascii_uppercase()),
         other => other.to_ascii_uppercase(),
     }
 }
 
 pub fn column_meta(rowtype: &[RowType]) -> Vec<ColumnMeta> {
-    rowtype.iter().map(|t| ColumnMeta { name: t.name.clone(), type_name: type_label(t), numeric: matches!(t.kind.as_str(), "fixed" | "real") }).collect()
+    rowtype
+        .iter()
+        .map(|t| ColumnMeta {
+            name: t.name.clone(),
+            type_name: type_label(t),
+            numeric: matches!(t.kind.as_str(), "fixed" | "real"),
+        })
+        .collect()
 }
 
 /// `value / 10^scale` written out exactly.
@@ -93,10 +102,14 @@ fn arrow_cell(t: &RowType, column: &ArrayRef, row: usize, limits: CellLimits) ->
     let unsupported = || Cell::Unsupported { type_name: t.kind.clone(), value: None };
     match t.kind.as_str() {
         "fixed" => match column.data_type() {
-            DataType::Decimal128(_, s) => Cell::number(scaled(column.as_primitive::<Decimal128Type>().value(row), i64::from(*s))),
+            DataType::Decimal128(_, s) => {
+                Cell::number(scaled(column.as_primitive::<Decimal128Type>().value(row), i64::from(*s)))
+            }
             _ => int_value(column, row).map_or_else(unsupported, |v| Cell::number(scaled(v, scale))),
         },
-        "real" => column.as_primitive_opt::<arrow::datatypes::Float64Type>().map_or_else(unsupported, |a| Cell::number(a.value(row).to_string())),
+        "real" => column
+            .as_primitive_opt::<arrow::datatypes::Float64Type>()
+            .map_or_else(unsupported, |a| Cell::number(a.value(row).to_string())),
         "boolean" => column.as_boolean_opt().map_or_else(unsupported, |a| Cell::Bool { value: a.value(row) }),
         "binary" => column.as_binary_opt::<i32>().map_or_else(unsupported, |a| Cell::binary(a.value(row), limits)),
         "date" => column
@@ -105,7 +118,16 @@ fn arrow_cell(t: &RowType, column: &ArrayRef, row: usize, limits: CellLimits) ->
             .map_or_else(unsupported, |d| Cell::Temporal { value: d.format("%Y-%m-%d").to_string(), zoned: false }),
         "time" => int_value(column, row).map_or_else(unsupported, |v| {
             let (seconds, nanos) = split_scaled(v, scale);
-            Cell::Temporal { value: format!("{:02}:{:02}:{:02}{}", seconds / 3600, seconds / 60 % 60, seconds % 60, fraction(nanos, scale)), zoned: false }
+            Cell::Temporal {
+                value: format!(
+                    "{:02}:{:02}:{:02}{}",
+                    seconds / 3600,
+                    seconds / 60 % 60,
+                    seconds % 60,
+                    fraction(nanos, scale)
+                ),
+                zoned: false,
+            }
         }),
         "timestamp_ntz" | "timestamp_ltz" | "timestamp_tz" => {
             let zoned = t.kind == "timestamp_tz";
@@ -134,7 +156,9 @@ fn arrow_cell(t: &RowType, column: &ArrayRef, row: usize, limits: CellLimits) ->
             });
             text.map_or_else(unsupported, |value| Cell::Temporal { value, zoned })
         }
-        "variant" | "object" | "array" => column.as_string_opt::<i32>().map_or_else(unsupported, |a| Cell::json(a.value(row), limits)),
+        "variant" | "object" | "array" => {
+            column.as_string_opt::<i32>().map_or_else(unsupported, |a| Cell::json(a.value(row), limits))
+        }
         _ => match column.as_string_opt::<i32>() {
             Some(a) => Cell::text(a.value(row), limits),
             None => column.as_string_opt::<i64>().map_or_else(unsupported, |a| Cell::text(a.value(row), limits)),
@@ -162,24 +186,32 @@ fn json_cell(t: &RowType, value: &Value, limits: CellLimits) -> Cell {
     match t.kind.as_str() {
         "fixed" | "real" => Cell::number(text),
         "boolean" => Cell::Bool { value: matches!(text.as_str(), "1" | "true" | "TRUE") },
-        "date" => text
-            .parse::<i32>()
-            .ok()
-            .and_then(|days| NaiveDate::from_num_days_from_ce_opt(days + 719_163))
-            .map_or(Cell::Temporal { value: text.clone(), zoned: false }, |d| Cell::Temporal { value: d.format("%Y-%m-%d").to_string(), zoned: false }),
-        "timestamp_ntz" | "timestamp_ltz" => seconds_fraction(&text)
-            .and_then(|(s, n)| timestamp_text(s, n, scale))
-            .map_or(Cell::Temporal { value: text.clone(), zoned: false }, |value| Cell::Temporal { value, zoned: false }),
+        "date" => {
+            text.parse::<i32>().ok().and_then(|days| NaiveDate::from_num_days_from_ce_opt(days + 719_163)).map_or(
+                Cell::Temporal { value: text.clone(), zoned: false },
+                |d| Cell::Temporal { value: d.format("%Y-%m-%d").to_string(), zoned: false },
+            )
+        }
+        "timestamp_ntz" | "timestamp_ltz" => {
+            seconds_fraction(&text).and_then(|(s, n)| timestamp_text(s, n, scale)).map_or(
+                Cell::Temporal { value: text.clone(), zoned: false },
+                |value| Cell::Temporal { value, zoned: false },
+            )
+        }
         "timestamp_tz" => {
             let (instant, zone) = text.split_once(' ').unwrap_or((&text, "1440"));
             seconds_fraction(instant)
                 .zip(zone.parse::<i64>().ok())
                 .and_then(|((s, n), z)| zoned_text(s, n, z - 1440, scale))
-                .map_or(Cell::Temporal { value: text.clone(), zoned: true }, |value| Cell::Temporal { value, zoned: true })
+                .map_or(Cell::Temporal { value: text.clone(), zoned: true }, |value| Cell::Temporal {
+                    value,
+                    zoned: true,
+                })
         }
         "variant" | "object" | "array" => Cell::json(text, limits),
         "binary" => {
-            let bytes: Vec<u8> = (0..text.len() / 2).filter_map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()).collect();
+            let bytes: Vec<u8> =
+                (0..text.len() / 2).filter_map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()).collect();
             Cell::binary(&bytes, limits)
         }
         _ => Cell::text(text, limits),
@@ -195,7 +227,14 @@ mod tests {
     use super::*;
 
     fn t(kind: &str, scale: i64) -> RowType {
-        RowType { name: "c".into(), kind: kind.into(), scale: Some(scale), precision: Some(38), length: None, nullable: Some(true) }
+        RowType {
+            name: "c".into(),
+            kind: kind.into(),
+            scale: Some(scale),
+            precision: Some(38),
+            length: None,
+            nullable: Some(true),
+        }
     }
 
     #[test]
@@ -204,7 +243,10 @@ mod tests {
         assert_eq!(scaled(1_234_567, 2), "12345.67");
         assert_eq!(scaled(7, 0), "7");
         let g = CellLimits::GRID;
-        assert_eq!(json_cell(&t("date", 0), &Value::String("20375".into()), g), Cell::Temporal { value: "2025-10-14".into(), zoned: false });
+        assert_eq!(
+            json_cell(&t("date", 0), &Value::String("20375".into()), g),
+            Cell::Temporal { value: "2025-10-14".into(), zoned: false }
+        );
         assert_eq!(
             json_cell(&t("timestamp_ntz", 3), &Value::String("1760435940.123000000".into()), g),
             Cell::Temporal { value: "2025-10-14 09:59:00.123".into(), zoned: false }

@@ -13,7 +13,9 @@ use dq_core::ops::{self, ImportMapping};
 use dq_core::result::ExecOptions;
 use dq_core::sql::{SqlFlavor, split_statements};
 use dq_core::table::{ColumnSearch, RowFilter, SortSpec, TablePageRequest};
-use dq_core::transfer::{CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl};
+use dq_core::transfer::{
+    CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
+};
 use dq_core::value::Cell;
 use dq_core::{DbResult, ErrorKind};
 use dq_duckdb::DuckdbAdapter;
@@ -89,11 +91,19 @@ async fn opens_files_and_memory_and_reports_errors() {
     let (_dir, cfg, s) = seeded().await;
     assert!(s.info().version.starts_with("DuckDB 1."), "{}", s.info().version);
     assert_eq!(s.info().database, "sales");
-    assert!(DuckdbAdapter.test(&ConnectParams::new(ConnConfig { database: ":memory:".into(), ..cfg.clone() }, None)).await.is_ok());
+    assert!(
+        DuckdbAdapter
+            .test(&ConnectParams::new(ConnConfig { database: ":memory:".into(), ..cfg.clone() }, None))
+            .await
+            .is_ok()
+    );
     let missing = ConnConfig { database: "/no/such/folder/x.duckdb".into(), ..cfg.clone() };
     assert_eq!(DuckdbAdapter.test(&ConnectParams::new(missing, None)).await.unwrap_err().kind, ErrorKind::Storage);
     let relative = ConnConfig { database: "x.duckdb".into(), ..cfg };
-    assert_eq!(DuckdbAdapter.test(&ConnectParams::new(relative, None)).await.unwrap_err().kind, ErrorKind::InvalidInput);
+    assert_eq!(
+        DuckdbAdapter.test(&ConnectParams::new(relative, None)).await.unwrap_err().kind,
+        ErrorKind::InvalidInput
+    );
     let err = s.execute("SELECT nope FROM orders", &[], OPTS).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Syntax);
     assert_eq!(s.execute("SELECT * FROM missing_table", &[], OPTS).await.unwrap_err().kind, ErrorKind::NotFound);
@@ -103,7 +113,14 @@ async fn opens_files_and_memory_and_reports_errors() {
 async fn explorer_lists_lazily() {
     let (dir, _cfg, s) = seeded().await;
     let other = dir.path().join("billing.duckdb");
-    run_all(&*s, &format!("ATTACH '{}' AS billing; CREATE TABLE billing.main.invoices (id INTEGER PRIMARY KEY, amount DECIMAL(12,2))", other.display())).await;
+    run_all(
+        &*s,
+        &format!(
+            "ATTACH '{}' AS billing; CREATE TABLE billing.main.invoices (id INTEGER PRIMARY KEY, amount DECIMAL(12,2))",
+            other.display()
+        ),
+    )
+    .await;
     let dbs = s.list_children(None).await.unwrap();
     let names: Vec<_> = dbs.iter().map(|d| d.object.name.as_str()).collect();
     assert_eq!(names, ["sales", "billing"]);
@@ -125,7 +142,12 @@ async fn explorer_lists_lazily() {
     assert!(s.search("ORDER", 10).await.unwrap().iter().any(|n| n.object.name == "orders"));
     // Attached databases page like the main one.
     let invoices = ObjectRef::new(NodeKind::Table, "billing", Some("main".into()), "invoices");
-    let page = ops::table_page(&*s, &TablePageRequest { object: invoices, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 }).await.unwrap();
+    let page = ops::table_page(
+        &*s,
+        &TablePageRequest { object: invoices, rows: RowFilter::default(), sort: None, offset: 0, limit: 10 },
+    )
+    .await
+    .unwrap();
     assert_eq!(page.columns[0].name, "id");
 }
 
@@ -189,7 +211,11 @@ async fn counts_transactions_and_parameters() {
     s.execute("ROLLBACK", &[], OPTS).await.unwrap();
     assert_eq!(text(&s.execute("SELECT count(*) FROM no_pk", &[], OPTS).await.unwrap().rows[0][0]), "2");
     let r = s
-        .execute("SELECT total, $2 IS NULL, $3 FROM orders WHERE id = $1", &[Some("7".into()), None, Some("it's; DROP".into())], OPTS)
+        .execute(
+            "SELECT total, $2 IS NULL, $3 FROM orders WHERE id = $1",
+            &[Some("7".into()), None, Some("it's; DROP".into())],
+            OPTS,
+        )
         .await
         .unwrap();
     assert_eq!((text(&r.rows[0][1]).as_str(), text(&r.rows[0][2]).as_str()), ("true", "it's; DROP"));
@@ -203,7 +229,10 @@ async fn structure_ddl_dependencies_and_model() {
     let id = &st.columns[0];
     assert!(id.primary_key && id.generated);
     assert!(st.columns.iter().any(|c| c.name == "total" && c.numeric && !c.nullable && c.data_type == "DECIMAL(12,2)"));
-    assert!(st.constraints.iter().any(|c| c.kind == dq_core::schema::ConstraintKind::ForeignKey && c.definition.contains("REFERENCES customers (id)")));
+    assert!(
+        st.constraints.iter().any(|c| c.kind == dq_core::schema::ConstraintKind::ForeignKey
+            && c.definition.contains("REFERENCES customers (id)"))
+    );
     assert!(st.constraints.iter().any(|c| c.kind == dq_core::schema::ConstraintKind::Check));
     assert!(st.indexes.iter().any(|i| i.name == "orders_status_idx"));
     assert_eq!(st.foreign_keys[0].target.name, "customers");
@@ -232,16 +261,28 @@ async fn pages_edits_and_transfers() -> DbResult<()> {
     let page = ops::table_page(&*s, &req).await?;
     assert_eq!((page.rows.len(), page.has_more), (100, true));
     assert_eq!(ops::row_count(&*s, &req.object, &req.rows).await?.count, 400);
-    let search = RowFilter { searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }], ..RowFilter::default() };
+    let search = RowFilter {
+        searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &search).await?.count, 400);
-    let literal = RowFilter { searches: vec![ColumnSearch { column: "status".into(), contains: "_aid".into() }], ..RowFilter::default() };
+    let literal = RowFilter {
+        searches: vec![ColumnSearch { column: "status".into(), contains: "_aid".into() }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &literal).await?.count, 0);
-    let by_id = RowFilter { matches: vec![ColumnValue { column: "id".into(), value: Some("7".into()) }], ..RowFilter::default() };
+    let by_id = RowFilter {
+        matches: vec![ColumnValue { column: "id".into(), value: Some("7".into()) }],
+        ..RowFilter::default()
+    };
     assert_eq!(ops::row_count(&*s, &req.object, &by_id).await?.count, 1);
 
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let changes = vec![
-        RowChange::Update { key: vec![cv("id", Some("1"))], values: vec![cv("total", Some("84.50")), cv("notes", Some("Zoë ✓"))] },
+        RowChange::Update {
+            key: vec![cv("id", Some("1"))],
+            values: vec![cv("total", Some("84.50")), cv("notes", Some("Zoë ✓"))],
+        },
         RowChange::Insert { values: vec![cv("customer_id", Some("1")), cv("total", Some("9.99"))] },
         RowChange::Delete { key: vec![cv("id", Some("2"))] },
     ];
@@ -250,23 +291,46 @@ async fn pages_edits_and_transfers() -> DbResult<()> {
     let r = s.execute("SELECT total, notes FROM orders WHERE id = 1", &[], OPTS).await?;
     assert_eq!((text(&r.rows[0][0]).as_str(), text(&r.rows[0][1]).as_str()), ("84.50", "Zoë ✓"));
     let failing = vec![RowChange::Delete { key: vec![cv("id", Some("404040"))] }];
-    assert_eq!(ops::apply_changes(&*s, &table("orders"), &failing, false).await.unwrap_err().kind, ErrorKind::Constraint);
+    assert_eq!(
+        ops::apply_changes(&*s, &table("orders"), &failing, false).await.unwrap_err().kind,
+        ErrorKind::Constraint
+    );
 
     let none = TransferControl::none();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: table("orders"), rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() }, sort: None };
+    let source = ExportSource::Table {
+        object: table("orders"),
+        rows: RowFilter { filter: Some("id <= 10".into()), ..RowFilter::default() },
+        sort: None,
+    };
     assert_eq!(ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &none).await?.rows, 9);
     // DuckDB reads the exported file straight from SQL.
     let r = s.execute(&format!("SELECT count(*) FROM read_csv('{}')", csv.display()), &[], OPTS).await?;
     assert_eq!(text(&r.rows[0][0]), "9");
     run_all(&*s, "CREATE TABLE it_import (id BIGINT PRIMARY KEY, status VARCHAR, total DECIMAL(12,2), raw BLOB)").await;
-    let csv_source = ImportSource::Csv { path: csv.to_string_lossy().into_owned(), options: CsvOptions { empty_as_null: true, ..CsvOptions::default() } };
-    let map: Vec<ImportMapping> =
-        [("id", 0), ("status", 2), ("total", 3)].iter().map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) }).collect();
-    assert_eq!(ops::import(&*s, &table("it_import"), &csv_source, &map, &ImportOptions::default(), &none).await?.rows, 9);
+    let csv_source = ImportSource::Csv {
+        path: csv.to_string_lossy().into_owned(),
+        options: CsvOptions { empty_as_null: true, ..CsvOptions::default() },
+    };
+    let map: Vec<ImportMapping> = [("id", 0), ("status", 2), ("total", 3)]
+        .iter()
+        .map(|(c, i)| ImportMapping { column: (*c).into(), field: FieldRef::Index(*i) })
+        .collect();
+    assert_eq!(
+        ops::import(&*s, &table("it_import"), &csv_source, &map, &ImportOptions::default(), &none).await?.rows,
+        9
+    );
     s.execute("UPDATE it_import SET raw = from_hex('0102ff') WHERE id = 1", &[], OPTS).await?;
     let sql_file = dir.path().join("rows.sql");
-    ops::export(&*s, &ExportSource::Table { object: table("it_import"), rows: RowFilter::default(), sort: None }, ExportFormat::SqlInsert, &ExportOptions::default(), &sql_file, &none).await?;
+    ops::export(
+        &*s,
+        &ExportSource::Table { object: table("it_import"), rows: RowFilter::default(), sort: None },
+        ExportFormat::SqlInsert,
+        &ExportOptions::default(),
+        &sql_file,
+        &none,
+    )
+    .await?;
     s.execute("DELETE FROM it_import", &[], OPTS).await?;
     run_all(&*s, &std::fs::read_to_string(&sql_file).unwrap()).await;
     let r = s.execute("SELECT count(*), max(raw) FROM it_import", &[], OPTS).await?;
@@ -289,7 +353,10 @@ async fn read_only_files_refuse_writes() {
     assert!(ro.execute("SELECT count(*) FROM orders", &[], OPTS).await.is_ok());
     assert_eq!(ro.execute("DELETE FROM orders", &[], OPTS).await.unwrap_err().kind, ErrorKind::Permission);
     let changes = vec![RowChange::Delete { key: vec![ColumnValue { column: "id".into(), value: Some("1".into()) }] }];
-    assert_eq!(ops::apply_changes(&*ro, &table("orders"), &changes, false).await.unwrap_err().kind, ErrorKind::Permission);
+    assert_eq!(
+        ops::apply_changes(&*ro, &table("orders"), &changes, false).await.unwrap_err().kind,
+        ErrorKind::Permission
+    );
 }
 
 #[tokio::test]
@@ -305,11 +372,20 @@ async fn explain_and_schema_changes() {
 
     run_all(&*s, "CREATE SCHEMA a; CREATE SCHEMA b").await;
     let t = |schema: &str, name: &str| ObjectRef::new(NodeKind::Table, "sales", Some(schema.into()), name);
-    let col = |name: &str, ty: &str| ColumnDef { name: name.into(), data_type: ty.into(), nullable: true, default: None, identity: false };
+    let col = |name: &str, ty: &str| ColumnDef {
+        name: name.into(),
+        data_type: ty.into(),
+        nullable: true,
+        default: None,
+        identity: false,
+    };
     let changes = vec![
         SchemaChange::CreateTable {
             table: t("a", "accounts"),
-            columns: vec![ColumnDef { nullable: false, ..col("id", "BIGINT") }, ColumnDef { default: Some("'x'".into()), ..col("email", "VARCHAR") }],
+            columns: vec![
+                ColumnDef { nullable: false, ..col("id", "BIGINT") },
+                ColumnDef { default: Some("'x'".into()), ..col("email", "VARCHAR") },
+            ],
             primary_key: vec!["id".into()],
         },
         SchemaChange::AddColumn { table: t("a", "accounts"), column: col("note", "VARCHAR") },
@@ -321,7 +397,12 @@ async fn explain_and_schema_changes() {
             nullable: Some(false),
             default: Some(DefaultChange::Set { expression: "'y'".into() }),
         },
-        SchemaChange::CreateIndex { table: t("a", "accounts"), name: "accounts_email".into(), columns: vec![ddl::IndexColumn { name: "email".into(), descending: false }], unique: false },
+        SchemaChange::CreateIndex {
+            table: t("a", "accounts"),
+            name: "accounts_email".into(),
+            columns: vec![ddl::IndexColumn { name: "email".into(), descending: false }],
+            unique: false,
+        },
     ];
     for change in &changes {
         run_all(&*s, &ddl::preview(&ddl::statements(s.dialect(), change, None).unwrap())).await;

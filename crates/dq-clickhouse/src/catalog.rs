@@ -39,7 +39,9 @@ fn params(pairs: &[(&str, &str)]) -> Vec<(String, Option<String>)> {
 }
 
 async fn rows(client: &Client, sql: &str, pairs: &[(&str, &str)]) -> DbResult<Vec<TextRow>> {
-    client.text_rows(sql, &Request { read_only: true, timeout_secs: 60, params: params(pairs), ..Request::default() }).await
+    client
+        .text_rows(sql, &Request { read_only: true, timeout_secs: 60, params: params(pairs), ..Request::default() })
+        .await
 }
 
 fn kind_of(engine: &str) -> NodeKind {
@@ -98,7 +100,8 @@ pub async fn relations(client: &Client, database: &str) -> DbResult<Vec<Node>> {
     .await?;
     let mut nodes: Vec<Node> = found.iter().map(relation_node).collect();
     // User-defined SQL functions are global; they are listed with the current database.
-    let functions = rows(client, "SELECT toString(count()) FROM system.functions WHERE origin = 'SQLUserDefined'", &[]).await?;
+    let functions =
+        rows(client, "SELECT toString(count()) FROM system.functions WHERE origin = 'SQLUserDefined'", &[]).await?;
     let count = functions.first().and_then(|r| number(r, 0)).unwrap_or(0);
     if count > 0 {
         let mut node = Node::container(ObjectRef::new(NodeKind::Group, database, None, GROUP_FUNCTIONS));
@@ -118,7 +121,11 @@ pub async fn table_children(client: &Client, table: &ObjectRef) -> DbResult<Vec<
     .await?;
     Ok(found
         .iter()
-        .map(|r| Node::leaf(ObjectRef::new(NodeKind::Index, table.database.clone(), None, text(r, 0)).with_parent(&table.name)))
+        .map(|r| {
+            Node::leaf(
+                ObjectRef::new(NodeKind::Index, table.database.clone(), None, text(r, 0)).with_parent(&table.name),
+            )
+        })
         .collect())
 }
 
@@ -126,8 +133,12 @@ pub async fn group_children(client: &Client, group: &ObjectRef) -> DbResult<Vec<
     if group.name != GROUP_FUNCTIONS {
         return Err(DbError::invalid(format!("Unknown group `{}`.", group.name)));
     }
-    let found = rows(client, "SELECT name FROM system.functions WHERE origin = 'SQLUserDefined' ORDER BY name", &[]).await?;
-    Ok(found.iter().map(|r| Node::leaf(ObjectRef::new(NodeKind::Function, group.database.clone(), None, text(r, 0)))).collect())
+    let found =
+        rows(client, "SELECT name FROM system.functions WHERE origin = 'SQLUserDefined' ORDER BY name", &[]).await?;
+    Ok(found
+        .iter()
+        .map(|r| Node::leaf(ObjectRef::new(NodeKind::Function, group.database.clone(), None, text(r, 0))))
+        .collect())
 }
 
 pub async fn search(client: &Client, query: &str, limit: u32) -> DbResult<Vec<Node>> {
@@ -146,11 +157,15 @@ pub async fn search(client: &Client, query: &str, limit: u32) -> DbResult<Vec<No
 }
 
 async fn relation(client: &Client, object: &ObjectRef) -> DbResult<TextRow> {
-    rows(client, &format!("{RELATIONS} AND database = {{db:String}} AND name = {{t:String}}"), &[("db", &object.database), ("t", &object.name)])
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| not_found(object))
+    rows(
+        client,
+        &format!("{RELATIONS} AND database = {{db:String}} AND name = {{t:String}}"),
+        &[("db", &object.database), ("t", &object.name)],
+    )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or_else(|| not_found(object))
 }
 
 pub async fn row_estimate(client: &Client, object: &ObjectRef) -> DbResult<Option<i64>> {
@@ -242,7 +257,13 @@ pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStr
     for r in &skipping {
         indexes.push(IndexInfo {
             name: text(r, 0),
-            definition: format!("INDEX {} {} TYPE {} GRANULARITY {}", D.display_ident(&text(r, 0)), text(r, 2), text(r, 1), text(r, 3)),
+            definition: format!(
+                "INDEX {} {} TYPE {} GRANULARITY {}",
+                D.display_ident(&text(r, 0)),
+                text(r, 2),
+                text(r, 1),
+                text(r, 3)
+            ),
             unique: false,
             primary: false,
             columns: Vec::new(),
@@ -294,7 +315,9 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
     let dbs = text(r, 0);
     let tables = text(r, 1);
     for (db, table) in dbs.split('\u{1f}').zip(tables.split('\u{1f}')).filter(|(_, t)| !t.is_empty()) {
-        let kind = relation(client, &ObjectRef::new(NodeKind::Table, db, None, table)).await.map(|r| kind_of(&text(&r, 2))).unwrap_or(NodeKind::View);
+        let kind = relation(client, &ObjectRef::new(NodeKind::Table, db, None, table))
+            .await
+            .map_or(NodeKind::View, |r| kind_of(&text(&r, 2)));
         deps.used_by.push(Dependency { object: ObjectRef::new(kind, db, None, table), relation: "view".into() });
     }
     // What a view reads: the tables named in its query.
@@ -302,9 +325,14 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
         let candidates = rows(client, &format!("{RELATIONS} AND database NOT IN {SYSTEM_DATABASES}"), &[]).await?;
         for c in &candidates {
             let (db, name) = (text(c, 0), text(c, 1));
-            let mentioned = select.contains(&format!("{db}.{name}")) || (db == object.database && select.split(|ch: char| !ch.is_alphanumeric() && ch != '_').any(|w| w == name));
+            let mentioned = select.contains(&format!("{db}.{name}"))
+                || (db == object.database
+                    && select.split(|ch: char| !ch.is_alphanumeric() && ch != '_').any(|w| w == name));
             if mentioned && !(db == object.database && name == object.name) {
-                deps.uses.push(Dependency { object: ObjectRef::new(kind_of(&text(c, 2)), db, None, name), relation: "reads".into() });
+                deps.uses.push(Dependency {
+                    object: ObjectRef::new(kind_of(&text(c, 2)), db, None, name),
+                    relation: "reads".into(),
+                });
             }
         }
     }
@@ -327,11 +355,19 @@ pub async fn schema_model(client: &Client, database: &str) -> DbResult<SchemaMod
     for r in &found {
         let name = text(r, 0);
         if model.tables.last().is_none_or(|t: &ModelTable| t.object.name != name) {
-            model.tables.push(ModelTable { object: ObjectRef::new(kind_of(&text(r, 1)), database, None, name), columns: Vec::new() });
+            model.tables.push(ModelTable {
+                object: ObjectRef::new(kind_of(&text(r, 1)), database, None, name),
+                columns: Vec::new(),
+            });
         }
         if let Some(table) = model.tables.last_mut() {
             let data_type = text(r, 3);
-            table.columns.push(ModelColumn { name: text(r, 2), nullable: data_type.starts_with("Nullable("), primary_key: flag(r, 4), data_type });
+            table.columns.push(ModelColumn {
+                name: text(r, 2),
+                nullable: data_type.starts_with("Nullable("),
+                primary_key: flag(r, 4),
+                data_type,
+            });
         }
     }
     model.truncated = model.tables.len() > SchemaModel::MAX_TABLES || found.len() >= SchemaModel::MAX_COLUMNS;
@@ -364,7 +400,9 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
                 text(r, 2)
             ));
         }
-        NodeKind::Function => ("SELECT create_query FROM system.functions WHERE name = {t:String}", vec![("t", &object.name)]),
+        NodeKind::Function => {
+            ("SELECT create_query FROM system.functions WHERE name = {t:String}", vec![("t", &object.name)])
+        }
         _ => return Err(DbError::invalid("This object has no definition.")),
     };
     let found = rows(client, sql, &pairs).await?;

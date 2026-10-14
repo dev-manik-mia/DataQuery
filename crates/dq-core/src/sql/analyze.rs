@@ -288,11 +288,9 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
     let separator = match flavor {
         SqlFlavor::Sqlserver => tokens[i].kind == TokenKind::Word && text.eq_ignore_ascii_case("GO"),
         SqlFlavor::Oracle => tokens[i].kind == TokenKind::Punct && text == "/",
-        SqlFlavor::Postgres
-        | SqlFlavor::Mysql
-        | SqlFlavor::Clickhouse
-        | SqlFlavor::Duckdb
-        | SqlFlavor::Snowflake => false,
+        SqlFlavor::Postgres | SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Duckdb | SqlFlavor::Snowflake => {
+            false
+        }
     };
     if !separator {
         return false;
@@ -351,10 +349,10 @@ pub fn named_params(sql: &str, flavor: SqlFlavor) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for t in tokenize(sql, flavor).iter().filter(|t| t.kind == TokenKind::Param) {
         let text = t.text(sql);
-        if let Some(name) = text.strip_prefix('{').and_then(|r| r.split(':').next()) {
-            if !names.iter().any(|n| n == name) {
-                names.push(name.to_owned());
-            }
+        if let Some(name) = text.strip_prefix('{').and_then(|r| r.split(':').next())
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
         }
     }
     names
@@ -395,8 +393,7 @@ fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool
         }
         (SqlFlavor::Sqlserver, "SAVE") => kind = StatementKind::Transaction,
         (SqlFlavor::Sqlserver, "END") => kind = StatementKind::Other,
-        (SqlFlavor::Oracle, "BEGIN" | "DECLARE") => kind = StatementKind::Call,
-        (SqlFlavor::Snowflake, "DECLARE") => kind = StatementKind::Call,
+        (SqlFlavor::Oracle, "BEGIN" | "DECLARE") | (SqlFlavor::Snowflake, "DECLARE") => kind = StatementKind::Call,
         (SqlFlavor::Snowflake, "BEGIN")
             if word(1).is_some_and(|w| !matches!(w.as_str(), "TRANSACTION" | "WORK" | "NAME")) =>
         {
@@ -731,15 +728,21 @@ mod tests {
     #[test]
     fn snowflake_scripting_and_clickhouse_params() {
         const SF: SqlFlavor = SqlFlavor::Snowflake;
-        let src = "BEGIN;\nDECLARE n INT;\nBEGIN\n  n := 1;\n  IF (n = 1) THEN RETURN n; END IF;\nEND;\nSELECT 1;\nCOMMIT";
+        const CH: SqlFlavor = SqlFlavor::Clickhouse;
+        let src =
+            "BEGIN;\nDECLARE n INT;\nBEGIN\n  n := 1;\n  IF (n = 1) THEN RETURN n; END IF;\nEND;\nSELECT 1;\nCOMMIT";
         assert_eq!(
             texts(src, SF),
-            vec!["BEGIN", "DECLARE n INT;\nBEGIN\n  n := 1;\n  IF (n = 1) THEN RETURN n; END IF;\nEND", "SELECT 1", "COMMIT"]
+            vec![
+                "BEGIN",
+                "DECLARE n INT;\nBEGIN\n  n := 1;\n  IF (n = 1) THEN RETURN n; END IF;\nEND",
+                "SELECT 1",
+                "COMMIT"
+            ]
         );
         assert_eq!(transaction_effect("BEGIN", SF), TxEffect::Begin);
         assert_eq!(transaction_effect("CREATE TABLE t (a INT)", SF), TxEffect::End);
         assert_eq!(analyze("SELECT ?, :2", SF).unwrap().param_count, 2);
-        const CH: SqlFlavor = SqlFlavor::Clickhouse;
         let sql = "SELECT * FROM t WHERE a = {a:UInt64} AND b = {b:String} OR a = {a:UInt64}";
         assert_eq!(analyze(sql, CH).unwrap().param_count, 2);
         assert_eq!(named_params(sql, CH), ["a", "b"]);

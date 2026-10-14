@@ -9,7 +9,8 @@ use serde_json::Value;
 pub fn base_type(t: &str) -> &str {
     let mut t = t.trim();
     loop {
-        let inner = ["Nullable(", "LowCardinality("].iter().find_map(|w| t.strip_prefix(w).and_then(|r| r.strip_suffix(')')));
+        let inner =
+            ["Nullable(", "LowCardinality("].iter().find_map(|w| t.strip_prefix(w).and_then(|r| r.strip_suffix(')')));
         match inner {
             Some(inner) => t = inner.trim(),
             None => return t,
@@ -61,9 +62,18 @@ mod tests {
     fn decodes_by_type() {
         assert_eq!(base_type("LowCardinality(Nullable(String))"), "String");
         let g = CellLimits::GRID;
-        assert_eq!(decode(&Value::String("18446744073709551615".into()), "UInt64", g), Cell::number("18446744073709551615"));
-        assert_eq!(decode(&Value::String("-0.0000000001".into()), "Nullable(Decimal(38, 10))", g), Cell::number("-0.0000000001"));
-        assert_eq!(decode(&Value::String("2026-10-14 09:59:00.123".into()), "DateTime64(3, 'UTC')", g), Cell::Temporal { value: "2026-10-14 09:59:00.123".into(), zoned: false });
+        assert_eq!(
+            decode(&Value::String("18446744073709551615".into()), "UInt64", g),
+            Cell::number("18446744073709551615")
+        );
+        assert_eq!(
+            decode(&Value::String("-0.0000000001".into()), "Nullable(Decimal(38, 10))", g),
+            Cell::number("-0.0000000001")
+        );
+        assert_eq!(
+            decode(&Value::String("2026-10-14 09:59:00.123".into()), "DateTime64(3, 'UTC')", g),
+            Cell::Temporal { value: "2026-10-14 09:59:00.123".into(), zoned: false }
+        );
         assert_eq!(decode(&serde_json::json!(["a", "b"]), "Array(String)", g), Cell::json("[\"a\",\"b\"]", g));
         assert_eq!(decode(&Value::Null, "Nullable(String)", g), Cell::Null);
         assert!(is_numeric("Nullable(Int128)") && !is_numeric("String"));

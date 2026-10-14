@@ -9,10 +9,10 @@ pub mod format;
 pub mod lexer;
 
 pub use analyze::{
-    DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, named_params, redact_literals, split_statements,
-    transaction_effect,
+    DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, named_params, redact_literals,
+    split_statements, transaction_effect,
 };
 pub use dialect::{
-    ClickhouseDialect, Dialect, DuckdbDialect, MysqlDialect, OracleDialect, PostgresDialect, SnowflakeDialect, SqlFlavor,
-    SqlServerDialect,
+    ClickhouseDialect, Dialect, DuckdbDialect, MysqlDialect, OracleDialect, PostgresDialect, SnowflakeDialect,
+    SqlFlavor, SqlServerDialect,
 };

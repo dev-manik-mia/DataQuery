@@ -204,7 +204,11 @@ fn column_list(d: &dyn Dialect, columns: &[String]) -> DbResult<String> {
 
 /// `ClickHouse` spells nullability in the type: `Nullable(T)`.
 fn clickhouse_type(data_type: &str, nullable: bool) -> String {
-    if nullable && !data_type.starts_with("Nullable(") { format!("Nullable({data_type})") } else { data_type.to_owned() }
+    if nullable && !data_type.starts_with("Nullable(") {
+        format!("Nullable({data_type})")
+    } else {
+        data_type.to_owned()
+    }
 }
 
 fn column_def(d: &dyn Dialect, c: &ColumnDef) -> DbResult<String> {
@@ -449,8 +453,15 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
             let mut lines = columns.iter().map(|c| column_def(d, c)).collect::<DbResult<Vec<_>>>()?;
             if flavor == SqlFlavor::Clickhouse {
                 // MergeTree stores rows sorted by the key; without one, in insertion order.
-                let order = if primary_key.is_empty() { "tuple()".to_owned() } else { format!("({})", column_list(d, primary_key)?) };
-                vec![format!("CREATE TABLE {table} (\n  {}\n) ENGINE = MergeTree ORDER BY {order}", lines.join(",\n  "))]
+                let order = if primary_key.is_empty() {
+                    "tuple()".to_owned()
+                } else {
+                    format!("({})", column_list(d, primary_key)?)
+                };
+                vec![format!(
+                    "CREATE TABLE {table} (\n  {}\n) ENGINE = MergeTree ORDER BY {order}",
+                    lines.join(",\n  ")
+                )]
             } else {
                 if !primary_key.is_empty() {
                     lines.push(format!("PRIMARY KEY ({})", column_list(d, primary_key)?));
@@ -718,12 +729,17 @@ mod tests {
         };
         assert_eq!(
             statements(&ClickhouseDialect, &create, None).unwrap(),
-            ["CREATE TABLE `logs`.`events` (\n  `id` UInt64,\n  `note` Nullable(String)\n) ENGINE = MergeTree ORDER BY (`id`)"]
+            [
+                "CREATE TABLE `logs`.`events` (\n  `id` UInt64,\n  `note` Nullable(String)\n) ENGINE = MergeTree ORDER BY (`id`)"
+            ]
         );
         let index = SchemaChange::CreateIndex { table: ch, name: "i".into(), columns: vec![], unique: false };
         assert!(statements(&ClickhouseDialect, &index, None).is_err());
         let duck = ObjectRef::new(NodeKind::Table, "sales", Some("main".into()), "orders");
-        let identity = SchemaChange::AddColumn { table: duck.clone(), column: ColumnDef { identity: true, ..col("id", "BIGINT") } };
+        let identity = SchemaChange::AddColumn {
+            table: duck.clone(),
+            column: ColumnDef { identity: true, ..col("id", "BIGINT") },
+        };
         assert_eq!(statements(&DuckdbDialect, &identity, None).unwrap_err().kind, crate::ErrorKind::Unsupported);
         let alter = SchemaChange::AlterColumn {
             table: duck,

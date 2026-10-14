@@ -58,7 +58,8 @@ impl Monitor for ChSession {
             .await
             .ok()
             .and_then(|r| r.into_iter().next());
-        let connections = gauge.and_then(|g| Some(Gauge { used: field(&g, 0)?.parse().ok()?, max: field(&g, 1)?.parse().ok()? }));
+        let connections =
+            gauge.and_then(|g| Some(Gauge { used: field(&g, 0)?.parse().ok()?, max: field(&g, 1)?.parse().ok()? }));
         let long_ms = i64::from(long_running_secs) * 1000;
         Ok(MonitorSnapshot {
             version: self.info().version.clone(),
@@ -114,7 +115,12 @@ impl Monitor for ChSession {
         Ok(rows
             .iter()
             .map(|r| ObjectSize {
-                object: ObjectRef::new(NodeKind::Table, database.clone(), None, r.first().cloned().flatten().unwrap_or_default()),
+                object: ObjectRef::new(
+                    NodeKind::Table,
+                    database.clone(),
+                    None,
+                    r.first().cloned().flatten().unwrap_or_default(),
+                ),
                 total_bytes: num(r, 1).unwrap_or(0),
                 table_bytes: num(r, 2).unwrap_or(0),
                 index_bytes: num(r, 3).unwrap_or(0),
@@ -133,7 +139,10 @@ impl Monitor for ChSession {
                 &request(vec![("pid".into(), Some(pid.to_string()))]),
             )
             .await?;
-        let query_id = found.first().and_then(|r| r.first().cloned().flatten()).ok_or_else(|| DbError::not_found("The query has already finished."))?;
+        let query_id = found
+            .first()
+            .and_then(|r| r.first().cloned().flatten())
+            .ok_or_else(|| DbError::not_found("The query has already finished."))?;
         let kill = Request { timeout_secs: 30, params: vec![("id".into(), Some(query_id))], ..Request::default() };
         self.client.text_rows("KILL QUERY WHERE query_id = {id:String} ASYNC", &kill).await?;
         Ok(true)

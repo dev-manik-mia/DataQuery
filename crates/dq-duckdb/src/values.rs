@@ -56,7 +56,11 @@ pub fn column_meta(schema: &Schema) -> Vec<ColumnMeta> {
     schema
         .fields()
         .iter()
-        .map(|f| ColumnMeta { name: f.name().clone(), type_name: type_label(f.data_type()), numeric: is_numeric(f.data_type()) })
+        .map(|f| ColumnMeta {
+            name: f.name().clone(),
+            type_name: type_label(f.data_type()),
+            numeric: is_numeric(f.data_type()),
+        })
         .collect()
 }
 
@@ -68,19 +72,27 @@ fn cell(column: &dyn Array, formatter: &ArrayFormatter<'_>, row: usize, limits: 
     let t = column.data_type();
     let text = || formatter.value(row).to_string();
     match t {
-        DataType::Boolean => Cell::Bool { value: column.as_any().downcast_ref::<BooleanArray>().is_some_and(|b| b.value(row)) },
+        DataType::Boolean => {
+            Cell::Bool { value: column.as_any().downcast_ref::<BooleanArray>().is_some_and(|b| b.value(row)) }
+        }
         DataType::Binary => Cell::binary(column.as_binary::<i32>().value(row), limits),
         DataType::LargeBinary => Cell::binary(column.as_binary::<i64>().value(row), limits),
         DataType::BinaryView => Cell::binary(column.as_binary_view().value(row), limits),
         DataType::FixedSizeBinary(_) => Cell::binary(column.as_fixed_size_binary().value(row), limits),
-        DataType::Date32 | DataType::Date64 | DataType::Time32(_) | DataType::Time64(_) | DataType::Timestamp(_, None) => {
-            Cell::Temporal { value: text(), zoned: false }
-        }
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, None) => Cell::Temporal { value: text(), zoned: false },
         DataType::Timestamp(_, Some(_)) => Cell::Temporal { value: text(), zoned: true },
         // Exact text from the raw integer: Arrow's formatter can drop a digit of a 39-digit HUGEINT.
-        DataType::Decimal128(_, scale) => Cell::number(decimal_text(column.as_primitive::<Decimal128Type>().value(row), *scale)),
+        DataType::Decimal128(_, scale) => {
+            Cell::number(decimal_text(column.as_primitive::<Decimal128Type>().value(row), *scale))
+        }
         t if is_numeric(t) => Cell::number(text()),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(..) => Cell::text(text(), limits),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(..) => {
+            Cell::text(text(), limits)
+        }
         _ => Cell::text(text(), limits),
     }
 }
@@ -146,7 +158,11 @@ mod tests {
         ]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(decimals), Arc::new(Int64Array::from(vec![None, Some(7)])), Arc::new(StringArray::from(vec![Some(""), None]))],
+            vec![
+                Arc::new(decimals),
+                Arc::new(Int64Array::from(vec![None, Some(7)])),
+                Arc::new(StringArray::from(vec![Some(""), None])),
+            ],
         )
         .unwrap();
         let rows = batch_rows(&batch, CellLimits::GRID);

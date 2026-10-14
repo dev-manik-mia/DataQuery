@@ -18,7 +18,7 @@
     "lint": "eslint src",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-    "test:integration": "DATAQUERY_TEST_PG=localhost:55432 DATAQUERY_TEST_MYSQL=localhost:53306 DATAQUERY_TEST_SSH=localhost:52222 DATAQUERY_TEST_SQLSERVER=localhost:51433 DATAQUERY_TEST_COCKROACH=localhost:56257 cargo test --workspace && DATAQUERY_TEST_MYSQL=localhost:53307 cargo test -p dq-mysql --test mysql && npm run test:oracle",
+    "test:integration": "DATAQUERY_TEST_PG=localhost:55432 DATAQUERY_TEST_MYSQL=localhost:53306 DATAQUERY_TEST_SSH=localhost:52222 DATAQUERY_TEST_SQLSERVER=localhost:51433 DATAQUERY_TEST_COCKROACH=localhost:56257 DATAQUERY_TEST_CLICKHOUSE=localhost:58123 DATAQUERY_TEST_SNOWFLAKE=localhost:58000 cargo test --workspace && DATAQUERY_TEST_MYSQL=localhost:53307 cargo test -p dq-mysql --test mysql && npm run test:oracle",
     "test:oracle": "sh scripts/test-oracle.sh",
     "db:up": "docker compose -p dataquery up -d",
     "db:down": "docker compose -p dataquery down -v"

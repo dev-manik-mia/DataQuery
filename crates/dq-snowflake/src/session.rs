@@ -55,16 +55,23 @@ impl SfSession {
         let started = Instant::now();
         let client = Arc::new(Client::new(params)?);
         let login = client.login().await?;
-        let (_, found) = catalog::query(&client, "SELECT CURRENT_VERSION(), CURRENT_USER(), CURRENT_DATABASE()", &[]).await?;
+        let (_, found) =
+            catalog::query(&client, "SELECT CURRENT_VERSION(), CURRENT_USER(), CURRENT_DATABASE()", &[]).await?;
         let row = found.into_iter().next().unwrap_or_default();
         let config = &params.config;
         let tls = config.ssl_mode != dq_core::config::SslMode::Disable;
-        let database = row.text(2).or_else(|| login.pointer("/sessionInfo/databaseName").and_then(|v| v.as_str()).map(str::to_owned));
+        let database = row
+            .text(2)
+            .or_else(|| login.pointer("/sessionInfo/databaseName").and_then(|v| v.as_str()).map(str::to_owned));
         let info = ServerInfo {
             engine: config.engine,
             version: format!("Snowflake {}", row.string(0).trim_matches('\'')),
             latency_ms: started.elapsed().as_millis() as u64,
-            tls: tls.then(|| dq_core::result::TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| dq_core::result::TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user: row.string(1),
             database: database.unwrap_or_default(),
             read_only: config.read_only,
@@ -86,7 +93,11 @@ impl SfSession {
         if let Ok(mut r) = self.running.lock() {
             *r = Some((request_id.clone(), sql.to_owned()));
         }
-        let limit = if timeout_secs == 0 { Duration::from_secs(u64::MAX / 4) } else { Duration::from_secs(u64::from(timeout_secs)) };
+        let limit = if timeout_secs == 0 {
+            Duration::from_secs(u64::MAX / 4)
+        } else {
+            Duration::from_secs(u64::from(timeout_secs))
+        };
         let outcome = tokio::select! {
             result = self.client.query(sql, binds, &request_id) => result,
             () = self.cancelled.notified() => Err(DbError::new(ErrorKind::Cancelled, "The statement was cancelled.")),
@@ -113,7 +124,13 @@ impl SfSession {
         Ok(client)
     }
 
-    async fn read_batches(&self, sql: &str, params: Params<'_>, limits: CellLimits, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn read_batches(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         let data = self.client.query(sql, params, &uuid::Uuid::new_v4().to_string()).await?;
         let mut result = ResultSet::new(data, limits)?;
         let meta = result.columns();
@@ -183,13 +200,22 @@ impl Session for SfSession {
         if has_more {
             *cursor = Some(result);
         }
-        Ok(StatementResult { columns, rows, has_more, command, affected: None, duration_ms: started.elapsed().as_millis() as u64, notices: Vec::new() })
+        Ok(StatementResult {
+            columns,
+            rows,
+            has_more,
+            command,
+            affected: None,
+            duration_ms: started.elapsed().as_millis() as u64,
+            notices: Vec::new(),
+        })
     }
 
     async fn fetch_more(&self, limit: u32) -> DbResult<RowsPage> {
         let started = Instant::now();
         let mut cursor = self.cursor.lock().await;
-        let mut result = cursor.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
+        let mut result =
+            cursor.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
         let (rows, has_more) = result.take(&self.client, limit.clamp(1, ExecOptions::MAX_ROW_LIMIT) as usize).await?;
         if has_more {
             *cursor = Some(result);
@@ -222,7 +248,13 @@ impl Session for SfSession {
         catalog::schema_model(&self.client, database, schema.unwrap_or("PUBLIC")).await
     }
 
-    async fn read_query(&self, _database: &str, sql: &str, params: Params<'_>, limits: CellLimits) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
+    async fn read_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+    ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         self.read_batches(sql, params, limits, &mut |meta, batch| {
@@ -236,7 +268,13 @@ impl Session for SfSession {
         Ok((columns, rows))
     }
 
-    async fn stream_query(&self, _database: &str, sql: &str, params: Params<'_>, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         self.read_batches(sql, params, CellLimits::FULL, on_batch).await
     }
 
@@ -270,9 +308,17 @@ impl Session for SfSession {
         outcome
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         if analyze {
-            return Err(DbError::unsupported("Snowflake shows measured plans in the Query Profile of Snowsight, not through EXPLAIN."));
+            return Err(DbError::unsupported(
+                "Snowflake shows measured plans in the Query Profile of Snowsight, not through EXPLAIN.",
+            ));
         }
         let statement = format!("EXPLAIN USING JSON {}", sql.trim().trim_end_matches(';'));
         let result = self.execute(&statement, params, ExecOptions { row_limit: 100, timeout_secs }).await?;

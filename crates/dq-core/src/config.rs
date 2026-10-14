@@ -303,7 +303,8 @@ impl ConnConfig {
 
     fn validate_properties(&self) -> DbResult<()> {
         for (key, value) in &self.properties {
-            let key_ok = !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let key_ok =
+                !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             if !key_ok || value.len() > 512 || value.chars().any(char::is_control) {
                 return Err(DbError::invalid(format!("The setting `{key}` is not valid.")));
             }
@@ -397,8 +398,9 @@ pub struct ParsedUrl {
 }
 
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
-/// `mariadb://`, `sqlserver://` (or `mssql://`) and `oracle://` URLs. For
-/// Oracle the path is the service name.
+/// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
+/// `snowflake://` and `duckdb://` URLs. For Oracle the path is the service
+/// name; for Snowflake it is `database/schema`; for `DuckDB` it is the file.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let url = Url::parse(input.trim()).map_err(|_| DbError::invalid("This is not a valid connection URL."))?;
     let engine = match url.scheme() {
@@ -408,6 +410,29 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "mariadb" => Engine::Mariadb,
         "sqlserver" | "mssql" => Engine::Sqlserver,
         "oracle" => Engine::Oracle,
+        "clickhouse" => Engine::Clickhouse,
+        "snowflake" => Engine::Snowflake,
+        "duckdb" => {
+            // `duckdb:///absolute/path.duckdb` or `duckdb://:memory:`
+            let path = input.trim().trim_start_matches("duckdb://");
+            let path = url::form_urlencoded::parse(format!("v={path}").as_bytes())
+                .next()
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            let config = ConnConfig {
+                engine: Engine::Duckdb,
+                host: String::new(),
+                port: 0,
+                database: path.clone(),
+                username: String::new(),
+                ..ConnConfig::default()
+            };
+            config.validate()?;
+            let name_suggestion = std::path::Path::new(&path)
+                .file_stem()
+                .map_or_else(|| path.clone(), |s| s.to_string_lossy().into_owned());
+            return Ok(ParsedUrl { config, password: None, name_suggestion });
+        }
         "mongodb" | "mongodb+srv" => {
             return Err(DbError::unsupported("MongoDB connections are planned (P2)."));
         }
@@ -420,7 +445,16 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     };
     let host = url.host_str().ok_or_else(|| DbError::invalid("The URL has no host."))?;
     let host = host.trim_start_matches('[').trim_end_matches(']').to_owned();
-    let database = decode(url.path().trim_start_matches('/'));
+    let path = decode(url.path().trim_start_matches('/'));
+    // Snowflake URLs carry the schema too: `/database/schema`.
+    let (database, schema) = match path.split_once('/') {
+        Some((db, schema)) if engine == Engine::Snowflake => (db.to_owned(), Some(schema.to_owned())),
+        _ => (path, None),
+    };
+    let mut properties = BTreeMap::new();
+    if let Some(schema) = schema.filter(|s| !s.is_empty()) {
+        properties.insert("schema".to_owned(), schema);
+    }
     let mut ssl_mode = SslMode::default();
     let mut connect_timeout_secs = 10;
     let mut tls_files = TlsFiles::default();
@@ -430,7 +464,11 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     for (key, value) in url.query_pairs() {
         let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "strict" | "mandatory");
         match key.as_ref() {
-            "encrypt" => encrypt = Some(truthy),
+            // SQL Server `encrypt`, ClickHouse `secure`.
+            "encrypt" | "secure" => encrypt = Some(truthy),
+            "warehouse" | "role" | "account" => {
+                properties.insert(key.into_owned(), value.into_owned());
+            }
             "trustServerCertificate" | "trustservercertificate" => trust_server_certificate = truthy,
             "sslmode" | "ssl-mode" | "ssl_mode" => {
                 ssl_mode =
@@ -460,6 +498,7 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         ssl_mode,
         connect_timeout_secs,
         tls_files,
+        properties,
         ..ConnConfig::default()
     };
     config.validate()?;
@@ -500,11 +539,32 @@ mod tests {
         assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Oracle, 1521, "ORCLPDB1"));
         let p = parse_connection_url("cockroachdb://root@crdb.local/defaultdb?sslmode=disable").unwrap();
         assert_eq!((p.config.engine, p.config.port), (Engine::Cockroachdb, 26257));
+        let p = parse_connection_url("clickhouse://default@ch.local/logs?secure=false").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Clickhouse, 8123, SslMode::Disable));
+        let p = parse_connection_url("snowflake://ana:pw@myorg-acct/SALES/PUBLIC?warehouse=WH&role=ANALYST").unwrap();
+        assert_eq!(
+            (p.config.engine, p.config.host.as_str(), p.config.database.as_str()),
+            (Engine::Snowflake, "myorg-acct", "SALES")
+        );
+        assert_eq!(
+            (p.config.property("schema"), p.config.property("warehouse"), p.config.property("role")),
+            (Some("PUBLIC"), Some("WH"), Some("ANALYST"))
+        );
+        let p = parse_connection_url("duckdb:///tmp/sales.duckdb").unwrap();
+        assert_eq!(
+            (p.config.engine, p.config.database.as_str(), p.name_suggestion.as_str()),
+            (Engine::Duckdb, "/tmp/sales.duckdb", "sales")
+        );
     }
 
     #[test]
     fn file_databases_need_a_path_not_a_host() {
-        let mut c = ConnConfig { engine: Engine::Duckdb, host: String::new(), username: String::new(), ..ConnConfig::default() };
+        let mut c = ConnConfig {
+            engine: Engine::Duckdb,
+            host: String::new(),
+            username: String::new(),
+            ..ConnConfig::default()
+        };
         assert!(c.validate().is_err());
         c.database = ":memory:".into();
         assert!(c.validate().is_ok());

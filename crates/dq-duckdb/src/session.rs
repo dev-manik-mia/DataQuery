@@ -147,7 +147,13 @@ impl DuckSession {
         rx.await.map_err(|_| DbError::internal("the query thread stopped"))?
     }
 
-    async fn read_batches(&self, sql: &str, params: Params<'_>, limits: CellLimits, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn read_batches(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         let (sql, params) = (sql.to_owned(), params.to_vec());
         let (tx, mut rx) = mpsc::channel::<(Vec<ColumnMeta>, Vec<CellRow>)>(2);
         let work = blocking(&self.catalog, move |conn| {
@@ -237,7 +243,13 @@ impl Session for DuckSession {
         blocking(&self.catalog, move |conn| catalog::schema_model(conn, &database, schema.as_deref())).await
     }
 
-    async fn read_query(&self, _database: &str, sql: &str, params: Params<'_>, limits: CellLimits) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
+    async fn read_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        limits: CellLimits,
+    ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         self.read_batches(sql, params, limits, &mut |meta, batch| {
@@ -251,7 +263,13 @@ impl Session for DuckSession {
         Ok((columns, rows))
     }
 
-    async fn stream_query(&self, _database: &str, sql: &str, params: Params<'_>, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn stream_query(
+        &self,
+        _database: &str,
+        sql: &str,
+        params: Params<'_>,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         self.read_batches(sql, params, CellLimits::FULL, on_batch).await
     }
 
@@ -285,9 +303,19 @@ impl Session for DuckSession {
         .await
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         let sql = sql.trim().trim_end_matches(';');
-        let statement = if analyze { format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}") } else { format!("EXPLAIN (FORMAT JSON) {sql}") };
+        let statement = if analyze {
+            format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}")
+        } else {
+            format!("EXPLAIN (FORMAT JSON) {sql}")
+        };
         let options = ExecOptions { row_limit: 100, timeout_secs };
         let result = self.execute(&statement, params, options).await?;
         // Rows of (explain_key, explain_value); the plan is the JSON value.

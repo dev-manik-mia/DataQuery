@@ -18,8 +18,16 @@ use crate::error::map_error;
 use crate::values::{batch_rows, column_meta};
 
 pub enum Command {
-    Execute { sql: String, params: Vec<Option<String>>, options: ExecOptions, reply: oneshot::Sender<DbResult<StatementResult>> },
-    FetchMore { limit: u32, reply: oneshot::Sender<DbResult<RowsPage>> },
+    Execute {
+        sql: String,
+        params: Vec<Option<String>>,
+        options: ExecOptions,
+        reply: oneshot::Sender<DbResult<StatementResult>>,
+    },
+    FetchMore {
+        limit: u32,
+        reply: oneshot::Sender<DbResult<RowsPage>>,
+    },
 }
 
 /// Interrupts the running statement, from the cancel button or the timeout.
@@ -97,7 +105,8 @@ pub fn spawn(conn: Connection) -> (mpsc::Sender<Command>, Arc<Interrupter>) {
                         next = execute(&conn, &worker_interrupter, &sql, &params, options, reply, &mut rx);
                     }
                     Command::FetchMore { reply, .. } => {
-                        let _ = reply.send(Err(DbError::invalid("No more rows: the result was closed by a newer query.")));
+                        let _ =
+                            reply.send(Err(DbError::invalid("No more rows: the result was closed by a newer query.")));
                     }
                 }
             }
@@ -172,7 +181,10 @@ fn execute(
     };
     interrupter.start(options.timeout_secs);
     // Execute, then read batches with `step` below.
-    let opened = statement.query_arrow(params_from_iter(params.iter())).map(|batches| batches.get_schema()).map_err(|e| map_error(&e));
+    let opened = statement
+        .query_arrow(params_from_iter(params.iter()))
+        .map(|batches| batches.get_schema())
+        .map_err(|e| map_error(&e));
     let schema = match opened {
         Ok(schema) => schema,
         Err(e) => {
@@ -194,10 +206,27 @@ fn execute(
     // Writes report their row count as a single `Count` value.
     let counted = columns.len() == 1 && columns[0].name == "Count" && is_write(sql);
     let result = if counted {
-        let affected = rows.first().and_then(|r| r.first()).and_then(dq_core::value::Cell::to_text).and_then(|t| t.parse().ok());
-        StatementResult { columns: Vec::new(), rows: Vec::new(), has_more: false, command, affected, duration_ms: started.elapsed().as_millis() as u64, notices: Vec::new() }
+        let affected =
+            rows.first().and_then(|r| r.first()).and_then(dq_core::value::Cell::to_text).and_then(|t| t.parse().ok());
+        StatementResult {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            has_more: false,
+            command,
+            affected,
+            duration_ms: started.elapsed().as_millis() as u64,
+            notices: Vec::new(),
+        }
     } else {
-        StatementResult { columns, rows, has_more, command, affected: None, duration_ms: started.elapsed().as_millis() as u64, notices: Vec::new() }
+        StatementResult {
+            columns,
+            rows,
+            has_more,
+            command,
+            affected: None,
+            duration_ms: started.elapsed().as_millis() as u64,
+            notices: Vec::new(),
+        }
     };
     let keep_open = result.has_more;
     let _ = reply.send(Ok(result));
@@ -211,7 +240,11 @@ fn execute(
         let page = buffer.take(&statement, limit.clamp(1, ExecOptions::MAX_ROW_LIMIT) as usize);
         let page = interrupter.finish(page, options.timeout_secs);
         let more = page.as_ref().is_ok_and(|(_, more)| *more);
-        let _ = reply.send(page.map(|(rows, has_more)| RowsPage { rows, has_more, duration_ms: started.elapsed().as_millis() as u64 }));
+        let _ = reply.send(page.map(|(rows, has_more)| RowsPage {
+            rows,
+            has_more,
+            duration_ms: started.elapsed().as_millis() as u64,
+        }));
         if !more {
             return None;
         }

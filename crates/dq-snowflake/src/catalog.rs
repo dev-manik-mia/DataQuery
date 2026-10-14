@@ -2,11 +2,13 @@
 //! commands (keys). Values travel as bound parameters; database names are
 //! quoted identifiers.
 
+use std::fmt::Write;
+
 use dq_core::node::{GROUP_FUNCTIONS, GROUP_PROCEDURES, GROUP_SEQUENCES, Node, NodeKind, ObjectRef};
 use dq_core::result::TextRow;
 use dq_core::schema::{
-    ColumnInfo, ConstraintInfo, ConstraintKind, Dependencies, Dependency, ForeignKey, ModelColumn, ModelTable, SchemaModel,
-    TableStructure,
+    ColumnInfo, ConstraintInfo, ConstraintKind, Dependencies, Dependency, ForeignKey, ModelColumn, ModelTable,
+    SchemaModel, TableStructure,
 };
 use dq_core::sql::{Dialect, SnowflakeDialect};
 use dq_core::value::{Cell, CellLimits};
@@ -97,7 +99,10 @@ fn relation_node(database: &str, r: &TextRow) -> Node {
 
 /// Views missing from `TABLES` (some Snowflake-compatible servers list them only in `VIEWS`).
 async fn extra_views(client: &Client, database: &str, schema: &str, known: &[Node]) -> Vec<Node> {
-    let sql = format!("SELECT TABLE_SCHEMA, TABLE_NAME, 'VIEW', NULL, COMMENT FROM {}.VIEWS WHERE TABLE_SCHEMA = ?", info_schema(database));
+    let sql = format!(
+        "SELECT TABLE_SCHEMA, TABLE_NAME, 'VIEW', NULL, COMMENT FROM {}.VIEWS WHERE TABLE_SCHEMA = ?",
+        info_schema(database)
+    );
     rows(client, &sql, &[schema])
         .await
         .unwrap_or_default()
@@ -122,11 +127,14 @@ pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResul
     let views = extra_views(client, database, schema, &nodes).await;
     nodes.extend(views);
     // Not every account (or emulator) exposes these views; a missing one just hides its group.
-    for (group, view, column) in
-        [(GROUP_SEQUENCES, "SEQUENCES", "SEQUENCE_SCHEMA"), (GROUP_FUNCTIONS, "FUNCTIONS", "FUNCTION_SCHEMA"), (GROUP_PROCEDURES, "PROCEDURES", "PROCEDURE_SCHEMA")]
-    {
+    for (group, view, column) in [
+        (GROUP_SEQUENCES, "SEQUENCES", "SEQUENCE_SCHEMA"),
+        (GROUP_FUNCTIONS, "FUNCTIONS", "FUNCTION_SCHEMA"),
+        (GROUP_PROCEDURES, "PROCEDURES", "PROCEDURE_SCHEMA"),
+    ] {
         let sql = format!("SELECT COUNT(*) FROM {}.{view} WHERE {column} = ?", info_schema(database));
-        let count = rows(client, &sql, &[schema]).await.ok().and_then(|r| r.first().and_then(|r| r.number(0))).unwrap_or(0);
+        let count =
+            rows(client, &sql, &[schema]).await.ok().and_then(|r| r.first().and_then(|r| r.number(0))).unwrap_or(0);
         if count > 0 {
             let mut node = Node::container(ObjectRef::new(NodeKind::Group, database, Some(schema.to_owned()), group));
             node.row_estimate = Some(count);
@@ -150,7 +158,10 @@ pub async fn group_children(client: &Client, group: &ObjectRef) -> DbResult<Vec<
         &[schema],
     )
     .await?;
-    Ok(found.iter().map(|r| Node::leaf(ObjectRef::new(kind, group.database.clone(), group.schema.clone(), r.string(0)))).collect())
+    Ok(found
+        .iter()
+        .map(|r| Node::leaf(ObjectRef::new(kind, group.database.clone(), group.schema.clone(), r.string(0))))
+        .collect())
 }
 
 pub async fn search(client: &Client, database: &str, query_text: &str, limit: u32) -> DbResult<Vec<Node>> {
@@ -205,11 +216,21 @@ pub async fn row_estimate(client: &Client, object: &ObjectRef) -> DbResult<Optio
 }
 
 /// `NUMBER(12,2)`, `VARCHAR(255)`, `TIMESTAMP_NTZ(9)`, … from `INFORMATION_SCHEMA.COLUMNS`.
-fn type_spelling(data_type: &str, length: Option<i64>, precision: Option<i64>, scale: Option<i64>, datetime: Option<i64>) -> String {
+fn type_spelling(
+    data_type: &str,
+    length: Option<i64>,
+    precision: Option<i64>,
+    scale: Option<i64>,
+    datetime: Option<i64>,
+) -> String {
     match data_type {
         "NUMBER" => format!("NUMBER({},{})", precision.unwrap_or(38), scale.unwrap_or(0)),
-        "TEXT" | "VARCHAR" => length.filter(|l| *l < 16_777_216).map_or_else(|| "VARCHAR".into(), |l| format!("VARCHAR({l})")),
-        "TIMESTAMP_NTZ" | "TIMESTAMP_LTZ" | "TIMESTAMP_TZ" | "TIME" => datetime.map_or_else(|| data_type.to_owned(), |p| format!("{data_type}({p})")),
+        "TEXT" | "VARCHAR" => {
+            length.filter(|l| *l < 16_777_216).map_or_else(|| "VARCHAR".into(), |l| format!("VARCHAR({l})"))
+        }
+        "TIMESTAMP_NTZ" | "TIMESTAMP_LTZ" | "TIMESTAMP_TZ" | "TIME" => {
+            datetime.map_or_else(|| data_type.to_owned(), |p| format!("{data_type}({p})"))
+        }
         other => other.to_owned(),
     }
 }
@@ -259,7 +280,9 @@ async fn columns(client: &Client, object: &ObjectRef, primary: &[String]) -> DbR
 /// Columns of each key of `SHOW <kind> KEYS IN TABLE …`; constraints Snowflake
 /// declares but does not enforce (except NOT NULL).
 async fn keys(client: &Client, kind: &str, scope: &str) -> Vec<(String, Vec<TextRow>, Vec<String>)> {
-    let Ok((names, found)) = query(client, &format!("SHOW {kind} KEYS IN {scope}"), &[]).await else { return Vec::new() };
+    let Ok((names, found)) = query(client, &format!("SHOW {kind} KEYS IN {scope}"), &[]).await else {
+        return Vec::new();
+    };
     let mut groups: Vec<(String, Vec<TextRow>, Vec<String>)> = Vec::new();
     let constraint = names.iter().position(|n| n == "constraint_name" || n == "fk_name").unwrap_or(usize::MAX);
     let table = names.iter().position(|n| n == "table_name" || n == "fk_table_name").unwrap_or(usize::MAX);
@@ -283,14 +306,27 @@ fn foreign_keys_from(database: &str, groups: &[(String, Vec<TextRow>, Vec<String
         .map(|(_, rows, names)| {
             let first = &rows[0];
             let table = |db: String, schema: String, name: String| {
-                ObjectRef::new(NodeKind::Table, if db.is_empty() { database.to_owned() } else { db }, Some(schema), name)
+                ObjectRef::new(
+                    NodeKind::Table,
+                    if db.is_empty() { database.to_owned() } else { db },
+                    Some(schema),
+                    name,
+                )
             };
             let rule = |name: &str| Some(by_name(names, first, name)).filter(|r| !r.is_empty() && r != "NO ACTION");
             ForeignKey {
                 name: by_name(names, first, "fk_name"),
-                source: table(by_name(names, first, "fk_database_name"), by_name(names, first, "fk_schema_name"), by_name(names, first, "fk_table_name")),
+                source: table(
+                    by_name(names, first, "fk_database_name"),
+                    by_name(names, first, "fk_schema_name"),
+                    by_name(names, first, "fk_table_name"),
+                ),
                 columns: rows.iter().map(|r| by_name(names, r, "fk_column_name")).collect(),
-                target: table(by_name(names, first, "pk_database_name"), by_name(names, first, "pk_schema_name"), by_name(names, first, "pk_table_name")),
+                target: table(
+                    by_name(names, first, "pk_database_name"),
+                    by_name(names, first, "pk_schema_name"),
+                    by_name(names, first, "pk_table_name"),
+                ),
                 target_columns: rows.iter().map(|r| by_name(names, r, "pk_column_name")).collect(),
                 on_update: rule("update_rule"),
                 on_delete: rule("delete_rule"),
@@ -308,23 +344,43 @@ pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStr
     let kind = kind_of(&rel.string(2));
     let scope = table_scope(object);
     let primary_groups = if kind == NodeKind::Table { keys(client, "PRIMARY", &scope).await } else { Vec::new() };
-    let primary: Vec<String> = primary_groups.first().map(|(_, rows, names)| rows.iter().map(|r| by_name(names, r, "column_name")).collect()).unwrap_or_default();
+    let primary: Vec<String> = primary_groups
+        .first()
+        .map(|(_, rows, names)| rows.iter().map(|r| by_name(names, r, "column_name")).collect())
+        .unwrap_or_default();
     let columns = columns(client, object, &primary).await?;
     let list = |cols: &[String]| cols.iter().map(|c| D.display_ident(c)).collect::<Vec<_>>().join(", ");
     let mut constraints = Vec::new();
     if let Some((_, rows, names)) = primary_groups.first() {
-        constraints.push(ConstraintInfo { kind: ConstraintKind::PrimaryKey, name: by_name(names, &rows[0], "constraint_name"), definition: format!("PRIMARY KEY ({})", list(&primary)) });
+        constraints.push(ConstraintInfo {
+            kind: ConstraintKind::PrimaryKey,
+            name: by_name(names, &rows[0], "constraint_name"),
+            definition: format!("PRIMARY KEY ({})", list(&primary)),
+        });
     }
     for (_, rows, names) in keys(client, "UNIQUE", &scope).await {
         let cols: Vec<String> = rows.iter().map(|r| by_name(&names, r, "column_name")).collect();
-        constraints.push(ConstraintInfo { kind: ConstraintKind::Unique, name: by_name(&names, &rows[0], "constraint_name"), definition: format!("UNIQUE ({})", list(&cols)) });
+        constraints.push(ConstraintInfo {
+            kind: ConstraintKind::Unique,
+            name: by_name(&names, &rows[0], "constraint_name"),
+            definition: format!("UNIQUE ({})", list(&cols)),
+        });
     }
-    let foreign_keys = if kind == NodeKind::Table { foreign_keys_from(&object.database, &keys(client, "IMPORTED", &scope).await) } else { Vec::new() };
+    let foreign_keys = if kind == NodeKind::Table {
+        foreign_keys_from(&object.database, &keys(client, "IMPORTED", &scope).await)
+    } else {
+        Vec::new()
+    };
     for fk in &foreign_keys {
         constraints.push(ConstraintInfo {
             kind: ConstraintKind::ForeignKey,
             name: fk.name.clone(),
-            definition: format!("FOREIGN KEY ({}) REFERENCES {} ({})", list(&fk.columns), D.display_name(&fk.target), list(&fk.target_columns)),
+            definition: format!(
+                "FOREIGN KEY ({}) REFERENCES {} ({})",
+                list(&fk.columns),
+                D.display_name(&fk.target),
+                list(&fk.target_columns)
+            ),
         });
     }
     Ok(TableStructure {
@@ -377,19 +433,30 @@ pub async fn schema_model(client: &Client, database: &str, schema: &str) -> DbRe
     let primary: Vec<(String, String)> = keys(client, "PRIMARY", &scope)
         .await
         .iter()
-        .flat_map(|(_, rows, names)| rows.iter().map(|r| (by_name(names, r, "table_name"), by_name(names, r, "column_name"))).collect::<Vec<_>>())
+        .flat_map(|(_, rows, names)| {
+            rows.iter().map(|r| (by_name(names, r, "table_name"), by_name(names, r, "column_name"))).collect::<Vec<_>>()
+        })
         .collect();
     let mut model = SchemaModel::default();
     for r in &found {
         let name = r.string(0);
         if model.tables.last().is_none_or(|t: &ModelTable| t.object.name != name) {
-            model.tables.push(ModelTable { object: ObjectRef::new(kind_of(&r.string(1)), database, Some(schema.to_owned()), name.clone()), columns: Vec::new() });
+            model.tables.push(ModelTable {
+                object: ObjectRef::new(kind_of(&r.string(1)), database, Some(schema.to_owned()), name.clone()),
+                columns: Vec::new(),
+            });
         }
         if let Some(table) = model.tables.last_mut() {
             let column = r.string(2);
             table.columns.push(ModelColumn {
                 primary_key: primary.contains(&(name.clone(), column.clone())),
-                data_type: type_spelling(&r.string(3).to_ascii_uppercase(), r.number(4), r.number(5), r.number(6), r.number(8)),
+                data_type: type_spelling(
+                    &r.string(3).to_ascii_uppercase(),
+                    r.number(4),
+                    r.number(5),
+                    r.number(6),
+                    r.number(8),
+                ),
                 nullable: r.flag(7),
                 name: column,
             });
@@ -413,10 +480,10 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         _ => return Err(DbError::invalid("This object has no definition.")),
     };
     let name = D.quoted_name(object);
-    if let Ok(found) = rows(client, "SELECT GET_DDL(?, ?)", &[object_type, &name]).await {
-        if let Some(text) = found.first().and_then(|r| r.text(0)).filter(|t| !t.trim().is_empty()) {
-            return Ok(format!("{}\n", text.trim()));
-        }
+    if let Ok(found) = rows(client, "SELECT GET_DDL(?, ?)", &[object_type, &name]).await
+        && let Some(text) = found.first().and_then(|r| r.text(0)).filter(|t| !t.trim().is_empty())
+    {
+        return Ok(format!("{}\n", text.trim()));
     }
     if object.kind != NodeKind::Table {
         return Err(DbError::unsupported("This server does not provide definitions (GET_DDL)."));
@@ -428,7 +495,7 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         .map(|c| {
             let mut line = format!("{} {}", D.display_ident(&c.name), c.data_type);
             if let Some(d) = &c.default {
-                line.push_str(&format!(" DEFAULT {d}"));
+                let _ = write!(line, " DEFAULT {d}");
             }
             if !c.nullable {
                 line.push_str(" NOT NULL");
@@ -436,6 +503,8 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
             line
         })
         .collect();
-    lines.extend(structure.constraints.iter().map(|c| format!("CONSTRAINT {} {}", D.display_ident(&c.name), c.definition)));
+    lines.extend(
+        structure.constraints.iter().map(|c| format!("CONSTRAINT {} {}", D.display_ident(&c.name), c.definition)),
+    );
     Ok(format!("CREATE TABLE {} (\n  {}\n);\n", D.display_name(object), lines.join(",\n  ")))
 }

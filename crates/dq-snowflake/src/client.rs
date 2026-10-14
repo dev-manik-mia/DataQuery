@@ -78,7 +78,8 @@ pub struct Client {
 pub fn base_url(params: &ConnectParams) -> String {
     let c = &params.config;
     // `xy12345.eu-west-1` and `myorg-myaccount` are account identifiers; full host names and local hosts are kept.
-    let full = c.host.contains("snowflakecomputing") || c.host == "localhost" || c.host.parse::<std::net::IpAddr>().is_ok();
+    let full =
+        c.host.contains("snowflakecomputing") || c.host == "localhost" || c.host.parse::<std::net::IpAddr>().is_ok();
     let host = if full { c.host.clone() } else { format!("{}.snowflakecomputing.com", c.host) };
     let scheme = if c.ssl_mode == SslMode::Disable { "http" } else { "https" };
     let port = params.endpoint.map_or(c.port, |e| e.port());
@@ -87,10 +88,10 @@ pub fn base_url(params: &ConnectParams) -> String {
 }
 
 fn account_name(params: &ConnectParams) -> String {
-    params.config.property("account").map_or_else(
-        || params.config.host.split('.').next().unwrap_or_default().to_ascii_uppercase(),
-        str::to_owned,
-    )
+    params
+        .config
+        .property("account")
+        .map_or_else(|| params.config.host.split('.').next().unwrap_or_default().to_ascii_uppercase(), str::to_owned)
 }
 
 impl Client {
@@ -105,7 +106,14 @@ impl Client {
             builder = builder.danger_accept_invalid_certs(true);
         }
         if let Some(endpoint) = params.endpoint {
-            let host = base_url(params).split("://").nth(1).unwrap_or_default().split(':').next().unwrap_or_default().to_owned();
+            let host = base_url(params)
+                .split("://")
+                .nth(1)
+                .unwrap_or_default()
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
             builder = builder.resolve(&host, endpoint);
         }
         Ok(Self {
@@ -140,14 +148,20 @@ impl Client {
             "390100" | "390101" | "390102" | "390144" => {
                 (ErrorKind::Auth, Some("Check the username and password. The saved password was not changed."))
             }
-            "390201" | "390189" => (ErrorKind::NotFound, Some("Check the database, schema, warehouse and role in the connection.")),
+            "390201" | "390189" => {
+                (ErrorKind::NotFound, Some("Check the database, schema, warehouse and role in the connection."))
+            }
             "002003" | "002043" => (ErrorKind::NotFound, Some("Check the name; Snowflake upper-cases unquoted names.")),
-            "003001" | "003011" | "002037" => (ErrorKind::Permission, Some("Your role lacks the privilege for this action.")),
+            "003001" | "003011" | "002037" => {
+                (ErrorKind::Permission, Some("Your role lacks the privilege for this action."))
+            }
             "000604" => (ErrorKind::Cancelled, None),
             "000630" => (ErrorKind::Timeout, Some("Narrow the query or raise the statement timeout in Settings.")),
             "001003" | "000904" | "001007" | "002140" | "100038" | "100035" => (ErrorKind::Syntax, None),
             "100072" | "100090" => (ErrorKind::Constraint, None),
-            "000606" => (ErrorKind::Server, Some("Choose a warehouse in the connection settings, or run USE WAREHOUSE.")),
+            "000606" => {
+                (ErrorKind::Server, Some("Choose a warehouse in the connection settings, or run USE WAREHOUSE."))
+            }
             _ => (ErrorKind::Server, None),
         };
         let mut error = DbError::new(kind, message).with_action(action);
@@ -190,7 +204,8 @@ impl Client {
             .map_err(|e| self.network(&e))?;
         let envelope = self.envelope(response).await?;
         let data = envelope.data.unwrap_or_default();
-        let token = data.get("token").and_then(Value::as_str).ok_or_else(|| DbError::internal("login returned no token"))?;
+        let token =
+            data.get("token").and_then(Value::as_str).ok_or_else(|| DbError::internal("login returned no token"))?;
         if let Ok(mut t) = self.token.lock() {
             *t = Some(token.to_owned());
         }
@@ -201,7 +216,8 @@ impl Client {
         let status = response.status();
         let text = response.text().await.map_err(|e| self.network(&e))?;
         let envelope: Envelope = serde_json::from_str(&text).map_err(|_| {
-            let kind = if status.as_u16() == 401 || status.as_u16() == 403 { ErrorKind::Auth } else { ErrorKind::Server };
+            let kind =
+                if status.as_u16() == 401 || status.as_u16() == 403 { ErrorKind::Auth } else { ErrorKind::Server };
             DbError::new(kind, format!("Unexpected answer from Snowflake (HTTP {status})."))
         })?;
         if envelope.success == Some(true) || envelope.code.as_deref().is_some_and(|c| IN_PROGRESS.contains(&c)) {
@@ -212,7 +228,8 @@ impl Client {
     }
 
     fn authorization(&self) -> DbResult<String> {
-        let token = self.token.lock().ok().and_then(|t| t.clone()).ok_or_else(|| DbError::invalid("The session is closed."))?;
+        let token =
+            self.token.lock().ok().and_then(|t| t.clone()).ok_or_else(|| DbError::invalid("The session is closed."))?;
         Ok(format!("Snowflake Token=\"{token}\""))
     }
 
@@ -271,7 +288,8 @@ impl Client {
                 .map_err(|e| self.network(&e))?;
             envelope = self.envelope(response).await?;
         }
-        serde_json::from_value(envelope.data.unwrap_or_default()).map_err(|e| DbError::internal(format!("unreadable result: {e}")))
+        serde_json::from_value(envelope.data.unwrap_or_default())
+            .map_err(|e| DbError::internal(format!("unreadable result: {e}")))
     }
 
     /// Asks Snowflake to stop the statement sent with `request_id`.
@@ -289,19 +307,24 @@ impl Client {
     }
 
     /// Downloads a result chunk (Arrow IPC or JSON rows, possibly gzip-compressed).
-    pub async fn chunk(&self, chunk: &Chunk, headers: &serde_json::Map<String, Value>, qrmk: Option<&str>) -> DbResult<Vec<u8>> {
+    pub async fn chunk(
+        &self,
+        chunk: &Chunk,
+        headers: &serde_json::Map<String, Value>,
+        qrmk: Option<&str>,
+    ) -> DbResult<Vec<u8>> {
         let mut request = self.http.get(&chunk.url);
         for (k, v) in headers {
             if let Some(v) = v.as_str() {
                 request = request.header(k, v);
             }
         }
-        if headers.is_empty() {
-            if let Some(key) = qrmk {
-                request = request
-                    .header("x-amz-server-side-encryption-customer-key", key)
-                    .header("x-amz-server-side-encryption-customer-algorithm", "AES256");
-            }
+        if headers.is_empty()
+            && let Some(key) = qrmk
+        {
+            request = request
+                .header("x-amz-server-side-encryption-customer-key", key)
+                .header("x-amz-server-side-encryption-customer-algorithm", "AES256");
         }
         let bytes = request.send().await.map_err(|e| self.network(&e))?.bytes().await.map_err(|e| self.network(&e))?;
         if bytes.starts_with(&[0x1f, 0x8b]) {
@@ -316,7 +339,13 @@ impl Client {
     /// Ends the session on the server.
     pub async fn logout(&self) {
         if let Ok(auth) = self.authorization() {
-            let _ = self.http.post(format!("{}/session", self.base)).query(&[("delete", "true")]).header("Authorization", auth).send().await;
+            let _ = self
+                .http
+                .post(format!("{}/session", self.base))
+                .query(&[("delete", "true")])
+                .header("Authorization", auth)
+                .send()
+                .await;
         }
         if let Ok(mut t) = self.token.lock() {
             *t = None;
@@ -331,10 +360,21 @@ mod tests {
 
     #[test]
     fn builds_account_urls() {
-        let params = |host: &str, port: u16, ssl| ConnectParams::new(ConnConfig { host: host.into(), port, ssl_mode: ssl, ..ConnConfig::default() }, None);
-        assert_eq!(base_url(&params("xy12345.eu-west-1", 443, SslMode::VerifyFull)), "https://xy12345.eu-west-1.snowflakecomputing.com");
-        assert_eq!(base_url(&params("myorg-myaccount", 443, SslMode::VerifyFull)), "https://myorg-myaccount.snowflakecomputing.com");
+        let params = |host: &str, port: u16, ssl| {
+            ConnectParams::new(ConnConfig { host: host.into(), port, ssl_mode: ssl, ..ConnConfig::default() }, None)
+        };
+        assert_eq!(
+            base_url(&params("xy12345.eu-west-1", 443, SslMode::VerifyFull)),
+            "https://xy12345.eu-west-1.snowflakecomputing.com"
+        );
+        assert_eq!(
+            base_url(&params("myorg-myaccount", 443, SslMode::VerifyFull)),
+            "https://myorg-myaccount.snowflakecomputing.com"
+        );
         assert_eq!(base_url(&params("localhost", 58000, SslMode::Disable)), "http://localhost:58000");
-        assert_eq!(account_name(&params("xy12345.eu-west-1.snowflakecomputing.com", 443, SslMode::VerifyFull)), "XY12345");
+        assert_eq!(
+            account_name(&params("xy12345.eu-west-1.snowflakecomputing.com", 443, SslMode::VerifyFull)),
+            "XY12345"
+        );
     }
 }

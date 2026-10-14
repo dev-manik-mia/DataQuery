@@ -13,4 +13,8 @@ export type ConnConfig = { engine: Engine, host: string, port: number, database:
 /**
  * Enforced by the server session (read-only transactions), not only the UI.
  */
-read_only: boolean, options: ConnOptions, auth: AuthMethod, };
+read_only: boolean, options: ConnOptions, auth: AuthMethod, 
+/**
+ * Engine-specific settings, e.g. Snowflake's `warehouse` and `role`.
+ */
+properties?: Record<string, string>, };

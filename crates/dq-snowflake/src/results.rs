@@ -28,7 +28,8 @@ fn decode_arrow(bytes: &[u8], rowtype: &[RowType], limits: CellLimits) -> DbResu
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
-    let reader = StreamReader::try_new(Cursor::new(bytes), None).map_err(|e| DbError::internal(format!("unreadable result: {e}")))?;
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)
+        .map_err(|e| DbError::internal(format!("unreadable result: {e}")))?;
     let mut out = Vec::new();
     for batch in reader {
         let batch = batch.map_err(|e| DbError::internal(format!("unreadable result: {e}")))?;
@@ -44,7 +45,9 @@ impl ResultSet {
             json_rows(rowset, &data.rowtype, limits)
         } else {
             let encoded = data.rowset_base64.as_deref().unwrap_or_default();
-            let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|e| DbError::internal(format!("unreadable result: {e}")))?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|e| DbError::internal(format!("unreadable result: {e}")))?;
             decode_arrow(&bytes, &data.rowtype, limits)?
         };
         Ok(Self {
@@ -91,7 +94,8 @@ impl ResultSet {
         } else {
             // JSON chunks are rows without the enclosing brackets: `[…],[…]`.
             let text = format!("[{}]", String::from_utf8_lossy(&bytes));
-            let rows: Vec<Vec<Value>> = serde_json::from_str(&text).map_err(|e| DbError::internal(format!("unreadable result chunk: {e}")))?;
+            let rows: Vec<Vec<Value>> =
+                serde_json::from_str(&text).map_err(|e| DbError::internal(format!("unreadable result chunk: {e}")))?;
             json_rows(&rows, &self.rowtype, self.limits)
         };
         self.rows.extend(rows);

@@ -5,13 +5,13 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use bytes::Bytes;
 use dq_core::adapter::ConnectParams;
 use dq_core::config::SslMode;
 use dq_core::redact::redact_known;
 use dq_core::{DbError, DbResult, ErrorKind};
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
-use bytes::Bytes;
 use serde_json::Value;
 
 /// Settings every request carries: exact numbers, and a stopped query when
@@ -52,7 +52,10 @@ impl Client {
         let tls = config.ssl_mode != SslMode::Disable;
         let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(u64::from(config.connect_timeout_secs)))
-            .tcp_keepalive((config.options.keepalive_secs > 0).then(|| Duration::from_secs(u64::from(config.options.keepalive_secs))))
+            .tcp_keepalive(
+                (config.options.keepalive_secs > 0)
+                    .then(|| Duration::from_secs(u64::from(config.options.keepalive_secs))),
+            )
             .user_agent("DataQuery")
             .use_rustls_tls();
         if let Some(endpoint) = params.endpoint {
@@ -66,18 +69,26 @@ impl Client {
                 _ => {}
             }
             if let Some(ca) = &config.tls_files.ca_file {
-                let pem = std::fs::read(ca).map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the CA file: {e}")))?;
-                let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| DbError::new(ErrorKind::Tls, format!("Invalid CA file: {e}")))?;
+                let pem = std::fs::read(ca)
+                    .map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the CA file: {e}")))?;
+                let cert = reqwest::Certificate::from_pem(&pem)
+                    .map_err(|e| DbError::new(ErrorKind::Tls, format!("Invalid CA file: {e}")))?;
                 builder = builder.add_root_certificate(cert);
             }
             if let (Some(cert), Some(key)) = (&config.tls_files.client_cert_file, &config.tls_files.client_key_file) {
-                let mut pem = std::fs::read(cert).map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the client certificate: {e}")))?;
-                pem.extend(std::fs::read(key).map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the client key: {e}")))?);
-                let identity = reqwest::Identity::from_pem(&pem).map_err(|e| DbError::new(ErrorKind::Tls, format!("Invalid client certificate: {e}")))?;
+                let mut pem = std::fs::read(cert)
+                    .map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the client certificate: {e}")))?;
+                pem.extend(
+                    std::fs::read(key)
+                        .map_err(|e| DbError::new(ErrorKind::Tls, format!("Could not read the client key: {e}")))?,
+                );
+                let identity = reqwest::Identity::from_pem(&pem)
+                    .map_err(|e| DbError::new(ErrorKind::Tls, format!("Invalid client certificate: {e}")))?;
                 builder = builder.identity(identity);
             }
         }
-        let port = if params.endpoint.is_some() { params.endpoint.map_or(config.port, |e| e.port()) } else { config.port };
+        let port =
+            if params.endpoint.is_some() { params.endpoint.map_or(config.port, |e| e.port()) } else { config.port };
         let host = if config.host.contains(':') { format!("[{}]", config.host) } else { config.host.clone() };
         Ok(Self {
             http: builder.build().map_err(|e| DbError::internal(format!("HTTP client: {e}")))?,
@@ -93,7 +104,8 @@ impl Client {
 
     /// Sends `sql`; the response body has not been read yet.
     pub async fn send(&self, sql: &str, request: &Request<'_>) -> DbResult<reqwest::Response> {
-        let mut query: Vec<(String, String)> = BASE_SETTINGS.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
+        let mut query: Vec<(String, String)> =
+            BASE_SETTINGS.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
         if let Some(db) = request.database.filter(|d| !d.is_empty()) {
             query.push(("database".into(), db.to_owned()));
         }
@@ -114,7 +126,8 @@ impl Client {
             // `\N` is NULL in the parameter text format.
             query.push((format!("param_{name}"), value.clone().unwrap_or_else(|| "\\N".into())));
         }
-        let mut builder = self.http.post(&self.base).query(&query).header("X-ClickHouse-User", &self.user).body(sql.to_owned());
+        let mut builder =
+            self.http.post(&self.base).query(&query).header("X-ClickHouse-User", &self.user).body(sql.to_owned());
         if let Some(password) = &self.password {
             builder = builder.header("X-ClickHouse-Key", password);
         }
@@ -122,14 +135,21 @@ impl Client {
         if response.status().is_success() {
             return Ok(response);
         }
-        let code = response.headers().get("X-ClickHouse-Exception-Code").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok());
+        let code = response
+            .headers()
+            .get("X-ClickHouse-Exception-Code")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         Err(server_error(code, &body, status.as_u16(), self.secret()))
     }
 
     fn network(&self, e: &reqwest::Error) -> DbError {
-        let message = redact_known(&format!("{e}: {}", std::error::Error::source(e).map(ToString::to_string).unwrap_or_default()), self.secret().unwrap_or("\u{0}"));
+        let message = redact_known(
+            &format!("{e}: {}", std::error::Error::source(e).map(ToString::to_string).unwrap_or_default()),
+            self.secret().unwrap_or("\u{0}"),
+        );
         let kind = if e.is_timeout() {
             ErrorKind::Timeout
         } else if message.contains("certificate") || message.contains("tls") || message.contains("TLS") {
@@ -145,11 +165,15 @@ impl Client {
         let mut result = Rows::open(self.send(sql, request).await?, self.secret()).await?;
         let mut out = Vec::new();
         while let Some(row) = result.next().await? {
-            out.push(row.into_iter().map(|v| match v {
-                Value::Null => None,
-                Value::String(s) => Some(s),
-                other => Some(other.to_string()),
-            }).collect());
+            out.push(
+                row.into_iter()
+                    .map(|v| match v {
+                        Value::Null => None,
+                        Value::String(s) => Some(s),
+                        other => Some(other.to_string()),
+                    })
+                    .collect(),
+            );
         }
         Ok(out)
     }
@@ -158,13 +182,16 @@ impl Client {
 /// `Code: 60. DB::Exception: Unknown table … (UNKNOWN_TABLE) (version 25.8…)`
 pub fn server_error(code: Option<u32>, body: &str, status: u16, secret: Option<&str>) -> DbError {
     let text = body.trim();
-    let code = code.or_else(|| text.strip_prefix("Code: ").and_then(|r| r.split('.').next()).and_then(|c| c.parse().ok()));
+    let code =
+        code.or_else(|| text.strip_prefix("Code: ").and_then(|r| r.split('.').next()).and_then(|c| c.parse().ok()));
     let message = text.split_once("DB::Exception: ").map_or(text, |(_, m)| m);
     // Drop the trailing `(version …)`.
     let message = message.rsplit_once(" (version ").map_or(message, |(m, _)| m).trim();
     let message = secret.map_or_else(|| message.to_owned(), |p| redact_known(message, p));
     let (kind, action) = match code {
-        Some(516 | 192 | 193 | 194) => (ErrorKind::Auth, Some("Check the username and password. The saved password was not changed.")),
+        Some(516 | 192 | 193 | 194) => {
+            (ErrorKind::Auth, Some("Check the username and password. The saved password was not changed."))
+        }
         Some(81) => (ErrorKind::NotFound, Some("Check the database name.")),
         Some(60 | 46) => (ErrorKind::NotFound, Some("Check the name and its database.")),
         Some(16 | 47) => (ErrorKind::Syntax, Some("Check the column name.")),
@@ -173,7 +200,9 @@ pub fn server_error(code: Option<u32>, body: &str, status: u16, secret: Option<&
         Some(159 | 160) => (ErrorKind::Timeout, Some("Narrow the query or raise the statement timeout in Settings.")),
         Some(394) => (ErrorKind::Cancelled, None),
         Some(62 | 6 | 27 | 38 | 41 | 53 | 70 | 72 | 386 | 43 | 44 | 36) => (ErrorKind::Syntax, None),
-        Some(373) => (ErrorKind::Server, Some("Another statement is still running in this session. Wait for it or cancel it.")),
+        Some(373) => {
+            (ErrorKind::Server, Some("Another statement is still running in this session. Wait for it or cancel it."))
+        }
         _ if status == 401 || status == 403 => (ErrorKind::Auth, None),
         _ => (ErrorKind::Server, None),
     };
@@ -192,7 +221,7 @@ pub struct Rows {
     pub names: Vec<String>,
     pub types: Vec<String>,
     /// Rows the statement wrote, from the `X-ClickHouse-Summary` header.
-    pub written_rows: Option<u64>,
+    pub written: Option<u64>,
     done: bool,
     secret: Option<String>,
 }
@@ -200,19 +229,21 @@ pub struct Rows {
 impl Rows {
     /// Reads the header lines. Statements without a result have no columns.
     pub async fn open(response: reqwest::Response, secret: Option<&str>) -> DbResult<Self> {
-        let written_rows = response
+        let written = response
             .headers()
             .get("X-ClickHouse-Summary")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| serde_json::from_str::<Value>(v).ok())
-            .and_then(|v| v.get("written_rows").and_then(|w| w.as_str().and_then(|s| s.parse().ok()).or_else(|| w.as_u64())));
+            .and_then(|v| {
+                v.get("written").and_then(|w| w.as_str().and_then(|s| s.parse().ok()).or_else(|| w.as_u64()))
+            });
         let mut rows = Self {
             body: response.bytes_stream().boxed(),
             buffer: Vec::new(),
             lines: VecDeque::new(),
             names: Vec::new(),
             types: Vec::new(),
-            written_rows,
+            written,
             done: false,
             secret: secret.map(str::to_owned),
         };
@@ -242,20 +273,18 @@ impl Rows {
             if self.done {
                 return Ok(None);
             }
-            match self.body.next().await {
-                Some(chunk) => {
-                    let chunk = chunk.map_err(|e| DbError::new(ErrorKind::Network, format!("The result stream broke: {e}")))?;
-                    self.buffer.extend_from_slice(&chunk);
-                    while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
-                        let line: Vec<u8> = self.buffer.drain(..=end).collect();
-                        self.lines.push_back(line[..line.len() - 1].to_vec());
-                    }
+            if let Some(chunk) = self.body.next().await {
+                let chunk =
+                    chunk.map_err(|e| DbError::new(ErrorKind::Network, format!("The result stream broke: {e}")))?;
+                self.buffer.extend_from_slice(&chunk);
+                while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
+                    let line: Vec<u8> = self.buffer.drain(..=end).collect();
+                    self.lines.push_back(line[..line.len() - 1].to_vec());
                 }
-                None => {
-                    self.done = true;
-                    if !self.buffer.iter().all(u8::is_ascii_whitespace) {
-                        self.lines.push_back(std::mem::take(&mut self.buffer));
-                    }
+            } else {
+                self.done = true;
+                if !self.buffer.iter().all(u8::is_ascii_whitespace) {
+                    self.lines.push_back(std::mem::take(&mut self.buffer));
                 }
             }
         }
@@ -282,10 +311,20 @@ mod tests {
 
     #[test]
     fn reads_server_errors() {
-        let e = server_error(None, "Code: 60. DB::Exception: Unknown table expression identifier 'nope'. (UNKNOWN_TABLE) (version 25.8.1.1)", 404, None);
+        let e = server_error(
+            None,
+            "Code: 60. DB::Exception: Unknown table expression identifier 'nope'. (UNKNOWN_TABLE) (version 25.8.1.1)",
+            404,
+            None,
+        );
         assert_eq!((e.kind, e.code.as_deref()), (ErrorKind::NotFound, Some("60")));
         assert!(e.message.starts_with("Unknown table") && !e.message.contains("version"));
-        let auth = server_error(Some(516), "Code: 516. DB::Exception: dataquery: Authentication failed: password is incorrect", 401, Some("hunter2"));
+        let auth = server_error(
+            Some(516),
+            "Code: 516. DB::Exception: dataquery: Authentication failed: password is incorrect",
+            401,
+            Some("hunter2"),
+        );
         assert_eq!(auth.kind, ErrorKind::Auth);
     }
 }

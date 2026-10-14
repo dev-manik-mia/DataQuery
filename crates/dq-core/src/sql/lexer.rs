@@ -75,7 +75,8 @@ impl Lexer<'_> {
             flavor == SqlFlavor::Sqlserver,
             flavor == SqlFlavor::Oracle,
         );
-        let (ch, sf, duck) = (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
+        let (ch, sf, duck) =
+            (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
         match c {
             b' ' | b'\t' | b'\n' | b'\r' | 0x0c => {
                 while matches!(self.peek(0), Some(b' ' | b'\t' | b'\n' | b'\r' | 0x0c)) {
@@ -162,11 +163,12 @@ impl Lexer<'_> {
     fn braced_param(&mut self) -> TokenKind {
         let rest = &self.src[self.pos + 1..];
         let name_len = rest.bytes().take_while(|&c| c.is_ascii_alphanumeric() || c == b'_').count();
-        if name_len > 0 && rest.as_bytes().get(name_len) == Some(&b':') {
-            if let Some(end) = rest.find('}') {
-                self.pos += end + 2;
-                return TokenKind::Param;
-            }
+        if name_len > 0
+            && rest.as_bytes().get(name_len) == Some(&b':')
+            && let Some(end) = rest.find('}')
+        {
+            self.pos += end + 2;
+            return TokenKind::Param;
         }
         self.single(TokenKind::Punct)
     }
@@ -335,7 +337,9 @@ mod tests {
         assert!(kinds("select :1 from dual", SqlFlavor::Oracle).contains(&(TokenKind::Param, ":1")));
         assert!(kinds("select {id:UInt64}, {x}", SqlFlavor::Clickhouse).contains(&(TokenKind::Param, "{id:UInt64}")));
         assert!(kinds("select 'a\\';' # c ;", SqlFlavor::Clickhouse).iter().all(|(k, _)| *k != TokenKind::Semicolon));
-        assert!(kinds("select $$ ; $$, ? // c ;", SqlFlavor::Snowflake).iter().all(|(k, _)| *k != TokenKind::Semicolon));
+        assert!(
+            kinds("select $$ ; $$, ? // c ;", SqlFlavor::Snowflake).iter().all(|(k, _)| *k != TokenKind::Semicolon)
+        );
         assert!(kinds("select ?, $1", SqlFlavor::Duckdb).contains(&(TokenKind::Param, "$1")));
         assert!(!kinds(":new.id", SqlFlavor::Oracle).iter().any(|(k, _)| *k == TokenKind::Param));
     }

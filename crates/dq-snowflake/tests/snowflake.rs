@@ -100,12 +100,23 @@ async fn logs_in_and_reports_errors() {
 #[tokio::test]
 async fn values_decode_from_arrow() {
     let (s, _) = seeded!("VALUES");
-    let r = s.execute("SELECT BIG, EXACT, TS, DAY, LABEL, FLAG, RATIO, DOC, ID FROM PUBLIC.TYPE_SAMPLES ORDER BY ID", &[], OPTS).await.unwrap();
+    let r = s
+        .execute(
+            "SELECT BIG, EXACT, TS, DAY, LABEL, FLAG, RATIO, DOC, ID FROM PUBLIC.TYPE_SAMPLES ORDER BY ID",
+            &[],
+            OPTS,
+        )
+        .await
+        .unwrap();
     let row = &r.rows[0];
     // fakesnow stores NUMBER(38,0) as BIGINT; real Snowflake keeps 38 digits.
     assert_eq!(row[0], Cell::number("9223372036854775807"));
     assert_eq!(row[1], Cell::number("1234567890123456789012345678.0123456789"));
-    assert!(matches!(&row[2], Cell::Temporal { value, zoned: false } if value.starts_with("2026-10-14 09:59:00.123")), "{:?}", row[2]);
+    assert!(
+        matches!(&row[2], Cell::Temporal { value, zoned: false } if value.starts_with("2026-10-14 09:59:00.123")),
+        "{:?}",
+        row[2]
+    );
     assert_eq!(row[3], Cell::Temporal { value: "2026-10-14".into(), zoned: false });
     assert_eq!(row[4], Cell::Text { value: String::new(), truncated: None });
     assert_eq!(row[5], Cell::Bool { value: true });
@@ -119,11 +130,21 @@ async fn values_decode_from_arrow() {
 #[tokio::test]
 async fn results_page_and_parameters_bind() {
     let (s, _) = seeded!("PAGES");
-    let r = s.execute("SELECT ID FROM PUBLIC.ORDERS ORDER BY ID", &[], ExecOptions { row_limit: 100, timeout_secs: 30 }).await.unwrap();
+    let r = s
+        .execute("SELECT ID FROM PUBLIC.ORDERS ORDER BY ID", &[], ExecOptions { row_limit: 100, timeout_secs: 30 })
+        .await
+        .unwrap();
     assert_eq!((r.rows.len(), r.has_more), (100, true));
     let page = s.fetch_more(100).await.unwrap();
     assert_eq!(text(&page.rows[0][0]), "101");
-    let r = s.execute("SELECT COUNT(*) FROM PUBLIC.ORDERS WHERE STATUS = ? AND TOTAL > ?", &[Some("paid".into()), Some("100".into())], OPTS).await.unwrap();
+    let r = s
+        .execute(
+            "SELECT COUNT(*) FROM PUBLIC.ORDERS WHERE STATUS = ? AND TOTAL > ?",
+            &[Some("paid".into()), Some("100".into())],
+            OPTS,
+        )
+        .await
+        .unwrap();
     assert!(text(&r.rows[0][0]).parse::<u32>().unwrap() > 0);
     let r = s.execute("UPDATE PUBLIC.ORDERS SET NOTES = 'x' WHERE ID <= 3", &[], OPTS).await.unwrap();
     assert_eq!(r.affected, Some(3));
@@ -167,8 +188,13 @@ async fn table_pages_edits_and_exports() -> DbResult<()> {
     assert_eq!(ops::row_count(&*s, &orders, &req.rows).await?.count, 400);
     let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
     let changes = vec![
-        RowChange::Update { key: vec![cv("ID", Some("1"))], values: vec![cv("TOTAL", Some("84.50")), cv("NOTES", Some("Zoë ✓"))] },
-        RowChange::Insert { values: vec![cv("ID", Some("5000")), cv("STATUS", Some("paid")), cv("TOTAL", Some("9.99"))] },
+        RowChange::Update {
+            key: vec![cv("ID", Some("1"))],
+            values: vec![cv("TOTAL", Some("84.50")), cv("NOTES", Some("Zoë ✓"))],
+        },
+        RowChange::Insert {
+            values: vec![cv("ID", Some("5000")), cv("STATUS", Some("paid")), cv("TOTAL", Some("9.99"))],
+        },
         RowChange::Delete { key: vec![cv("ID", Some("2"))] },
     ];
     let report = ops::apply_changes(&*s, &orders, &changes, false).await?;
@@ -179,8 +205,17 @@ async fn table_pages_edits_and_exports() -> DbResult<()> {
     assert_eq!(ops::apply_changes(&*s, &orders, &failing, false).await.unwrap_err().kind, ErrorKind::Constraint);
     let dir = tempfile::tempdir().unwrap();
     let csv = dir.path().join("orders.csv");
-    let source = ExportSource::Table { object: orders, rows: RowFilter { filter: Some("ID <= 10".into()), ..RowFilter::default() }, sort: None };
-    assert_eq!(ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &TransferControl::none()).await?.rows, 9);
+    let source = ExportSource::Table {
+        object: orders,
+        rows: RowFilter { filter: Some("ID <= 10".into()), ..RowFilter::default() },
+        sort: None,
+    };
+    assert_eq!(
+        ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &TransferControl::none())
+            .await?
+            .rows,
+        9
+    );
     Ok(())
 }
 
