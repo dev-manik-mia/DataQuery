@@ -371,6 +371,12 @@ async fn structure_import_and_export() -> DbResult<()> {
     assert_eq!(ops::export(&*s, &source, ExportFormat::Csv, &ExportOptions::default(), &csv, &none).await?.rows, 3);
     let text = std::fs::read_to_string(&csv).unwrap();
     assert!(text.contains("9007199254740993") && text.contains("120.50"), "{text}");
+    // The Documents view exports its filter, as JSON.
+    let json = dir.path().join("paid.json");
+    let mut paid = FindRequest::new(coll(DB, "orders"), 20);
+    paid.filter = "{ status: 'paid' }".into();
+    let source = ExportSource::Documents { request: paid };
+    assert_eq!(ops::export(&*s, &source, ExportFormat::Json, &ExportOptions::default(), &json, &none).await?.rows, 2);
 
     let x = Scratch::new(&cfg).await?;
     x.run("db.imported.insertOne({ _id: 0, qty: 1, price: Decimal128('0.10'), status: 'seed' })").await?;

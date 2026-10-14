@@ -400,8 +400,10 @@ mod tests {
             ("SS", 2, "S")
         );
         let m = f.iter().find(|f| f.key == "m").unwrap();
-        assert_eq!(plain(&i["m"]), r#"{"l":[true,null],"z":1}"#);
-        assert_eq!(m.children[0].children[0].value, Cell::Bool { value: true });
+        // Key order depends on serde_json's `preserve_order`, which other crates may enable.
+        let parsed: Value = serde_json::from_str(&plain(&i["m"])).unwrap();
+        assert_eq!(parsed, serde_json::json!({ "l": [true, null], "z": 1 }));
+        assert_eq!(m.children.iter().find(|c| c.key == "l").unwrap().children[0].value, Cell::Bool { value: true });
     }
 
     #[test]
