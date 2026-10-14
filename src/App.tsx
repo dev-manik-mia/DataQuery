@@ -5,7 +5,7 @@ import { GlobalDialogs } from '@/components/shell/GlobalDialogs';
 import styles from '@/components/shell/Shell.module.css';
 import { StatusBar, StatusIndicator } from '@/components/shell/StatusBar';
 import { Toasts } from '@/components/shell/Toasts';
-import { Crumbs, TitleBar, TitleDivider } from '@/components/shell/TitleBar';
+import { Crumbs, TitleBar, TitleBarButton, TitleDivider } from '@/components/shell/TitleBar';
 import { Button, Chip, EngineMark, EnvironmentChip, Icon, IconButton, Menu } from '@/components/ui';
 import { ConnectionForm } from '@/features/connections/ConnectionForm';
 import { ConnectionsHome } from '@/features/connections/ConnectionsHome';
@@ -110,16 +110,10 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
         <Icon name="command" />
       </IconButton>
       {session?.capabilities.monitoring && view.name === 'workspace' && (
-        <Button size="sm" onClick={() => useWorkspace.getState().openMonitorTab()}>
-          {t('nav.monitoring')}
-        </Button>
+        <TitleBarButton icon="activity" label={t('nav.monitoring')} onClick={() => useWorkspace.getState().openMonitorTab()} />
       )}
-      <Button size="sm" onClick={() => navigate({ name: 'history' })}>
-        {t('nav.history')}
-      </Button>
-      <Button size="sm" onClick={() => navigate({ name: 'settings', section: 'general' })}>
-        {t('nav.settings')}
-      </Button>
+      <TitleBarButton icon="history" label={t('nav.history')} onClick={() => navigate({ name: 'history' })} />
+      <TitleBarButton icon="settings" label={t('nav.settings')} onClick={() => navigate({ name: 'settings', section: 'general' })} />
     </>
   );
 

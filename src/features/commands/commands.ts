@@ -59,7 +59,7 @@ export function openNewWindow() {
     title: 'DataQuery',
     width: 1280,
     height: 820,
-    minWidth: 980,
+    minWidth: 640,
     minHeight: 620,
     x: 80 + windows * 24,
     y: 80 + windows * 24,

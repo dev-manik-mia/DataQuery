@@ -12,7 +12,10 @@
   padding: 28px 40px;
   min-width: 0;
   overflow: auto;
+  /* Rows adapt to the list's own width, with or without the side panel. */
+  container: connections / inline-size;
 }
+
 
 .toolbar {
   display: flex;
@@ -87,10 +90,6 @@
   border-bottom: none;
 }
 
-.row:hover {
-  background: var(--sunk);
-}
-
 .star {
   display: inline-flex;
   padding: 0;
@@ -129,6 +128,32 @@
   color: var(--accent-text);
 }
 
+/* Narrower lists drop the least important columns: first the address
+   (still in the name's tooltip), then when the connection was last used. */
+@container connections (max-width: 820px) {
+  .row {
+    grid-template-columns: 20px 28px minmax(0, 1fr) 130px 110px 110px;
+  }
+
+  .address {
+    display: none;
+  }
+}
+
+@container connections (max-width: 600px) {
+  .row {
+    grid-template-columns: 20px 28px minmax(0, 1fr) 130px 100px;
+  }
+
+  .lastUsed {
+    display: none;
+  }
+}
+
+.row:hover {
+  background: var(--sunk);
+}
+
 .aside {
   display: flex;
   flex-direction: column;
@@ -137,6 +162,21 @@
   border-left: 1px solid var(--line);
   background: var(--surface);
   overflow: auto;
+}
+
+/* After the base rules, so these win. Narrow windows: the list takes the whole width; recent queries stay in History. */
+@media (max-width: 900px) {
+  .home {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aside {
+    display: none;
+  }
+
+  .main {
+    padding: 24px var(--space-6);
+  }
 }
 
 .recent {
@@ -268,6 +308,32 @@
   border-top: 1px solid var(--line);
   font-size: var(--text-caption);
   color: var(--ink-2);
+}
+
+/* A narrow window shows the engine groups in two columns, then one. */
+@media (max-width: 900px) {
+  .picker {
+    padding: 24px var(--space-6);
+  }
+
+  .pickerSearch {
+    width: 100%;
+    max-width: 360px;
+  }
+
+  .engineCols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pickerFoot {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .engineCols {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* Connection form */

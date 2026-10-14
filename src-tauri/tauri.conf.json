@@ -16,7 +16,7 @@
         "title": "DataQuery",
         "width": 1440,
         "height": 900,
-        "minWidth": 980,
+        "minWidth": 640,
         "minHeight": 620,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,

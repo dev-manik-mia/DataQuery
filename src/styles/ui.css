@@ -441,15 +441,18 @@ textarea.dq-input {
   color: var(--ink-3);
 }
 
+/* The actions move below the title when both do not fit on one line. */
 .dq-pagehead {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-3) var(--space-4);
 }
 
 .dq-pagehead__text {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
@@ -464,8 +467,10 @@ textarea.dq-input {
 
 .dq-pagehead__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   flex: none;
+  max-width: 100%;
 }
 
 /* ----------------------------------------------------------------- Alert */

@@ -207,7 +207,9 @@ export function ConnectionsHome() {
                             <Icon name="star" filled={c.favorite} />
                           </button>
                           {engine ? <EngineMark engine={engine} /> : <span />}
-                          <span className={`${styles.name} ellipsis`}>{c.name}</span>
+                          <span className={`${styles.name} ellipsis`} title={`${c.name} · ${c.config.host}:${c.config.port}${c.config.database ? `/${c.config.database}` : ''}`}>
+                            {c.name}
+                          </span>
                           <span>
                             <EnvironmentChip environment={c.environment} />
                           </span>

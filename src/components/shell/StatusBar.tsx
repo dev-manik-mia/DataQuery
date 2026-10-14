@@ -24,9 +24,9 @@ const statusLabel: Record<ConnectionStatus, string> = {
  */
 export function StatusIndicator({ status, live = true }: { status: ConnectionStatus; live?: boolean }) {
   return (
-    <span className={styles.status} style={{ color: statusTone[status] }} role={live ? 'status' : undefined}>
+    <span className={styles.status} style={{ color: statusTone[status] }} role={live ? 'status' : undefined} title={statusLabel[status]}>
       <span className={styles.statusDot} aria-hidden />
-      {statusLabel[status]}
+      <span className={styles.statusLabel}>{statusLabel[status]}</span>
     </span>
   );
 }

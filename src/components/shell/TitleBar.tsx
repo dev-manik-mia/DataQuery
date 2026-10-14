@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 
+import { Button } from '@/components/ui/Button';
+import { Icon, type IconName } from '@/components/ui/Icon';
 import { isMac } from '@/lib/platform';
 
 import styles from './Shell.module.css';
@@ -19,7 +21,7 @@ export function TitleBar({ onBrand, crumbs, center, actions, production }: Title
     <header className={classes} data-tauri-drag-region>
       <button type="button" className={styles.brand} onClick={onBrand} aria-label="DataQuery — connections">
         <span className={styles.brandMark} aria-hidden />
-        DataQuery
+        <span className={styles.brandName}>DataQuery</span>
       </button>
       {crumbs}
       {center ? (
@@ -31,6 +33,15 @@ export function TitleBar({ onBrand, crumbs, center, actions, production }: Title
       )}
       {actions && <div className={styles.actions}>{actions}</div>}
     </header>
+  );
+}
+
+/** A title bar button that keeps only its icon in a narrow window. */
+export function TitleBarButton({ icon, label, onClick }: { icon: IconName; label: string; onClick: () => void }) {
+  return (
+    <Button size="sm" title={label} aria-label={label} onClick={onClick} icon={<span className={styles.navIcon}><Icon name={icon} size={14} /></span>}>
+      <span className={styles.navLabel}>{label}</span>
+    </Button>
   );
 }
 

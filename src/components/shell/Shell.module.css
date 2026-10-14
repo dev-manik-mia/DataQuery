@@ -22,6 +22,9 @@
   padding: 0 var(--space-3);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .titlebarMac {
@@ -95,6 +98,7 @@
 
 .center {
   flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
   align-self: stretch;
@@ -102,6 +106,7 @@
 }
 
 .actions {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -127,6 +132,24 @@
   align-items: center;
   gap: 6px;
   font-weight: 600;
+}
+
+.navIcon {
+  display: none;
+}
+
+/* A narrow window keeps the title bar on one line: icon-only buttons, no brand name
+   or status word (both stay as accessible names and tooltips). */
+@media (max-width: 900px) {
+  .brandName,
+  .titlebar .statusLabel,
+  .navLabel {
+    display: none;
+  }
+
+  .navIcon {
+    display: inline-flex;
+  }
 }
 
 .statusDot {
