@@ -146,11 +146,25 @@ pub struct NewHistoryEntry {
     pub error: Option<String>,
 }
 
+/// How much history to keep. 0 means no limit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Retention {
+    pub max_entries: u32,
+    pub max_days: u32,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, TS)]
 #[ts(export)]
 pub struct HistoryQuery {
     pub search: Option<String>,
     pub connection_id: Option<String>,
+    pub status: Option<HistoryStatus>,
+    /// Executed at or after this time (ms since the epoch).
+    #[ts(type = "number | null")]
+    pub from_ms: Option<i64>,
+    /// Executed before this time (ms since the epoch).
+    #[ts(type = "number | null")]
+    pub to_ms: Option<i64>,
     /// Return entries older than this id (pagination).
     #[ts(type = "number | null")]
     pub before_id: Option<i64>,
@@ -176,15 +190,44 @@ pub struct SavedScript {
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
+    pub folder: Option<String>,
+    pub tags: Vec<String>,
+    pub pinned: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[serde(default)]
 #[ts(export)]
 pub struct ScriptDraft {
     pub id: Option<String>,
     pub name: String,
     pub sql: String,
     pub connection_id: Option<String>,
+    pub folder: Option<String>,
+    pub tags: Vec<String>,
+    pub pinned: bool,
+}
+
+/// A reusable SQL template inserted from autocomplete by its prefix.
+/// `${1:name}` marks fields to fill in, as in editor snippets.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct Snippet {
+    pub id: String,
+    pub name: String,
+    pub prefix: String,
+    pub body: String,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[ts(export)]
+pub struct SnippetDraft {
+    pub id: Option<String>,
+    pub name: String,
+    pub prefix: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]

@@ -11,8 +11,8 @@ use dq_core::{DbError, DbResult, ErrorKind};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::model::{
-    ConnectionDraft, Folder, HistoryEntry, HistoryPage, HistoryQuery, HistoryStatus, NewHistoryEntry, SavedConnection,
-    SavedScript, ScriptDraft, Settings,
+    ConnectionDraft, Folder, HistoryEntry, HistoryPage, HistoryQuery, HistoryStatus, NewHistoryEntry, Retention,
+    SavedConnection, SavedScript, ScriptDraft, Settings, Snippet, SnippetDraft,
 };
 
 const MIGRATIONS: &[&str] = &[
@@ -62,10 +62,21 @@ const MIGRATIONS: &[&str] = &[
     r"
     ALTER TABLE connections ADD COLUMN ssh_secrets TEXT NOT NULL DEFAULT '[]';
 ",
+    r"
+    ALTER TABLE scripts ADD COLUMN folder TEXT;
+    ALTER TABLE scripts ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE scripts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE snippets (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        prefix     TEXT NOT NULL,
+        body       TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX history_connection ON history (connection_id, id DESC);
+",
 ];
 
-/// History keeps at most this many entries; older ones are pruned.
-pub const HISTORY_RETENTION: i64 = 20_000;
 const MAX_SQL_BYTES: usize = 1024 * 1024;
 const MAX_KV_BYTES: usize = 4 * 1024 * 1024;
 const SETTINGS_KEY: &str = "settings";
@@ -260,7 +271,8 @@ impl Store {
     // ------------------------------------------------------------------ history
 
     /// Records a statement. SQL is redacted and capped; rows are never stored.
-    pub fn add_history(&self, entry: &NewHistoryEntry) -> DbResult<()> {
+    /// Entries beyond the retention limits are pruned.
+    pub fn add_history(&self, entry: &NewHistoryEntry, retention: Retention) -> DbResult<()> {
         let mut sql = redact(&entry.sql);
         if sql.len() > MAX_SQL_BYTES {
             let mut cut = MAX_SQL_BYTES;
@@ -287,8 +299,8 @@ impl Store {
                 ],
             )?;
             let id = db.last_insert_rowid();
-            if id % 500 == 0 {
-                db.execute("DELETE FROM history WHERE id <= ?1", params![id - HISTORY_RETENTION])?;
+            if id % 100 == 0 {
+                Self::prune(db, retention, id)?;
             }
             Ok(())
         })
@@ -302,37 +314,66 @@ impl Store {
             .filter(|s| !s.is_empty())
             .map(|s| format!("%{}%", s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")));
         let limit = i64::from(query.limit.clamp(1, 500));
-        let filter = "(?1 IS NULL OR sql LIKE ?1 ESCAPE '\\' OR connection_name LIKE ?1 ESCAPE '\\') AND (?2 IS NULL OR connection_id = ?2)";
+        let status = query.status.map(HistoryStatus::as_str);
+        let filter = "(?1 IS NULL OR sql LIKE ?1 ESCAPE '\\' OR connection_name LIKE ?1 ESCAPE '\\') \
+                      AND (?2 IS NULL OR connection_id = ?2) AND (?5 IS NULL OR status = ?5) \
+                      AND (?6 IS NULL OR executed_at >= ?6) AND (?7 IS NULL OR executed_at < ?7)";
         self.with(|db| {
-            let total = db.query_row(&format!("SELECT count(*) FROM history WHERE {filter}"), params![pattern, query.connection_id], |r| {
-                r.get(0)
-            })?;
+            let total = db.query_row(
+                &format!("SELECT count(*) FROM history WHERE {filter} AND ?3 IS NULL AND ?4 IS NULL"),
+                params![pattern, query.connection_id, None::<i64>, None::<i64>, status, query.from_ms, query.to_ms],
+                |r| r.get(0),
+            )?;
             let entries = db
                 .prepare(&format!(
                     "SELECT id, connection_id, connection_name, database, sql, executed_at, duration_ms, status, rows, error \
                      FROM history WHERE {filter} AND (?3 IS NULL OR id < ?3) ORDER BY id DESC LIMIT ?4"
                 ))?
-                .query_map(params![pattern, query.connection_id, query.before_id, limit], |r| {
-                    Ok(HistoryEntry {
-                        id: r.get(0)?,
-                        connection_id: r.get(1)?,
-                        connection_name: r.get(2)?,
-                        database: r.get(3)?,
-                        sql: r.get(4)?,
-                        executed_at: r.get(5)?,
-                        duration_ms: r.get(6)?,
-                        status: HistoryStatus::parse(&r.get::<_, String>(7)?),
-                        rows: r.get(8)?,
-                        error: r.get(9)?,
-                    })
-                })?
+                .query_map(
+                    params![pattern, query.connection_id, query.before_id, limit, status, query.from_ms, query.to_ms],
+                    |r| {
+                        Ok(HistoryEntry {
+                            id: r.get(0)?,
+                            connection_id: r.get(1)?,
+                            connection_name: r.get(2)?,
+                            database: r.get(3)?,
+                            sql: r.get(4)?,
+                            executed_at: r.get(5)?,
+                            duration_ms: r.get(6)?,
+                            status: HistoryStatus::parse(&r.get::<_, String>(7)?),
+                            rows: r.get(8)?,
+                            error: r.get(9)?,
+                        })
+                    },
+                )?
                 .collect::<rusqlite::Result<_>>()?;
             Ok(HistoryPage { entries, total })
         })
     }
 
-    pub fn clear_history(&self) -> DbResult<()> {
-        self.with(|db| db.execute("DELETE FROM history", [])).map(drop)
+    fn prune(db: &Connection, retention: Retention, last_id: i64) -> rusqlite::Result<()> {
+        if retention.max_entries > 0 {
+            db.execute("DELETE FROM history WHERE id <= ?1", params![last_id - i64::from(retention.max_entries)])?;
+        }
+        if retention.max_days > 0 {
+            let cutoff = now_ms() - i64::from(retention.max_days) * 86_400_000;
+            db.execute("DELETE FROM history WHERE executed_at < ?1", params![cutoff])?;
+        }
+        Ok(())
+    }
+
+    /// Applies the retention limits now, e.g. after the user changed them.
+    pub fn apply_retention(&self, retention: Retention) -> DbResult<()> {
+        self.with(|db| {
+            let last: i64 = db.query_row("SELECT coalesce(max(id), 0) FROM history", [], |r| r.get(0))?;
+            Self::prune(db, retention, last)
+        })
+    }
+
+    /// Clears all history, or only one connection's.
+    pub fn clear_history(&self, connection_id: Option<&str>) -> DbResult<()> {
+        self.with(|db| db.execute("DELETE FROM history WHERE ?1 IS NULL OR connection_id = ?1", params![connection_id]))
+            .map(drop)
     }
 
     // ------------------------------------------------------------------ scripts
@@ -340,7 +381,8 @@ impl Store {
     pub fn scripts(&self) -> DbResult<Vec<SavedScript>> {
         self.with(|db| {
             db.prepare(
-                "SELECT id, name, sql, connection_id, created_at, updated_at FROM scripts ORDER BY updated_at DESC",
+                "SELECT id, name, sql, connection_id, created_at, updated_at, folder, tags, pinned FROM scripts \
+                 ORDER BY pinned DESC, updated_at DESC",
             )?
             .query_map([], |r| {
                 Ok(SavedScript {
@@ -350,6 +392,9 @@ impl Store {
                     connection_id: r.get(3)?,
                     created_at: r.get(4)?,
                     updated_at: r.get(5)?,
+                    folder: r.get(6)?,
+                    tags: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
+                    pinned: r.get(8)?,
                 })
             })?
             .collect()
@@ -361,16 +406,92 @@ impl Store {
         if draft.sql.len() > MAX_SQL_BYTES {
             return Err(DbError::invalid("Scripts are limited to 1 MB."));
         }
+        let folder =
+            draft.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()).map(|f| require_name(f, "Folder"));
+        let folder = folder.transpose()?;
+        let mut tags: Vec<String> = draft
+            .tags
+            .iter()
+            .map(|t| t.trim().to_owned())
+            .filter(|t| !t.is_empty() && t.chars().count() <= 40)
+            .collect();
+        tags.sort();
+        tags.dedup();
+        tags.truncate(20);
+        let tags = serde_json::to_string(&tags).map_err(json_error)?;
         let id = draft.id.clone().unwrap_or_else(new_id);
         let now = now_ms();
         self.with(|db| {
             db.execute(
-                "INSERT INTO scripts (id, name, sql, connection_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
-                 ON CONFLICT (id) DO UPDATE SET name = ?2, sql = ?3, connection_id = ?4, updated_at = ?5",
-                params![id, name, draft.sql, draft.connection_id, now],
+                "INSERT INTO scripts (id, name, sql, connection_id, created_at, updated_at, folder, tags, pinned) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8) \
+                 ON CONFLICT (id) DO UPDATE SET name = ?2, sql = ?3, connection_id = ?4, updated_at = ?5, folder = ?6, tags = ?7, pinned = ?8",
+                params![id, name, draft.sql, draft.connection_id, now, folder, tags, draft.pinned],
             )
         })?;
         self.scripts()?.into_iter().find(|s| s.id == id).ok_or_else(|| DbError::internal("script vanished after save"))
+    }
+
+    /// Updates only the SQL of a saved script (autosave from an open tab).
+    pub fn update_script_sql(&self, id: &str, sql: &str) -> DbResult<()> {
+        if sql.len() > MAX_SQL_BYTES {
+            return Err(DbError::invalid("Scripts are limited to 1 MB."));
+        }
+        let changed = self.with(|db| {
+            db.execute("UPDATE scripts SET sql = ?2, updated_at = ?3 WHERE id = ?1", params![id, sql, now_ms()])
+        })?;
+        if changed == 0 {
+            return Err(DbError::not_found("The script no longer exists."));
+        }
+        Ok(())
+    }
+
+    // ----------------------------------------------------------------- snippets
+
+    pub fn snippets(&self) -> DbResult<Vec<Snippet>> {
+        self.with(|db| {
+            db.prepare("SELECT id, name, prefix, body, updated_at FROM snippets ORDER BY prefix COLLATE NOCASE")?
+                .query_map([], |r| {
+                    Ok(Snippet {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        prefix: r.get(2)?,
+                        body: r.get(3)?,
+                        updated_at: r.get(4)?,
+                    })
+                })?
+                .collect()
+        })
+    }
+
+    pub fn save_snippet(&self, draft: &SnippetDraft) -> DbResult<Snippet> {
+        let name = require_name(&draft.name, "Snippet")?;
+        let prefix = draft.prefix.trim();
+        if prefix.is_empty()
+            || prefix.len() > 40
+            || !prefix.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(DbError::invalid("The prefix must be 1–40 letters, digits, `_` or `-`."));
+        }
+        if draft.body.is_empty() || draft.body.len() > 64 * 1024 {
+            return Err(DbError::invalid("A snippet body must be 1 byte to 64 KB."));
+        }
+        let id = draft.id.clone().unwrap_or_else(new_id);
+        self.with(|db| {
+            db.execute(
+                "INSERT INTO snippets (id, name, prefix, body, updated_at) VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT (id) DO UPDATE SET name = ?2, prefix = ?3, body = ?4, updated_at = ?5",
+                params![id, name, prefix, draft.body, now_ms()],
+            )
+        })?;
+        self.snippets()?
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| DbError::internal("snippet vanished after save"))
+    }
+
+    pub fn delete_snippet(&self, id: &str) -> DbResult<()> {
+        self.with(|db| db.execute("DELETE FROM snippets WHERE id = ?1", params![id])).map(drop)
     }
 
     pub fn delete_script(&self, id: &str) -> DbResult<()> {
@@ -479,29 +600,35 @@ mod tests {
         let store = Store::in_memory().unwrap();
         for i in 0..5 {
             store
-                .add_history(&NewHistoryEntry {
-                    connection_id: Some("c1".into()),
-                    connection_name: "dev".into(),
-                    database: "app".into(),
-                    sql: format!("SELECT {i} FROM orders_{i}"),
-                    duration_ms: 3,
-                    status: HistoryStatus::Ok,
-                    rows: Some(1),
-                    error: None,
-                })
+                .add_history(
+                    &NewHistoryEntry {
+                        connection_id: Some("c1".into()),
+                        connection_name: "dev".into(),
+                        database: "app".into(),
+                        sql: format!("SELECT {i} FROM orders_{i}"),
+                        duration_ms: 3,
+                        status: HistoryStatus::Ok,
+                        rows: Some(1),
+                        error: None,
+                    },
+                    Retention::default(),
+                )
                 .unwrap();
         }
         store
-            .add_history(&NewHistoryEntry {
-                connection_id: None,
-                connection_name: "dev".into(),
-                database: "app".into(),
-                sql: "ALTER ROLE app PASSWORD 'topsecret'".into(),
-                duration_ms: 1,
-                status: HistoryStatus::Error,
-                rows: None,
-                error: Some("failed for postgres://app:topsecret@x".into()),
-            })
+            .add_history(
+                &NewHistoryEntry {
+                    connection_id: None,
+                    connection_name: "dev".into(),
+                    database: "app".into(),
+                    sql: "ALTER ROLE app PASSWORD 'topsecret'".into(),
+                    duration_ms: 1,
+                    status: HistoryStatus::Error,
+                    rows: None,
+                    error: Some("failed for postgres://app:topsecret@x".into()),
+                },
+                Retention::default(),
+            )
             .unwrap();
         let page =
             store.history(&HistoryQuery { search: Some("orders_".into()), limit: 2, ..Default::default() }).unwrap();
@@ -530,23 +657,93 @@ mod tests {
     }
 
     #[test]
+    fn history_filters_and_retention() {
+        let store = Store::in_memory().unwrap();
+        let entry = |status, conn: &str| NewHistoryEntry {
+            connection_id: Some(conn.into()),
+            connection_name: conn.into(),
+            database: "app".into(),
+            sql: "select 1".into(),
+            duration_ms: 1,
+            status,
+            rows: None,
+            error: None,
+        };
+        for i in 0..6 {
+            let status = if i % 2 == 0 { HistoryStatus::Ok } else { HistoryStatus::Error };
+            store.add_history(&entry(status, if i < 3 { "a" } else { "b" }), Retention::default()).unwrap();
+        }
+        let errors = store
+            .history(&HistoryQuery { status: Some(HistoryStatus::Error), limit: 50, ..Default::default() })
+            .unwrap();
+        assert_eq!(errors.total, 3);
+        let b_ok = store
+            .history(&HistoryQuery {
+                status: Some(HistoryStatus::Ok),
+                connection_id: Some("b".into()),
+                limit: 50,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(b_ok.total, 1);
+        let future =
+            store.history(&HistoryQuery { from_ms: Some(now_ms() + 60_000), limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(future.total, 0);
+        store.apply_retention(Retention { max_entries: 2, max_days: 0 }).unwrap();
+        assert_eq!(store.history(&HistoryQuery { limit: 50, ..Default::default() }).unwrap().total, 2);
+        store.clear_history(Some("b")).unwrap();
+        assert_eq!(store.history(&HistoryQuery { limit: 50, ..Default::default() }).unwrap().total, 0);
+    }
+
+    #[test]
     fn settings_and_scripts() {
         let store = Store::in_memory().unwrap();
         assert_eq!(store.settings().unwrap(), Settings::default());
         let saved = store.save_settings(Settings { row_limit: 0, ..Settings::default() }).unwrap();
         assert_eq!(saved.row_limit, 1);
         let script = store
-            .save_script(&ScriptDraft { id: None, name: "paid".into(), sql: "select 1".into(), connection_id: None })
+            .save_script(&ScriptDraft { name: "paid".into(), sql: "select 1".into(), ..ScriptDraft::default() })
             .unwrap();
         store
             .save_script(&ScriptDraft {
                 id: Some(script.id.clone()),
                 name: "paid 2".into(),
                 sql: "select 2".into(),
-                connection_id: None,
+                folder: Some(" Reports ".into()),
+                tags: vec!["b".into(), "a".into(), "a".into(), " ".into()],
+                ..ScriptDraft::default()
             })
             .unwrap();
-        assert_eq!(store.scripts().unwrap()[0].name, "paid 2");
+        let other = store
+            .save_script(&ScriptDraft {
+                name: "z".into(),
+                sql: "select 3".into(),
+                pinned: true,
+                ..ScriptDraft::default()
+            })
+            .unwrap();
+        let scripts = store.scripts().unwrap();
+        assert_eq!(scripts[0].id, other.id, "pinned scripts come first");
+        assert_eq!(
+            (scripts[1].folder.as_deref(), scripts[1].tags.clone()),
+            (Some("Reports"), vec!["a".to_owned(), "b".to_owned()])
+        );
+        store.update_script_sql(&script.id, "select 4").unwrap();
+        assert_eq!(store.scripts().unwrap()[1].sql, "select 4");
+        assert!(store.update_script_sql("missing", "x").is_err());
+
+        let snippet = store
+            .save_snippet(&SnippetDraft {
+                id: None,
+                name: "Count".into(),
+                prefix: "cnt".into(),
+                body: "SELECT count(*) FROM ${1:table};".into(),
+            })
+            .unwrap();
+        assert!(store.save_snippet(&SnippetDraft { prefix: "bad prefix".into(), ..SnippetDraft::default() }).is_err());
+        assert_eq!(store.snippets().unwrap().len(), 1);
+        store.delete_snippet(&snippet.id).unwrap();
+        assert!(store.snippets().unwrap().is_empty());
         store.set_value("workspace:c1", &serde_json::json!({"tabs": []})).unwrap();
         assert_eq!(store.get_value("workspace:c1").unwrap().unwrap()["tabs"], serde_json::json!([]));
     }

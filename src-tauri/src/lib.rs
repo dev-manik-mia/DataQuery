@@ -70,6 +70,8 @@ pub fn run() {
             commands::query::run_sql,
             commands::query::fetch_more,
             commands::query::cancel_query,
+            commands::query::transaction,
+            commands::query::explain,
             commands::table::table_structure,
             commands::table::table_ddl,
             commands::table::table_page,
@@ -81,9 +83,14 @@ pub fn run() {
             commands::transfer::import_csv,
             commands::history::list_history,
             commands::history::clear_history,
+            commands::history::apply_history_retention,
             commands::history::list_scripts,
             commands::history::save_script,
+            commands::history::update_script_sql,
             commands::history::delete_script,
+            commands::history::list_snippets,
+            commands::history::save_snippet,
+            commands::history::delete_snippet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataQuery");

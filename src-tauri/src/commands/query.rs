@@ -1,16 +1,19 @@
 use std::time::Instant;
 
+use dq_core::explain::{ExplainDialect, ExplainResult};
 use dq_core::result::{ExecOptions, RowsPage, StatementResult};
-use dq_core::sql::split_statements;
+use dq_core::sql::{
+    SqlFlavor, StatementInfo, StatementKind, TxEffect, redact_literals, split_statements, transaction_effect,
+};
 use dq_core::{DbError, ErrorKind};
-use dq_store::{HistoryStatus, NewHistoryEntry};
-use serde::Serialize;
+use dq_store::{HistoryStatus, NewHistoryEntry, Retention};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
 
 use super::{CmdResult, Guarded};
 use crate::safety::{self, Confirmation, Intent};
-use crate::state::AppState;
+use crate::state::{AppState, OpenSession, TxStatus};
 
 const MAX_SCRIPT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -35,24 +38,65 @@ pub struct RunReport {
     pub skipped: u32,
     #[ts(type = "number")]
     pub duration_ms: u64,
+    /// Transaction state after the run.
+    pub tx: TxStatus,
+}
+
+/// Next transaction state after a statement ran (or failed).
+fn next_tx(current: TxStatus, sql: &str, flavor: SqlFlavor, failed: bool) -> TxStatus {
+    if failed {
+        // PostgreSQL aborts the whole transaction; MySQL keeps it usable.
+        return if current == TxStatus::Open && flavor == SqlFlavor::Postgres { TxStatus::Failed } else { current };
+    }
+    match transaction_effect(sql, flavor) {
+        TxEffect::Begin => TxStatus::Open,
+        TxEffect::End => TxStatus::Auto,
+        TxEffect::RollbackToSavepoint if current == TxStatus::Failed => TxStatus::Open,
+        TxEffect::RollbackToSavepoint | TxEffect::None => current,
+    }
+}
+
+/// Starts a transaction when manual-commit mode is on and none is open.
+async fn begin_if_manual(
+    open: &OpenSession,
+    settings: &dq_store::Settings,
+    statements: &[StatementInfo],
+) -> CmdResult<()> {
+    let only_tx_control = statements.iter().all(|s| s.kind == StatementKind::Transaction);
+    if settings.manual_commit && open.tx_status() == TxStatus::Auto && !only_tx_control {
+        let options = ExecOptions { row_limit: 1, timeout_secs: settings.timeout_secs };
+        open.session.execute("BEGIN", &[], options).await?;
+        open.set_tx_status(TxStatus::Open);
+    }
+    Ok(())
 }
 
 /// Runs one statement or a whole script, stopping at the first error.
-/// Destructive and production writes need a confirmation first.
+/// Destructive and production writes need a confirmation first. `params`
+/// bind the placeholders of a single statement.
 #[tauri::command]
 pub async fn run_sql(
     state: State<'_, AppState>,
     session_id: String,
     sql: String,
+    params: Option<Vec<Option<String>>>,
     confirmation: Option<Confirmation>,
 ) -> CmdResult<Guarded<RunReport>> {
     if sql.len() > MAX_SCRIPT_BYTES {
         return Err(DbError::invalid("Scripts larger than 8 MB cannot be run from the editor."));
     }
     let open = state.session(&session_id).await?;
-    let statements = split_statements(&sql, open.session.dialect().flavor());
+    let flavor = open.session.dialect().flavor();
+    let statements = split_statements(&sql, flavor);
     if statements.is_empty() {
         return Err(DbError::invalid("There is no statement to run."));
+    }
+    let params = params.unwrap_or_default();
+    if !params.is_empty() && statements.len() > 1 {
+        return Err(DbError::invalid("Parameters can be given for one statement at a time."));
+    }
+    if params.len() > 10_000 || params.iter().flatten().map(String::len).sum::<usize>() > MAX_SCRIPT_BYTES {
+        return Err(DbError::invalid("Too many or too large parameter values."));
     }
     let (connection, settings) = tokio::try_join!(state.connection(&open.connection_id), state.settings())?;
     if let Some(request) =
@@ -63,17 +107,21 @@ pub async fn run_sql(
 
     let options = ExecOptions { row_limit: settings.row_limit, timeout_secs: settings.timeout_secs };
     let started = Instant::now();
+    begin_if_manual(&open, &settings, &statements).await?;
     let mut outcomes = Vec::with_capacity(statements.len());
     for (index, statement) in statements.iter().enumerate() {
         let text = statement.text(&sql);
         let ran = Instant::now();
-        let result = open.session.execute(text, &[], options).await;
+        let result = open.session.execute(text, &params, options).await;
+        open.set_tx_status(next_tx(open.tx_status(), text, flavor, result.is_err()));
         if settings.keep_history {
+            let recorded =
+                if settings.history_redact_literals { redact_literals(text, flavor) } else { text.to_owned() };
             let entry = NewHistoryEntry {
                 connection_id: Some(connection.id.clone()),
                 connection_name: connection.name.clone(),
                 database: open.session.info().database.clone(),
-                sql: text.to_owned(),
+                sql: recorded,
                 duration_ms: ran.elapsed().as_millis() as i64,
                 status: match &result {
                     Ok(_) => HistoryStatus::Ok,
@@ -84,8 +132,10 @@ pub async fn run_sql(
                 error: result.as_ref().err().map(|e| e.message.clone()),
             };
             let store = state.store.clone();
+            let retention =
+                Retention { max_entries: settings.history_max_entries, max_days: settings.history_max_days };
             tauri::async_runtime::spawn_blocking(move || {
-                if let Err(e) = store.add_history(&entry) {
+                if let Err(e) = store.add_history(&entry, retention) {
                     tracing::warn!(error = %e, "could not record history");
                 }
             });
@@ -115,8 +165,82 @@ pub async fn run_sql(
             skipped: (statements.len() - outcomes.len()) as u32,
             outcomes,
             duration_ms: started.elapsed().as_millis() as u64,
+            tx: open.tx_status(),
         },
     })
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TxAction {
+    Begin,
+    Commit,
+    Rollback,
+}
+
+/// BEGIN / COMMIT / ROLLBACK on the session's query connection.
+#[tauri::command]
+pub async fn transaction(state: State<'_, AppState>, session_id: String, action: TxAction) -> CmdResult<TxStatus> {
+    let open = state.session(&session_id).await?;
+    let current = open.tx_status();
+    let sql = match (action, current) {
+        (TxAction::Begin, TxStatus::Auto) => "BEGIN",
+        (TxAction::Begin, _) => return Err(DbError::invalid("A transaction is already open.")),
+        (TxAction::Commit, TxStatus::Failed) => {
+            return Err(DbError::invalid("The transaction failed; only Rollback is possible."));
+        }
+        (TxAction::Commit | TxAction::Rollback, TxStatus::Auto) => {
+            return Err(DbError::invalid("No transaction is open."));
+        }
+        (TxAction::Commit, TxStatus::Open) => "COMMIT",
+        (TxAction::Rollback, _) => "ROLLBACK",
+    };
+    let settings = state.settings().await?;
+    let result =
+        open.session.execute(sql, &[], ExecOptions { row_limit: 1, timeout_secs: settings.timeout_secs }).await;
+    // A failed COMMIT or ROLLBACK still ends the transaction on the server.
+    let next = match (action, &result) {
+        (TxAction::Begin, Ok(_)) => TxStatus::Open,
+        (TxAction::Begin, Err(_)) => current,
+        _ => TxStatus::Auto,
+    };
+    open.set_tx_status(next);
+    result.map(|_| next)
+}
+
+/// Plans a single statement. `analyze` runs it, so only read-only statements may be analyzed.
+#[tauri::command]
+pub async fn explain(
+    state: State<'_, AppState>,
+    session_id: String,
+    sql: String,
+    params: Option<Vec<Option<String>>>,
+    analyze: bool,
+) -> CmdResult<ExplainResult> {
+    let open = state.session(&session_id).await?;
+    let flavor = open.session.dialect().flavor();
+    let statements = split_statements(&sql, flavor);
+    let [statement] = statements.as_slice() else {
+        return Err(DbError::invalid("Explain one statement at a time."));
+    };
+    if analyze && statement.writes {
+        return Err(DbError::invalid(
+            "EXPLAIN ANALYZE runs the statement. Only read-only statements can be analyzed; use Explain for writes.",
+        ));
+    }
+    let settings = state.settings().await?;
+    let dialect = ExplainDialect::new(flavor, &open.session.info().version);
+    let explain_sql = dialect.statement(statement.text(&sql), analyze);
+    let options = ExecOptions { row_limit: 10_000, timeout_secs: settings.timeout_secs };
+    let result = open.session.execute(&explain_sql, &params.unwrap_or_default(), options).await?;
+    let raw = result
+        .rows
+        .iter()
+        .map(|row| row.iter().filter_map(dq_core::value::Cell::to_text).collect::<Vec<_>>().join("\t"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    dialect.parse(raw, analyze)
 }
 
 #[tauri::command]

@@ -94,12 +94,8 @@ pub enum TxEffect {
 /// The transaction effect of one statement.
 pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
     let tokens = tokenize(sql, flavor);
-    let words: Vec<String> = tokens
-        .iter()
-        .filter(|t| !t.is_trivia())
-        .take(4)
-        .map(|t| t.text(sql).to_ascii_uppercase())
-        .collect();
+    let words: Vec<String> =
+        tokens.iter().filter(|t| !t.is_trivia()).take(4).map(|t| t.text(sql).to_ascii_uppercase()).collect();
     let word = |i: usize| words.get(i).map_or("", String::as_str);
     match word(0) {
         "BEGIN" | "START" => TxEffect::Begin,
@@ -445,7 +441,10 @@ mod tests {
 
     #[test]
     fn literals_are_redacted() {
-        assert_eq!(redact_literals("select * from t where a = 'x''y' and b = 1", PG), "select * from t where a = '…' and b = 1");
+        assert_eq!(
+            redact_literals("select * from t where a = 'x''y' and b = 1", PG),
+            "select * from t where a = '…' and b = 1"
+        );
         assert_eq!(redact_literals("select $$secret$$", PG), "select '…'");
     }
 
