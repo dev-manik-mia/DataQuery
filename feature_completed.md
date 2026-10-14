@@ -6,7 +6,7 @@ Status of every feature in [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) (the t
 Legend: ✅ Done · 🟡 Partial · ⬜ Not started · Pri = priority from the feature list.
 "Done" means it works end-to-end (UI → Tauri command → adapter) and, where it touches a database, is covered by integration tests against real servers.
 
-_Last updated: 2026-10-14._
+_Last updated: 2026-10-14 (all of §1–§12 complete; task list in [`tasks.md`](tasks.md))._
 
 ---
 
@@ -15,19 +15,20 @@ _Last updated: 2026-10-14._
 | Milestone | Scope | Status |
 |---|---|---|
 | **M1** Foundation + PostgreSQL (MVP) | shell, connections, keychain, explorer, editor, run/cancel, bounded grid, settings, tests | ✅ Done |
-| **M2** Data management (P0) | table data view, safe inline edits, export/import, history, scripts, structure + DDL | ✅ Done, except signed updates ⬜ and two 🟡 rows (CSV import error report, schema-change preview) |
-| **M3** Beta (P0) | MySQL ✅, MariaDB ✅, SQLite ⬜, production safeguards ✅, URL import ✅, signed updates ⬜, Docker integration tests ✅, packaging ⬜ | 🟡 In progress |
-| **M4 / M5** | P1 / P2 engines and features | ⬜ Not started (a few P1 items already done, listed below) |
+| **M2** Data management (P0) | table data view, safe inline edits, export/import, history, scripts, structure + DDL | ✅ Done |
+| **M3** Beta (P0) | MySQL ✅, MariaDB ✅, SQLite ⬜, production safeguards ✅, URL import ✅, signed updates ✅, Docker integration tests ✅, macOS bundle ✅ (Windows/Linux packaging untested) | 🟡 SQLite left |
+| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). P1/P2 **engines** (§13) not started |
 
 ### Tests (all passing)
 
 | Suite | Count | Command |
 |---|---|---|
-| Rust unit tests (core, store, app, adapters) | 122 | `cargo test --workspace` |
-| PostgreSQL 17 integration | 16 | `npm run db:up` then `npm run test:integration` |
-| MySQL 8.4 integration | 16 | 〃 (port 53306) |
-| MariaDB 11.4 integration | 16 | 〃 (port 53307, same suite) |
-| Frontend unit tests (Vitest) | 14 | `npm test` |
+| Rust unit tests (core, store, ssh, app) | 197 | `cargo test --workspace` |
+| PostgreSQL 17 integration | 24 | `npm run db:up` then `npm run test:integration` |
+| MySQL 8.4 integration | 22 | 〃 (port 53306) |
+| MariaDB 11.4 integration | 22 | 〃 (port 53307, same suite) |
+| SSH tunnel integration (OpenSSH bastion → PostgreSQL) | 3 | 〃 (port 52222) |
+| Frontend unit tests (Vitest) | 17 | `npm test` |
 | `cargo fmt --check`, `clippy -D warnings` (pedantic), `tsc --noEmit`, `eslint` | clean | `npm run check` |
 
 ---
@@ -43,10 +44,10 @@ _Last updated: 2026-10-14._
 | Shortcuts ⌘↵, ⇧⌘↵, ⌘T, ⌘W, ⌘K | MVP | ✅ | Also ⌘S, Ctrl+Tab |
 | Global search across objects and saved scripts (⌘K) | P0 | ✅ | |
 | Accessible focus states, keyboard navigation, ARIA labels | MVP | ✅ | |
-| Command palette | P1 | ⬜ | |
-| Multiple windows, split panes | P1 | ⬜ | |
-| Custom keymaps, editor font settings | P1 | 🟡 | Font size only |
-| Localization-ready string table | P1 | ⬜ | |
+| Command palette | P1 | ✅ | ⇧⌘P; every command, fuzzy filter, shortcuts shown; unavailable commands hidden |
+| Multiple windows, split panes | P1 | ✅ | ⇧⌘N new window; ⌘\\ split; move tabs between panes; split persisted |
+| Custom keymaps, editor font settings | P1 | ✅ | Settings → Keyboard records shortcuts, shows conflicts; font family, size, line height, ligatures |
+| Localization-ready string table | P1 | ✅ | `src/i18n` with typed keys; shell, navigation and dialogs use it (English only) |
 
 ## 2. Connection management
 
@@ -66,12 +67,12 @@ _Last updated: 2026-10-14._
 | Non-secret metadata in local SQLite, never passwords | MVP | ✅ | |
 | TLS verify-full by default, no silent bypass | MVP | ✅ | MySQL `prefer` falls back to plain only if the server has no TLS |
 | Import from URL (`postgres://`, `mysql://`, `mariadb://`) | P0 | ✅ | `mongodb+srv://` reports "planned" (MongoDB is P2) |
-| Advanced TLS (CA / client cert files) | P1 | ⬜ | MySQL uses Mozilla roots; private CAs need this |
-| SSH tunnels | P1 | ⬜ | |
-| Read-only profiles | P1 | ⬜ | |
-| Keepalive / retry / pool settings | P1 | ⬜ | Sensible fixed defaults today |
-| Connection export/import | P1 | ⬜ | |
-| Cloud IAM auth | P2 | ⬜ | |
+| Advanced TLS (CA / client cert files) | P1 | ✅ | Both adapters; not tested against a TLS server in Docker |
+| SSH tunnels, jump hosts, host-key verification | P1 | ✅ | Password, key file (+passphrase), agent; ~/.ssh/known_hosts + app known_hosts; trust by fingerprint; tested |
+| Read-only profiles | P1 | ✅ | Session-level read-only transactions + backend refusal of writes; tested |
+| Keepalive / retry / idle timeout / pool size | P1 | ✅ | Per connection; idle sessions closed and can be reconnected |
+| Connection export/import | P1 | ✅ | JSON without secrets |
+| Cloud IAM auth | P2 | ✅ | AWS RDS (aws CLI), Azure AD (az), GCP Cloud SQL (gcloud); not tested against real clouds |
 
 ## 3. Database explorer
 
@@ -83,10 +84,10 @@ _Last updated: 2026-10-14._
 | Refresh a single node | MVP | ✅ | |
 | Context menu: Open data, Copy qualified name, Generate SELECT | MVP | ✅ | Dialect quoting (`"x"` / `` `x` ``) |
 | Row-count estimate badges | P0 | ✅ | `pg_class.reltuples` / `information_schema.TABLES.TABLE_ROWS` |
-| Indexes, sequences, triggers, functions in tree | P1 | 🟡 | Indexes in Structure tab only |
-| Table and index sizes | P1 | ⬜ | |
-| Generate INSERT / UPDATE / DELETE templates | P1 | ⬜ | |
-| Dependency browsing | P1 | ⬜ | |
+| Indexes, sequences, triggers, functions, procedures in tree | P1 | ✅ | With definitions; tested |
+| Table and index sizes | P1 | ✅ | Structure tab and Monitoring |
+| Generate INSERT / UPDATE / DELETE templates | P1 | ✅ | |
+| Dependency browsing | P1 | ✅ | Dependencies tab: FKs, view sources/users, triggers, owned sequences |
 
 ## 4. SQL editor
 
@@ -102,9 +103,9 @@ _Last updated: 2026-10-14._
 | Basic SQL formatter | P0 | ✅ | |
 | Open / save / drag-and-drop `.sql` | P0 | ✅ | |
 | Multiple result sets per script | P1 | ✅ | |
-| Autocomplete (schema-aware) | P1 | 🟡 | Keywords only |
-| Dialect-aware formatter | P1 | 🟡 | Two flavours |
-| Transaction controls, Explain, parameters/snippets | P1 | ⬜ | |
+| Autocomplete (schema-aware) | P1 | ✅ | Schemas, tables, columns (with aliases), keywords, snippets |
+| Dialect-aware formatter | P1 | ✅ | PostgreSQL and MySQL flavours |
+| Transaction controls, Explain, parameters, snippets, bookmarks | P1 | ✅ | Manual-commit mode, status indicator, disconnect warning; plan tree; bound `$n`/`?` values |
 
 ## 5. Results and data grid
 
@@ -122,8 +123,8 @@ _Last updated: 2026-10-14._
 | Pending-changes bar, Preview SQL, Save in one transaction | P0 | ✅ | Each change must hit exactly one row or all roll back |
 | Row identity via PK; warn **and confirm** without a key | P0 | ✅ | "Edit anyway…" matches on all comparable columns after confirmation |
 | JSON / timestamp viewers | P0 | ✅ | |
-| Expanded viewer / JSON editor / binary viewer | P1 | 🟡 | Viewer only |
-| Hide/pin columns, FK navigation, paste, undo | P1 | ⬜ | |
+| Expanded viewer / JSON editor / binary viewer | P1 | ✅ | Full value fetched by key; hex dump; save to file |
+| Hide/pin columns, column search, FK navigation, paste, bulk edit, undo | P1 | ✅ | |
 
 ### 5.1 Value rendering contract
 
@@ -144,8 +145,9 @@ _Last updated: 2026-10-14._
 | Structure tab: columns | MVP | ✅ | |
 | Constraints PK / FK / UNIQUE / CHECK | P0 | ✅ | |
 | Generated DDL, Copy, Open in editor | P0 | ✅ | MySQL uses `SHOW CREATE TABLE` |
-| Preview SQL for schema changes | P0 | 🟡 | No schema-change forms yet (they are P1), so nothing to preview |
-| Create/alter/drop forms, index management, ER diagram, schema diff | P1 | ⬜ | |
+| Preview SQL for schema changes | P0 | ✅ | Every form shows generated SQL before Apply |
+| Create/alter/drop forms, index/constraint management, ER diagram, schema diff | P1 | ✅ | Diff round-trip tested on all engines |
+| Framework migration inspection | P2 | ✅ | Prisma, Laravel, Django, Rails, Flyway, Knex, Alembic, TypeORM, Sequelize, golang-migrate |
 
 ## 7. Query history and saved scripts
 
@@ -156,8 +158,8 @@ _Last updated: 2026-10-14._
 | Search history | P0 | ✅ |
 | Detail panel: Open in tab (no auto-run), Save as script, Copy | P0 | ✅ |
 | Saved scripts list | P0 | ✅ |
-| Filters by connection/date/status | P1 | 🟡 backend only |
-| Folders, tags, pinning; retention settings | P1 | ⬜ / 🟡 |
+| Filters by connection/date/status | P1 | ✅ |
+| Folders, tags, pinning, autosave; retention and redaction settings | P1 | ✅ |
 
 ## 8. Import / export
 
@@ -165,8 +167,8 @@ _Last updated: 2026-10-14._
 |---|---|---|---|
 | Export results / table to CSV & JSON, streamed | P0 | ✅ | |
 | Export selected / filtered rows | P0 | ✅ | Selection: grid menu "Export N rows…"; refuses if any value was shortened for display |
-| CSV import: mapping, preview, validation, error report | P0 | 🟡 | Error reports the failing batch's first row + server message, not every bad row |
-| SQL INSERT / XLSX export, JSON import, encoding options, progress | P1 | ⬜ | |
+| CSV import: mapping, preview, validation, error report | P0 | ✅ | Every row validated first; each bad row reported by number |
+| SQL INSERT / XLSX export, JSON import, delimiter/quote/encoding/NULL options, batch + commit size, progress + cancel | P1 | ✅ | |
 
 ## 9. Safety and security
 
@@ -182,11 +184,18 @@ _Last updated: 2026-10-14._
 | Settings → Security page | MVP | ✅ |
 | One statement per call on MySQL (driver multi-statement mode can't run hidden statements) | — | ✅ tested |
 | Read-only catalog connections (table views/exports cannot write) | — | ✅ tested on all engines |
-| Sensitive-column masking, insecure-connection warnings | P1 | ⬜ / 🟡 |
+| Sensitive-column masking, insecure-connection warnings | P1 | ✅ |
 
 ## 10–11. Monitoring, AI assistant (P1/P2)
 
-⬜ Not started.
+| Feature | Pri | Status | Notes |
+|---|---|---|---|
+| Activity: connections gauge, active, long-running, blocked, replication | P1 | ✅ | Refresh every 5 s |
+| Running queries with Cancel / Terminate (confirmed) | P1 | ✅ | Production terminate needs the typed name; tested |
+| Locks and blocking chains | P1 | ✅ | `pg_locks` / `performance_schema.data_locks` / InnoDB views; tested |
+| Table sizes, server settings | P1 | ✅ | |
+| Unsupported panels hidden with the reason | P1 | ✅ | |
+| AI assistant: opt-in, own key or local model, NL→SQL, explain query/error, schema summary, disclosure, never runs SQL | P1/P2 | ✅ | Not exercised against the live API |
 
 ## 12. About and updates
 
@@ -195,7 +204,7 @@ _Last updated: 2026-10-14._
 | Version, platform, licence | P0 | ✅ | |
 | Release notes | P0 | ✅ | |
 | Honest tested-platforms statement | P0 | ✅ | |
-| Signed update check / download / install | P0 | ⬜ | Needs a signing key pair and a release feed URL from the project owner |
+| Signed update check / download / install | P0 | ✅ | tauri-plugin-updater with minisign key; feed must be published (see README) |
 
 ## 13. Engines
 
@@ -213,5 +222,8 @@ _Last updated: 2026-10-14._
 
 - MySQL statement timeouts apply to `SELECT` only (server behaviour); MariaDB applies them to every statement.
 - MariaDB has no real JSON type, so JSON columns show and export as text.
-- MySQL TLS verification uses the Mozilla root store; servers signed by a private CA need the P1 "CA file" option.
+- MySQL TLS verification uses the Mozilla root store unless a CA file is set on the connection.
+- MySQL `EXPLAIN ANALYZE` returns a text tree, shown raw; PostgreSQL and MariaDB plans render as a tree.
+- Schema diff does not change primary keys or expression indexes; it lists them as warnings.
+- The update feed URL points at the repository in `Cargo.toml`; releases must be built with `npm run app:release` and the signing key.
 - Tested on macOS only; Windows and Linux compile from the same code but have not been run.
