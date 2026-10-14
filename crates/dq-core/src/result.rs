@@ -88,3 +88,28 @@ pub struct ServerInfo {
     pub database: String,
     pub read_only: bool,
 }
+
+/// A catalog row read as text; `None` is SQL NULL. Adapters read their own
+/// catalog queries this way so the catalog code stays simple and exact.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextRow(pub Vec<Option<String>>);
+
+impl TextRow {
+    pub fn text(&self, i: usize) -> Option<String> {
+        self.0.get(i).cloned().flatten()
+    }
+
+    pub fn string(&self, i: usize) -> String {
+        self.text(i).unwrap_or_default()
+    }
+
+    /// Integer value; a decimal part is ignored.
+    pub fn number(&self, i: usize) -> Option<i64> {
+        self.text(i).and_then(|v| v.split('.').next().and_then(|n| n.trim().parse().ok()))
+    }
+
+    /// `1`, `true`, `Y` and `YES` (any case) are true.
+    pub fn flag(&self, i: usize) -> bool {
+        self.text(i).is_some_and(|v| matches!(v.to_ascii_uppercase().as_str(), "1" | "TRUE" | "Y" | "YES"))
+    }
+}

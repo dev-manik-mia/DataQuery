@@ -37,7 +37,7 @@ thiserror = "2"
 tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "chrono"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 quick-xml = "0.42"
-oracle-rs = "0.1.7"
+oracle = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "process"] }
 tokio-postgres = "0.7"
 tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"] }

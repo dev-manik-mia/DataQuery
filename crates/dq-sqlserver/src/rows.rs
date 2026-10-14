@@ -2,6 +2,7 @@
 //! decoder, so the catalog code stays simple and exact.
 
 use dq_core::DbResult;
+pub use dq_core::result::TextRow;
 use dq_core::value::CellLimits;
 use futures_util::TryStreamExt;
 use tiberius::{QueryItem, ToSql};
@@ -9,27 +10,6 @@ use tiberius::{QueryItem, ToSql};
 use crate::connect::Conn;
 use crate::error::map_error;
 use crate::values::cell_text;
-
-/// One catalog row; `None` is SQL NULL.
-pub struct TextRow(pub Vec<Option<String>>);
-
-impl TextRow {
-    pub fn text(&self, i: usize) -> Option<String> {
-        self.0.get(i).cloned().flatten()
-    }
-
-    pub fn string(&self, i: usize) -> String {
-        self.text(i).unwrap_or_default()
-    }
-
-    pub fn number(&self, i: usize) -> Option<i64> {
-        self.text(i).and_then(|v| v.split('.').next().and_then(|n| n.parse().ok()))
-    }
-
-    pub fn flag(&self, i: usize) -> bool {
-        matches!(self.text(i).as_deref(), Some("1" | "true" | "TRUE"))
-    }
-}
 
 /// Runs a catalog query with `@P1…` text parameters and returns its first result set.
 pub async fn text_rows(conn: &mut Conn, sql: &str, params: &[&str], secret: Option<&str>) -> DbResult<Vec<TextRow>> {
