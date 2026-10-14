@@ -36,10 +36,6 @@ pub fn split_args(line: &str) -> DbResult<Vec<Vec<u8>>> {
                     quote = Some(c);
                     i += 1;
                 }
-                None => {
-                    arg.push(c);
-                    i += 1;
-                }
                 Some(b'"') if c == b'\\' => {
                     let (byte, used) = match b.get(i + 1) {
                         Some(b'x') => {
@@ -68,7 +64,7 @@ pub fn split_args(line: &str) -> DbResult<Vec<Vec<u8>>> {
                     }
                     break;
                 }
-                Some(_) => {
+                None | Some(_) => {
                     arg.push(c);
                     i += 1;
                 }

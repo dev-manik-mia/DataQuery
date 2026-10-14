@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::config::SslMode;
-use dq_core::engine::Engine;
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult, TlsInfo};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
@@ -100,15 +99,17 @@ impl RedisSession {
         let server = info_fields(&server);
         let valkey = server.contains_key("valkey_version") || server.get("server_name").is_some_and(|n| n == "valkey");
         let version = if valkey {
-            format!("Valkey {}", server.get("valkey_version").or_else(|| server.get("redis_version")).cloned().unwrap_or_default())
+            format!(
+                "Valkey {}",
+                server.get("valkey_version").or_else(|| server.get("redis_version")).cloned().unwrap_or_default()
+            )
         } else {
             format!("Redis {}", server.get("redis_version").cloned().unwrap_or_default())
         };
-        let user: String = redis::cmd("ACL")
-            .arg("WHOAMI")
-            .query_async(&mut conn)
-            .await
-            .unwrap_or_else(|_| if config.username.is_empty() { "default".into() } else { config.username.clone() });
+        let user: String =
+            redis::cmd("ACL").arg("WHOAMI").query_async(&mut conn).await.unwrap_or_else(|_| {
+                if config.username.is_empty() { "default".into() } else { config.username.clone() }
+            });
         let cluster: String = redis::cmd("INFO").arg("cluster").query_async(&mut conn).await.unwrap_or_default();
         let databases = if info_fields(&cluster).get("cluster_enabled").is_some_and(|v| v == "1") {
             1
@@ -126,7 +127,11 @@ impl RedisSession {
             engine: config.engine,
             version,
             latency_ms: started.elapsed().as_millis() as u64,
-            tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user,
             database: db.to_string(),
             read_only: config.read_only,
@@ -144,10 +149,6 @@ impl RedisSession {
             pending: SyncMutex::new(Vec::new()),
             catalog: SyncMutex::new(HashMap::new()),
         })
-    }
-
-    pub(crate) fn engine(&self) -> Engine {
-        self.info.engine
     }
 
     /// The session's own database (from the connection settings).
@@ -179,7 +180,11 @@ impl RedisSession {
         result.map_err(map_error)
     }
 
-    pub(crate) async fn pipe_catalog<T: redis::FromRedisValue>(&self, database: u32, pipe: &redis::Pipeline) -> DbResult<T> {
+    pub(crate) async fn pipe_catalog<T: redis::FromRedisValue>(
+        &self,
+        database: u32,
+        pipe: &redis::Pipeline,
+    ) -> DbResult<T> {
         let mut conn = self.catalog(database).await?;
         let result = pipe.query_async(&mut conn).await;
         self.forget_if_broken(database, result.as_ref().err());
@@ -235,10 +240,11 @@ impl RedisSession {
                 Err(map_error(e))
             }
             Ok(reply) => {
-                if reply.is_ok() && args[0].eq_ignore_ascii_case(b"SELECT") {
-                    if let Some(db) = args.get(1).and_then(|d| std::str::from_utf8(d).ok()).and_then(|d| d.parse().ok()) {
-                        q.db = db;
-                    }
+                if reply.is_ok()
+                    && args[0].eq_ignore_ascii_case(b"SELECT")
+                    && let Some(db) = args.get(1).and_then(|d| std::str::from_utf8(d).ok()).and_then(|d| d.parse().ok())
+                {
+                    q.db = db;
                 }
                 Ok((reply, q.db))
             }
@@ -278,7 +284,13 @@ impl RedisSession {
     }
 
     /// Runs a command on a catalog connection and streams its grid rows.
-    async fn read_batches(&self, database: &str, sql: &str, limits: CellLimits, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
+    async fn read_batches(
+        &self,
+        database: &str,
+        sql: &str,
+        limits: CellLimits,
+        on_batch: &mut BatchFn<'_>,
+    ) -> DbResult<u64> {
         self.guard(sql)?;
         let args = parse_line(sql)?;
         let value: Value = self.query_catalog(self.database_arg(database), &command(&args)).await?;

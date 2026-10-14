@@ -10,6 +10,7 @@ license.workspace = true
 dq-core.workspace = true
 async-trait.workspace = true
 redis.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

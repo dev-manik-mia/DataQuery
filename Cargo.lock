@@ -1980,6 +1980,7 @@ dependencies = [
  "async-trait",
  "dq-core",
  "redis",
+ "serde_json",
  "tokio",
  "tracing",
  "uuid",

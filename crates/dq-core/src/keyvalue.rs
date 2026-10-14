@@ -98,7 +98,7 @@ pub enum KeyType {
     Set,
     Zset,
     Stream,
-    /// A module type (RedisJSON, time series, …), shown read-only.
+    /// A module type (`RedisJSON`, time series, …), shown read-only.
     Other,
 }
 

@@ -5,6 +5,7 @@ import type { ColumnSearch } from "./ColumnSearch";
 import type { ColumnValue } from "./ColumnValue";
 import type { FindRequest } from "./FindRequest";
 import type { ObjectRef } from "./ObjectRef";
+import type { ScanRequest } from "./ScanRequest";
 import type { SortSpec } from "./SortSpec";
 
 export type ExportSource = { "type": "query", sql: string, } | { "type": "table", object: ObjectRef, sort: SortSpec | null, 
@@ -19,4 +20,4 @@ matches: Array<ColumnValue>,
 /**
  * Per-column searches from the grid header.
  */
-searches: Array<ColumnSearch>, } | { "type": "documents", request: FindRequest, } | { "type": "rows", columns: Array<ColumnMeta>, rows: Array<Array<Cell>>, };
+searches: Array<ColumnSearch>, } | { "type": "documents", request: FindRequest, } | { "type": "keys", request: ScanRequest, } | { "type": "rows", columns: Array<ColumnMeta>, rows: Array<Array<Cell>>, };

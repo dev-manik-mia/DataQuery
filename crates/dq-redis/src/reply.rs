@@ -54,6 +54,7 @@ fn format_into(value: &Value, prefix: &str, out: &mut String) {
             format_list(items.iter().map(|v| (v, None)), items.len(), sep, prefix, out);
         }
         Value::Map(pairs) => format_list(pairs.iter().map(|(k, v)| (v, Some(k))), pairs.len(), '#', prefix, out),
+        _ => out.push_str("(unsupported reply)\n"),
     }
 }
 
@@ -116,11 +117,7 @@ pub(crate) fn quoted(bytes: &[u8]) -> String {
 }
 
 fn format_double(d: f64) -> String {
-    if d.is_infinite() {
-        if d > 0.0 { "inf".into() } else { "-inf".into() }
-    } else {
-        d.to_string()
-    }
+    if d.is_infinite() { if d > 0.0 { "inf".into() } else { "-inf".into() } } else { d.to_string() }
 }
 
 /// One reply value as a grid cell. Nested values become compact JSON.
@@ -140,7 +137,10 @@ pub(crate) fn cell(value: &Value, limits: CellLimits) -> Cell {
         Value::BigNumber(n) => Cell::number(String::from_utf8_lossy(n).into_owned()),
         Value::ServerError(e) => Cell::text(format!("(error) {}", error_text(e)), limits),
         Value::Attribute { data, .. } => cell(data, limits),
-        Value::Array(_) | Value::Set(_) | Value::Map(_) | Value::Push { .. } => Cell::json(json(value).to_string(), limits),
+        Value::Array(_) | Value::Set(_) | Value::Map(_) | Value::Push { .. } => {
+            Cell::json(json(value).to_string(), limits)
+        }
+        _ => Cell::Unsupported { type_name: "reply".into(), value: None },
     }
 }
 
@@ -156,10 +156,7 @@ fn json(value: &Value) -> serde_json::Value {
         }
         Value::Map(pairs) => J::Array(pairs.iter().map(|(k, v)| J::Array(vec![json(k), json(v)])).collect()),
         Value::Attribute { data, .. } => json(data),
-        other => J::String(match cell(other, CellLimits::FULL).to_text() {
-            Some(t) => t,
-            None => String::new(),
-        }),
+        other => J::String(cell(other, CellLimits::FULL).to_text().unwrap_or_default()),
     }
 }
 
@@ -224,11 +221,17 @@ pub(crate) fn to_grid(args: &[Vec<u8>], value: &Value, limits: CellLimits) -> (V
             } else {
                 (
                     vec![meta("#", true), meta("value", false)],
-                    items.iter().enumerate().map(|(i, v)| vec![Cell::number((i + 1).to_string()), cell(v, limits)]).collect(),
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| vec![Cell::number((i + 1).to_string()), cell(v, limits)])
+                        .collect(),
                 )
             }
         }
-        scalar => (vec![meta("reply", matches!(scalar, Value::Int(_) | Value::Double(_)))], vec![vec![cell(scalar, limits)]]),
+        scalar => {
+            (vec![meta("reply", matches!(scalar, Value::Int(_) | Value::Double(_)))], vec![vec![cell(scalar, limits)]])
+        }
     }
 }
 
@@ -264,7 +267,8 @@ mod tests {
         assert_eq!((cols[0].name.as_str(), rows.len()), ("reply", 1));
         let (cols, rows) = to_grid(&args("HGETALL h"), &Value::Array(vec![bulk("f"), bulk("v")]), CellLimits::GRID);
         assert_eq!((cols[0].name.as_str(), rows[0][1].clone()), ("field", Cell::text("v", CellLimits::GRID)));
-        let (cols, rows) = to_grid(&args("LRANGE l 0 -1"), &Value::Array(vec![bulk("a"), Value::Nil]), CellLimits::GRID);
+        let (cols, rows) =
+            to_grid(&args("LRANGE l 0 -1"), &Value::Array(vec![bulk("a"), Value::Nil]), CellLimits::GRID);
         assert_eq!((cols[0].name.as_str(), rows[1][1].clone()), ("#", Cell::Null));
         let streams = Value::Array(vec![Value::Array(vec![bulk("1-0"), Value::Array(vec![bulk("f"), bulk("v")])])]);
         let (cols, rows) = to_grid(&args("XRANGE s - +"), &streams, CellLimits::GRID);
