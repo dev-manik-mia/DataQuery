@@ -15,6 +15,7 @@ import { formatCount, plural } from '@/lib/format';
 import { uid } from '@/lib/id';
 import { api } from '@/lib/ipc';
 
+import { useCompletion } from './completion';
 import { useExplorer } from './explorer';
 import { useSettings } from './settings';
 import { guarded, useUi } from './ui';
@@ -298,6 +299,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           tx: 'auto',
         });
         useExplorer.getState().reset(session);
+        useCompletion.getState().reset();
         useUi.getState().navigate({ name: 'workspace' });
         return true;
       } catch (e) {
@@ -320,6 +322,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           tabs: s.tabs.map((t) => (t.kind === 'query' ? { ...t, run: { ...t.run, results: t.run.results.map((r) => ({ ...r, canFetchMore: false })) } } : t)),
         }));
         useExplorer.getState().reset(fresh);
+        useCompletion.getState().reset();
         useUi.getState().toast(`Reconnected to ${fresh.connection.name}.`, 'positive');
       } catch (e) {
         set({ link: 'failed' });

@@ -162,3 +162,43 @@
   line-height: 1.7;
   color: var(--ink-2);
 }
+
+.keymap {
+  display: flex;
+  flex-direction: column;
+}
+
+.keymapRow {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr) 140px 170px;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 6px var(--space-4);
+  border-top: 1px solid var(--line-2);
+  font-size: var(--text-ui);
+}
+
+.keyButton {
+  justify-self: start;
+  min-width: 80px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+}
+
+.keyButton[data-recording='true'] {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.keyStatus {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: var(--text-caption);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 80px;
+}
