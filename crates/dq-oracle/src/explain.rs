@@ -7,14 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use dq_core::explain::{ExplainResult, PlanNode};
 use dq_core::{DbError, DbResult};
 use oracle::Connection;
-use oracle::sql_type::ToSql;
 
 use crate::error::map_error;
-use crate::rows::{TextRow, text_rows};
-
-fn binds(params: &[Option<String>]) -> Vec<&dyn ToSql> {
-    params.iter().map(|p| p as &dyn ToSql).collect()
-}
+use crate::rows::{TextRow, prepare, text_rows};
 
 /// Builds the operator tree from `PLAN_TABLE` rows ordered by id.
 fn tree(rows: &[TextRow]) -> Option<PlanNode> {
@@ -64,7 +59,8 @@ pub fn explain(conn: &Connection, sql: &str, params: &[Option<String>], analyze:
         conn.execute("ALTER SESSION SET STATISTICS_LEVEL = ALL", &[]).map_err(err)?;
         let run = (|| {
             let started = std::time::Instant::now();
-            for row in conn.query(sql, &binds(params)).map_err(err)? {
+            let rows = prepare(conn, sql, params).and_then(|s| s.into_result_set::<oracle::Row>(&[])).map_err(err)?;
+            for row in rows {
                 row.map_err(err)?;
             }
             let execution_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -77,7 +73,8 @@ pub fn explain(conn: &Connection, sql: &str, params: &[Option<String>], analyze:
         return run;
     }
     let id = format!("DQ{}", SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos()) % 1_000_000_000_000);
-    conn.execute(&format!("EXPLAIN PLAN SET STATEMENT_ID = '{id}' FOR {sql}"), &binds(params)).map_err(err)?;
+    // Bind variables stay unbound: EXPLAIN PLAN plans the statement without values.
+    conn.execute(&format!("EXPLAIN PLAN SET STATEMENT_ID = '{id}' FOR {sql}"), &[]).map_err(err)?;
     let rows = text_rows(
         conn,
         "SELECT id, parent_id, operation, options, object_owner, object_name, cost, cardinality, bytes, \

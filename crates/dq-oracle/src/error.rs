@@ -5,12 +5,13 @@ use dq_core::{DbError, ErrorKind};
 
 pub fn map_error(e: &oracle::Error, secret: Option<&str>) -> DbError {
     let clean = |s: &str| secret.map_or_else(|| s.to_owned(), |p| redact_known(s, p));
-    let Some(db) = e.db_error() else {
+    // A DPI error (code 0) can carry an ORA- cause in its text.
+    let Some(db) = e.db_error().filter(|d| d.code() != 0) else {
         let message = e.to_string();
         // DPI-1047: no client library; DPI-1067: call timeout.
         let (kind, action) = if message.contains("DPI-1047") {
             (ErrorKind::Unsupported, Some("Install Oracle Instant Client and restart DataQuery."))
-        } else if message.contains("DPI-1067") {
+        } else if message.contains("DPI-1067") || message.contains("ORA-03156") {
             (ErrorKind::Timeout, Some("Narrow the query or raise the statement timeout in Settings."))
         } else if message.contains("DPI-1080") || message.contains("DPI-1010") {
             (ErrorKind::Network, Some("The connection was lost. Run the statement again to reconnect."))

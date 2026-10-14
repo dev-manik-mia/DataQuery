@@ -184,9 +184,12 @@ async fn results_are_bounded_resumable_and_cancellable() {
 
     let runner = s.clone();
     let handle = tokio::spawn(async move { runner.execute("BEGIN DBMS_SESSION.SLEEP(30); END;", &[], OPTS).await });
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let cancel_started = Instant::now();
     assert!(s.cancel().await.unwrap());
+    eprintln!("cancel took {:?}", cancel_started.elapsed());
     let err = handle.await.unwrap().unwrap_err();
+    eprintln!("statement ended {:?} after cancel", cancel_started.elapsed());
     assert_eq!(err.kind, ErrorKind::Cancelled, "{err:?}");
     let err = s.execute("BEGIN DBMS_SESSION.SLEEP(30); END;", &[], ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
     assert!(matches!(err.kind, ErrorKind::Timeout | ErrorKind::Cancelled), "{err:?}");

@@ -382,10 +382,11 @@ fn indexes(conn: &Connection, object: &ObjectRef, columns: &[ColumnInfo], primar
                 if r.string(3) == "DESC" { format!("{key} DESC") } else { key }
             })
             .collect();
+        // A DESC key is an expression over one column, e.g. `SYS_EXTRACT_UTC("AT")`.
         let columns_used: Vec<String> = group
             .iter()
-            .map(|r| match (r.text(4), r.string(3) == "DESC") {
-                (Some(expr), true) => expr.trim().trim_matches('"').to_owned(),
+            .map(|r| match r.text(4) {
+                Some(expr) if r.string(3) == "DESC" => quoted_names(&expr).into_iter().next().unwrap_or(expr),
                 _ => r.string(2),
             })
             .collect();
@@ -405,6 +406,11 @@ fn indexes(conn: &Connection, object: &ObjectRef, columns: &[ColumnInfo], primar
         });
     }
     Ok(out)
+}
+
+/// The `"NAME"` identifiers inside an index expression.
+fn quoted_names(expr: &str) -> Vec<String> {
+    expr.split('"').skip(1).step_by(2).map(str::to_owned).collect()
 }
 
 /// Segment sizes of the table and its indexes. Other schemas need DBA_SEGMENTS access.

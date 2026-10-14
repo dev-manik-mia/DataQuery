@@ -22,7 +22,6 @@ use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
 use dq_core::sql::{Dialect, OracleDialect, SqlFlavor, StatementKind, TxEffect, command_tag, split_statements, transaction_effect};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult, ErrorKind};
-use oracle::sql_type::ToSql;
 use oracle::{Connection, ResultSet, Row};
 use tokio::sync::Mutex;
 
@@ -30,6 +29,7 @@ use crate::catalog;
 use crate::connect;
 use crate::error::map_error;
 use crate::pool::Pool;
+use crate::rows::prepare;
 use crate::values::{column_meta, decode_row};
 
 const STREAM_BATCH: usize = 1_000;
@@ -56,11 +56,6 @@ struct Cursor {
     rows: ResultSet<'static, Row>,
     /// A row read ahead to learn whether more rows exist.
     pending: Option<Row>,
-}
-
-/// Text parameters, bound as VARCHAR2; NULL stays NULL.
-fn binds(params: &[Option<String>]) -> Vec<&dyn ToSql> {
-    params.iter().map(|p| p as &dyn ToSql).collect()
 }
 
 fn read_only_error() -> DbError {
@@ -103,9 +98,45 @@ fn read_rows(cursor: &mut Cursor, limit: u32, secret: Option<&str>) -> DbResult<
     }
 }
 
-fn call_timeout(conn: &Connection, secs: u32) {
-    let timeout = (secs > 0).then(|| Duration::from_secs(u64::from(secs)));
-    let _ = conn.set_call_timeout(timeout);
+/// Runs blocking `work` on the query connection. After `timeout_secs` a
+/// break stops it; unlike Oracle's call timeout, a break keeps the
+/// connection usable.
+async fn with_deadline<T: Send + 'static>(
+    conn: Arc<Connection>,
+    timeout_secs: u32,
+    work: impl FnOnce(&Connection) -> DbResult<T> + Send + 'static,
+) -> DbResult<T> {
+    let done = Arc::new(AtomicBool::new(false));
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let timer = (timeout_secs > 0).then(|| {
+        let (conn, done, timed_out) = (conn.clone(), done.clone(), timed_out.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(u64::from(timeout_secs))).await;
+            if !done.load(Ordering::SeqCst) {
+                timed_out.store(true, Ordering::SeqCst);
+                let _ = tokio::task::spawn_blocking(move || conn.break_execution()).await;
+            }
+        })
+    });
+    let finished = done.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let result = work(&conn);
+        finished.store(true, Ordering::SeqCst);
+        result
+    })
+    .await
+    .map_err(|e| DbError::internal(format!("query task failed: {e}")))?;
+    if let Some(timer) = timer {
+        timer.abort();
+    }
+    match result {
+        Err(e) if e.kind == ErrorKind::Cancelled && timed_out.load(Ordering::SeqCst) => Err(DbError::new(
+            ErrorKind::Timeout,
+            format!("The statement ran longer than {timeout_secs} s and was stopped."),
+        )
+        .with_action(Some("Narrow the query or raise the statement timeout in Settings."))),
+        other => other,
+    }
 }
 
 impl OraSession {
@@ -157,18 +188,18 @@ impl OraSession {
         let conn = q.conn.clone();
         let in_transaction = q.in_transaction || effect == TxEffect::Begin;
         let secret = self.secret();
-        let outcome = tokio::task::spawn_blocking(move || -> DbResult<(Vec<ColumnMeta>, Option<Cursor>, Vec<CellRow>, bool, Option<u64>)> {
+        type Outcome = (Vec<ColumnMeta>, Option<Cursor>, Vec<CellRow>, bool, Option<u64>);
+        let outcome = with_deadline(conn, options.timeout_secs, move |conn| -> DbResult<Outcome> {
             let err = |e: oracle::Error| map_error(&e, secret.as_deref());
-            call_timeout(&conn, options.timeout_secs);
-            let mut statement = conn.statement(&sql).build().map_err(err)?;
+            let mut statement = prepare(conn, &sql, &params).map_err(err)?;
             if statement.is_query() {
-                let rows = statement.into_result_set::<Row>(&binds(&params)).map_err(err)?;
+                let rows = statement.into_result_set::<Row>(&[]).map_err(err)?;
                 let columns = column_meta(rows.column_info());
                 let mut cursor = Cursor { rows, pending: None };
                 let (rows, more) = read_rows(&mut cursor, options.row_limit, secret.as_deref())?;
                 return Ok((columns, more.then_some(cursor), rows, more, None));
             }
-            statement.execute(&binds(&params)).map_err(err)?;
+            statement.execute(&[]).map_err(err)?;
             let affected = statement.row_count().map_err(err)?;
             // Outside an explicit transaction every write is committed at once.
             if !in_transaction && !statement.is_ddl() {
@@ -176,8 +207,7 @@ impl OraSession {
             }
             Ok((Vec::new(), None, Vec::new(), false, Some(affected)))
         })
-        .await
-        .map_err(|e| DbError::internal(format!("query task failed: {e}")))?;
+        .await;
         let (columns, cursor, rows, has_more, affected) = match outcome {
             Ok(o) => o,
             Err(e) => {
@@ -212,7 +242,7 @@ impl OraSession {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<DbResult<(Vec<ColumnMeta>, Vec<CellRow>)>>(2);
         let work = self.pool.run(move |conn| {
             let err = |e: oracle::Error| map_error(&e, secret.as_deref());
-            let rows = conn.query(&sql, &binds(&params)).map_err(err)?;
+            let rows = prepare(conn, &sql, &params).and_then(|s| s.into_result_set::<Row>(&[])).map_err(err)?;
             let meta = column_meta(rows.column_info());
             let mut batch = Vec::with_capacity(STREAM_BATCH);
             for row in rows {
@@ -385,8 +415,8 @@ impl Session for OraSession {
             let mut counts = Vec::with_capacity(statements.len());
             let outcome: DbResult<()> = (|| {
                 for statement in &statements {
-                    let mut stmt = conn.statement(&statement.sql).build().map_err(err)?;
-                    stmt.execute(&binds(&statement.params)).map_err(err)?;
+                    let mut stmt = prepare(&conn, &statement.sql, &statement.params).map_err(err)?;
+                    stmt.execute(&[]).map_err(err)?;
                     let affected = stmt.row_count().map_err(err)?;
                     check_affected(statement, affected)?;
                     counts.push(affected);
@@ -409,12 +439,7 @@ impl Session for OraSession {
         let sql = trim_terminator(sql).to_owned();
         let params = params.to_vec();
         let secret = self.secret();
-        tokio::task::spawn_blocking(move || {
-            call_timeout(&conn, timeout_secs);
-            crate::explain::explain(&conn, &sql, &params, analyze, secret.as_deref())
-        })
-        .await
-        .map_err(|e| DbError::internal(format!("explain task failed: {e}")))?
+        with_deadline(conn, timeout_secs, move |conn| crate::explain::explain(conn, &sql, &params, analyze, secret.as_deref())).await
     }
 
     fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
