@@ -59,12 +59,7 @@ async fn session(cfg: &ConnConfig) -> Arc<dyn Session> {
 }
 
 fn table(schema: &str, name: &str) -> ObjectRef {
-    ObjectRef {
-        kind: NodeKind::Table,
-        database: "dataquery_test".into(),
-        schema: Some(schema.into()),
-        name: name.into(),
-    }
+    ObjectRef::new(NodeKind::Table, "dataquery_test", Some(schema.into()), name)
 }
 
 /// Creates a scratch table unique to the calling test.

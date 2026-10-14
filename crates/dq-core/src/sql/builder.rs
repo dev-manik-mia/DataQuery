@@ -185,6 +185,61 @@ pub fn select_template(d: &dyn Dialect, object: &ObjectRef, columns: &[String]) 
     format!("SELECT {list}\nFROM {}\nLIMIT 100;", d.display_name(object))
 }
 
+/// Placeholder text for templates: `$n` (PostgreSQL) or `?` (MySQL).
+fn template_placeholder(d: &dyn Dialect, n: usize) -> String {
+    match d.flavor() {
+        super::SqlFlavor::Postgres => format!("${n}"),
+        super::SqlFlavor::Mysql => "?".to_owned(),
+    }
+}
+
+/// `INSERT` template with a placeholder per insertable column. Never executed by the app.
+pub fn insert_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    let cols: Vec<&ColumnInfo> = structure.columns.iter().filter(|c| c.editable && !c.generated).collect();
+    if cols.is_empty() {
+        return format!("INSERT INTO {} DEFAULT VALUES;", d.display_name(&structure.object));
+    }
+    let names: Vec<String> = cols.iter().map(|c| d.display_ident(&c.name)).collect();
+    let values: Vec<String> = (1..=cols.len()).map(|n| template_placeholder(d, n)).collect();
+    format!("INSERT INTO {} ({})\nVALUES ({});", d.display_name(&structure.object), names.join(", "), values.join(", "))
+}
+
+/// Key columns for templates: the row identity, else a `/* condition */` hint.
+fn template_where(d: &dyn Dialect, structure: &TableStructure, first: usize) -> String {
+    if structure.row_identity.is_empty() {
+        return "/* condition */".to_owned();
+    }
+    structure
+        .row_identity
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{} = {}", d.display_ident(c), template_placeholder(d, first + i)))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+/// `UPDATE` template setting every editable non-key column, matched on the row identity.
+pub fn update_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    let sets: Vec<String> = structure
+        .columns
+        .iter()
+        .filter(|c| c.editable && !c.generated && !structure.row_identity.contains(&c.name))
+        .enumerate()
+        .map(|(i, c)| format!("{} = {}", d.display_ident(&c.name), template_placeholder(d, i + 1)))
+        .collect();
+    format!(
+        "UPDATE {}\nSET {}\nWHERE {};",
+        d.display_name(&structure.object),
+        sets.join(",\n    "),
+        template_where(d, structure, sets.len() + 1)
+    )
+}
+
+/// `DELETE` template matched on the row identity.
+pub fn delete_template(d: &dyn Dialect, structure: &TableStructure) -> String {
+    format!("DELETE FROM {}\nWHERE {};", d.display_name(&structure.object), template_where(d, structure, 1))
+}
+
 /// Collects parameters and produces placeholders, or inlines literals for previews.
 struct Params<'d> {
     dialect: &'d dyn Dialect,
@@ -381,12 +436,7 @@ mod tests {
 
     fn orders() -> TableStructure {
         TableStructure {
-            object: ObjectRef {
-                kind: NodeKind::Table,
-                database: "app".into(),
-                schema: Some("public".into()),
-                name: "orders".into(),
-            },
+            object: ObjectRef::new(NodeKind::Table, "app", Some("public".into()), "orders"),
             columns: vec![
                 col("id", "bigint", true),
                 col("total", "numeric(12,2)", false),
@@ -399,6 +449,8 @@ mod tests {
             full_row_key: Vec::new(),
             comment: None,
             row_estimate: None,
+            foreign_keys: Vec::new(),
+            size: None,
         }
     }
 
@@ -537,6 +589,20 @@ mod tests {
         assert!(PostgresDialect.comparable("numeric(12,2)") && PostgresDialect.comparable("text[]"));
         assert!(!PostgresDialect.comparable("json") && !PostgresDialect.comparable("point"));
         assert!(MysqlDialect.comparable("varchar(10)") && !MysqlDialect.comparable("json"));
+    }
+
+    #[test]
+    fn templates_use_placeholders() {
+        let s = orders();
+        assert_eq!(
+            insert_template(&PostgresDialect, &s),
+            "INSERT INTO public.orders (id, total, geo)\nVALUES ($1, $2, $3);"
+        );
+        assert_eq!(update_template(&PostgresDialect, &s), "UPDATE public.orders\nSET total = $1,\n    geo = $2\nWHERE id = $3;");
+        assert_eq!(delete_template(&MysqlDialect, &s), "DELETE FROM app.orders\nWHERE id = ?;");
+        let mut no_key = orders();
+        no_key.row_identity.clear();
+        assert!(delete_template(&PostgresDialect, &no_key).contains("/* condition */"));
     }
 
     #[test]

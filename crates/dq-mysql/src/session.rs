@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
-use dq_core::schema::TableStructure;
+use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
 use dq_core::sql::{Dialect, MysqlDialect, SqlFlavor, command_tag, split_statements};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult};
@@ -270,6 +270,8 @@ impl Session for MySession {
         match parent {
             None => catalog::databases(&mut self.catalog().await?, &self.info.database).await,
             Some(p) if p.kind == NodeKind::Database => catalog::relations(&mut self.catalog().await?, &p.name).await,
+            Some(p) if p.kind == NodeKind::Table => catalog::table_children(&mut self.catalog().await?, p).await,
+            Some(p) if p.kind == NodeKind::Group => catalog::group_children(&mut self.catalog().await?, p).await,
             Some(_) => Ok(Vec::new()),
         }
     }
@@ -324,6 +326,16 @@ impl Session for MySession {
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {
         catalog::ddl(&mut self.catalog().await?, object).await
+    }
+
+    async fn dependencies(&self, object: &ObjectRef) -> DbResult<Dependencies> {
+        catalog::dependencies(&mut self.catalog().await?, object).await
+    }
+
+    /// MySQL has no schemas: the database is the container, so `schema` is ignored.
+    async fn schema_model(&self, database: &str, _schema: Option<&str>) -> DbResult<SchemaModel> {
+        let database = if database.is_empty() { self.info.database.as_str() } else { database };
+        catalog::schema_model(&mut self.catalog().await?, database).await
     }
 
     /// Generated SQL is fully qualified, so one pool serves every database.

@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
-use dq_core::schema::TableStructure;
+use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
 use dq_core::sql::{Dialect, PostgresDialect, SqlFlavor, command_tag};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult};
@@ -201,6 +201,10 @@ impl Session for PgSession {
             Some(p) if p.kind == NodeKind::Schema => {
                 catalog::relations(&*self.catalog(&p.database).await?, &p.database, &p.name).await
             }
+            Some(p) if matches!(p.kind, NodeKind::Table | NodeKind::MaterializedView) => {
+                catalog::table_children(&*self.catalog(&p.database).await?, p).await
+            }
+            Some(p) if p.kind == NodeKind::Group => catalog::group_children(&*self.catalog(&p.database).await?, p).await,
             Some(_) => Ok(Vec::new()),
         }
     }
@@ -254,6 +258,15 @@ impl Session for PgSession {
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {
         catalog::ddl(&*self.catalog(&object.database).await?, object).await
+    }
+
+    async fn dependencies(&self, object: &ObjectRef) -> DbResult<Dependencies> {
+        catalog::dependencies(&*self.catalog(&object.database).await?, object).await
+    }
+
+    async fn schema_model(&self, database: &str, schema: Option<&str>) -> DbResult<SchemaModel> {
+        let database = if database.is_empty() { self.info.database.as_str() } else { database };
+        catalog::schema_model(&*self.catalog(database).await?, database, schema).await
     }
 
     async fn read_query(

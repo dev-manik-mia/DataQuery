@@ -77,7 +77,7 @@ async fn session(cfg: &ConnConfig) -> Arc<dyn Session> {
 }
 
 fn table(name: &str) -> ObjectRef {
-    ObjectRef { kind: NodeKind::Table, database: DB.into(), schema: None, name: name.into() }
+    ObjectRef::new(NodeKind::Table, DB, None, name)
 }
 
 /// Creates a scratch table unique to the calling test.

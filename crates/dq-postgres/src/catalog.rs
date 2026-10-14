@@ -3,8 +3,11 @@
 
 use std::fmt::Write;
 
-use dq_core::node::{Node, NodeKind, ObjectRef};
-use dq_core::schema::{ColumnInfo, ConstraintInfo, ConstraintKind, IndexInfo, TableStructure};
+use dq_core::node::{GROUP_FUNCTIONS, GROUP_PROCEDURES, GROUP_SEQUENCES, Node, NodeKind, ObjectRef};
+use dq_core::schema::{
+    ColumnInfo, ConstraintInfo, ConstraintKind, Dependencies, Dependency, ForeignKey, IndexInfo, ModelColumn,
+    ModelTable, SchemaModel, TableSize, TableStructure,
+};
 use dq_core::sql::{Dialect, PostgresDialect};
 use dq_core::{DbError, DbResult};
 use tokio_postgres::Client;
@@ -43,12 +46,7 @@ pub async fn databases(client: &Client, current: &str) -> DbResult<Vec<Node>> {
         .iter()
         .map(|r| {
             let name: String = r.get(0);
-            let mut node = Node::container(ObjectRef {
-                kind: NodeKind::Database,
-                database: name.clone(),
-                schema: None,
-                name: name.clone(),
-            });
+            let mut node = Node::container(ObjectRef::new(NodeKind::Database, name.clone(), None, name.clone()));
             node.current = name == current;
             node
         })
@@ -69,12 +67,7 @@ pub async fn schemas(client: &Client, database: &str) -> DbResult<Vec<Node>> {
         .iter()
         .map(|r| {
             let name: String = r.get(0);
-            let mut node = Node::container(ObjectRef {
-                kind: NodeKind::Schema,
-                database: database.to_owned(),
-                schema: Some(name.clone()),
-                name,
-            });
+            let mut node = Node::container(ObjectRef::new(NodeKind::Schema, database, Some(name.clone()), name));
             node.row_estimate = Some(r.get(1));
             node.comment = r.get(2);
             node
@@ -83,12 +76,10 @@ pub async fn schemas(client: &Client, database: &str) -> DbResult<Vec<Node>> {
 }
 
 fn relation_node(database: &str, row: &tokio_postgres::Row) -> Node {
-    let mut node = Node::leaf(ObjectRef {
-        kind: kind_of(&row.get::<_, String>(2)),
-        database: database.to_owned(),
-        schema: Some(row.get(0)),
-        name: row.get(1),
-    });
+    let kind = kind_of(&row.get::<_, String>(2));
+    let object = ObjectRef::new(kind, database, Some(row.get(0)), row.get::<_, String>(1));
+    // Tables and materialized views expand to their indexes and triggers.
+    let mut node = if kind == NodeKind::View { Node::leaf(object) } else { Node::container(object) };
     node.row_estimate = estimate(row.get(3));
     node.comment = row.get(4);
     node
@@ -105,7 +96,86 @@ pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResul
         relkind_order()
     );
     let rows = client.query(&sql, &[&schema]).await.map_err(pg)?;
-    Ok(rows.iter().map(|r| relation_node(database, r)).collect())
+    let mut nodes: Vec<Node> = rows.iter().map(|r| relation_node(database, r)).collect();
+    let counts = client
+        .query_one(
+            "SELECT (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S'), \
+                    (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = n.oid AND p.prokind IN ('f','a','w')), \
+                    (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = n.oid AND p.prokind = 'p') \
+             FROM pg_namespace n WHERE n.nspname = $1",
+            &[&schema],
+        )
+        .await
+        .map_err(pg)?;
+    for (i, group) in [GROUP_SEQUENCES, GROUP_FUNCTIONS, GROUP_PROCEDURES].into_iter().enumerate() {
+        let count: i64 = counts.get(i);
+        if count > 0 {
+            let mut node = Node::container(ObjectRef::new(NodeKind::Group, database, Some(schema.to_owned()), group));
+            node.row_estimate = Some(count);
+            nodes.push(node);
+        }
+    }
+    Ok(nodes)
+}
+
+/// Indexes and triggers of a table or materialized view.
+pub async fn table_children(client: &Client, table: &ObjectRef) -> DbResult<Vec<Node>> {
+    let rel = relation(client, table).await?;
+    let child = |kind, name: String| {
+        Node::leaf(ObjectRef::new(kind, table.database.clone(), table.schema.clone(), name).with_parent(&table.name))
+    };
+    let indexes = client
+        .query(
+            "SELECT i.relname::text FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid \
+             WHERE x.indrelid = $1 ORDER BY x.indisprimary DESC, i.relname",
+            &[&rel.oid],
+        )
+        .await
+        .map_err(pg)?;
+    let triggers = client
+        .query("SELECT tgname::text FROM pg_trigger WHERE tgrelid = $1 AND NOT tgisinternal ORDER BY 1", &[&rel.oid])
+        .await
+        .map_err(pg)?;
+    Ok(indexes
+        .iter()
+        .map(|r| child(NodeKind::Index, r.get(0)))
+        .chain(triggers.iter().map(|r| child(NodeKind::Trigger, r.get(0))))
+        .collect())
+}
+
+/// Sequences, functions or procedures of a schema.
+pub async fn group_children(client: &Client, group: &ObjectRef) -> DbResult<Vec<Node>> {
+    let schema = group.schema.as_deref().ok_or_else(|| DbError::invalid("A schema is required."))?;
+    let object = |kind, name: String| ObjectRef::new(kind, group.database.clone(), Some(schema.to_owned()), name);
+    let routines = |kinds: &'static str| {
+        format!(
+            "SELECT p.proname::text, pg_get_function_identity_arguments(p.oid), obj_description(p.oid, 'pg_proc') \
+             FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = $1 AND p.prokind IN {kinds} ORDER BY 1, 2"
+        )
+    };
+    let (sql, kind) = match group.name.as_str() {
+        GROUP_SEQUENCES => (
+            "SELECT c.relname::text, NULL::text, obj_description(c.oid, 'pg_class') FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind = 'S' ORDER BY 1"
+                .to_owned(),
+            NodeKind::Sequence,
+        ),
+        GROUP_FUNCTIONS => (routines("('f','a','w')"), NodeKind::Function),
+        GROUP_PROCEDURES => (routines("('p')"), NodeKind::Procedure),
+        other => return Err(DbError::invalid(format!("Unknown group `{other}`."))),
+    };
+    let rows = client.query(&sql, &[&schema]).await.map_err(pg)?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let mut o = object(kind, r.get(0));
+            o.parent = r.get(1);
+            let mut node = Node::leaf(o);
+            node.comment = r.get(2);
+            node
+        })
+        .collect())
 }
 
 pub async fn search(client: &Client, database: &str, query: &str, limit: u32) -> DbResult<Vec<Node>> {
@@ -155,11 +225,13 @@ pub async fn row_estimate(client: &Client, object: &ObjectRef) -> DbResult<Optio
 
 pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStructure> {
     let rel = relation(client, object).await?;
-    let (columns, constraints, indexes, identity) = tokio::try_join!(
+    let (columns, constraints, indexes, identity, foreign_keys, size) = tokio::try_join!(
         columns(client, rel.oid),
         constraints(client, rel.oid),
         indexes(client, rel.oid),
         row_identity(client, rel.oid),
+        foreign_keys(client, "c.conrelid = $1", &object.database, rel.oid),
+        size(client, rel.oid, rel.kind),
     )?;
     Ok(TableStructure {
         object: ObjectRef { kind: rel.kind, ..object.clone() },
@@ -170,6 +242,8 @@ pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStr
         full_row_key: Vec::new(),
         comment: rel.comment,
         row_estimate: rel.estimate,
+        foreign_keys,
+        size,
     })
 }
 
@@ -246,7 +320,10 @@ async fn constraints(client: &Client, oid: u32) -> DbResult<Vec<ConstraintInfo>>
 async fn indexes(client: &Client, oid: u32) -> DbResult<Vec<IndexInfo>> {
     let rows = client
         .query(
-            "SELECT i.relname::text, pg_get_indexdef(x.indexrelid), x.indisunique, x.indisprimary \
+            "SELECT i.relname::text, pg_get_indexdef(x.indexrelid), x.indisunique, x.indisprimary, \
+                    ARRAY(SELECT a.attname::text FROM unnest(x.indkey) WITH ORDINALITY k(attnum, ord) \
+                          JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum ORDER BY k.ord), \
+                    pg_relation_size(x.indexrelid) \
              FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid WHERE x.indrelid = $1 \
              ORDER BY x.indisprimary DESC, i.relname",
             &[&oid],
@@ -255,8 +332,187 @@ async fn indexes(client: &Client, oid: u32) -> DbResult<Vec<IndexInfo>> {
         .map_err(pg)?;
     Ok(rows
         .iter()
-        .map(|r| IndexInfo { name: r.get(0), definition: r.get(1), unique: r.get(2), primary: r.get(3) })
+        .map(|r| IndexInfo {
+            name: r.get(0),
+            definition: r.get(1),
+            unique: r.get(2),
+            primary: r.get(3),
+            columns: r.get(4),
+            size_bytes: Some(r.get(5)),
+        })
         .collect())
+}
+
+async fn size(client: &Client, oid: u32, kind: NodeKind) -> DbResult<Option<TableSize>> {
+    if kind == NodeKind::View {
+        return Ok(None);
+    }
+    let r = client
+        .query_one("SELECT pg_total_relation_size($1), pg_relation_size($1), pg_indexes_size($1)", &[&oid])
+        .await
+        .map_err(pg)?;
+    Ok(Some(TableSize { total_bytes: r.get(0), table_bytes: r.get(1), index_bytes: r.get(2) }))
+}
+
+const FK_SELECT: &str = "SELECT c.conname::text, tn.nspname::text, t.relname::text, \
+       ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o) \
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.o), \
+       fn.nspname::text, f.relname::text, \
+       ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n, o) \
+             JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.n ORDER BY k.o), \
+       c.confupdtype::text, c.confdeltype::text \
+FROM pg_constraint c \
+JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace tn ON tn.oid = t.relnamespace \
+JOIN pg_class f ON f.oid = c.confrelid JOIN pg_namespace fn ON fn.oid = f.relnamespace \
+WHERE c.contype = 'f' AND ";
+
+fn fk_action(code: &str) -> Option<String> {
+    Some(
+        match code {
+            "r" => "RESTRICT",
+            "c" => "CASCADE",
+            "n" => "SET NULL",
+            "d" => "SET DEFAULT",
+            _ => return None,
+        }
+        .to_owned(),
+    )
+}
+
+fn fk_from_row(database: &str, r: &tokio_postgres::Row) -> ForeignKey {
+    let table = |schema: String, name: String| ObjectRef::new(NodeKind::Table, database, Some(schema), name);
+    ForeignKey {
+        name: r.get(0),
+        source: table(r.get(1), r.get(2)),
+        columns: r.get(3),
+        target: table(r.get(4), r.get(5)),
+        target_columns: r.get(6),
+        on_update: fk_action(&r.get::<_, String>(7)),
+        on_delete: fk_action(&r.get::<_, String>(8)),
+    }
+}
+
+/// Foreign keys matching `predicate` (over `c`, with `$1` bound to `oid`).
+async fn foreign_keys(client: &Client, predicate: &str, database: &str, oid: u32) -> DbResult<Vec<ForeignKey>> {
+    let rows = client.query(&format!("{FK_SELECT}{predicate} ORDER BY c.conname"), &[&oid]).await.map_err(pg)?;
+    Ok(rows.iter().map(|r| fk_from_row(database, r)).collect())
+}
+
+/// Foreign keys, view sources, triggers and owned sequences around a relation.
+pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Dependencies> {
+    if !object.kind.is_relation() {
+        return Ok(Dependencies::default());
+    }
+    let rel = relation(client, object).await?;
+    let db = object.database.as_str();
+    let rel_ref = |schema: String, name: String, relkind: &str| ObjectRef::new(kind_of(relkind), db, Some(schema), name);
+    let mut deps = Dependencies::default();
+    for fk in foreign_keys(client, "c.conrelid = $1", db, rel.oid).await? {
+        deps.uses.push(Dependency { object: fk.target, relation: format!("foreign key {}", fk.name) });
+    }
+    for fk in foreign_keys(client, "c.confrelid = $1", db, rel.oid).await? {
+        deps.used_by.push(Dependency { object: fk.source, relation: format!("foreign key {}", fk.name) });
+    }
+    let sources = client
+        .query(
+            "SELECT DISTINCT rn.nspname::text, rc.relname::text, rc.relkind::text FROM pg_rewrite r \
+             JOIN pg_depend d ON d.objid = r.oid AND d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass \
+             JOIN pg_class rc ON rc.oid = d.refobjid JOIN pg_namespace rn ON rn.oid = rc.relnamespace \
+             WHERE r.ev_class = $1 AND d.refobjid <> $1 ORDER BY 1, 2",
+            &[&rel.oid],
+        )
+        .await
+        .map_err(pg)?;
+    for r in &sources {
+        deps.uses.push(Dependency { object: rel_ref(r.get(0), r.get(1), &r.get::<_, String>(2)), relation: "reads".into() });
+    }
+    let views = client
+        .query(
+            "SELECT DISTINCT vn.nspname::text, v.relname::text, v.relkind::text FROM pg_depend d \
+             JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_class v ON v.oid = r.ev_class \
+             JOIN pg_namespace vn ON vn.oid = v.relnamespace \
+             WHERE d.classid = 'pg_rewrite'::regclass AND d.refobjid = $1 AND r.ev_class <> $1 ORDER BY 1, 2",
+            &[&rel.oid],
+        )
+        .await
+        .map_err(pg)?;
+    for r in &views {
+        deps.used_by.push(Dependency { object: rel_ref(r.get(0), r.get(1), &r.get::<_, String>(2)), relation: "view".into() });
+    }
+    let triggers = client
+        .query(
+            "SELECT t.tgname::text, pn.nspname::text, p.proname::text, pg_get_function_identity_arguments(p.oid) \
+             FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid JOIN pg_namespace pn ON pn.oid = p.pronamespace \
+             WHERE t.tgrelid = $1 AND NOT t.tgisinternal ORDER BY 1",
+            &[&rel.oid],
+        )
+        .await
+        .map_err(pg)?;
+    for r in &triggers {
+        let trigger: String = r.get(0);
+        let function = ObjectRef::new(NodeKind::Function, db, Some(r.get(1)), r.get::<_, String>(2)).with_parent(r.get::<_, String>(3));
+        deps.uses.push(Dependency { object: function, relation: format!("trigger {trigger}") });
+        let t = ObjectRef::new(NodeKind::Trigger, db, object.schema.clone(), trigger).with_parent(&object.name);
+        deps.used_by.push(Dependency { object: t, relation: "trigger".into() });
+    }
+    let sequences = client
+        .query(
+            "SELECT sn.nspname::text, s.relname::text FROM pg_depend d \
+             JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S' JOIN pg_namespace sn ON sn.oid = s.relnamespace \
+             WHERE d.refobjid = $1 AND d.classid = 'pg_class'::regclass AND d.deptype IN ('a', 'i') ORDER BY 1, 2",
+            &[&rel.oid],
+        )
+        .await
+        .map_err(pg)?;
+    for r in &sequences {
+        let seq = ObjectRef::new(NodeKind::Sequence, db, Some(r.get(0)), r.get::<_, String>(1));
+        deps.uses.push(Dependency { object: seq, relation: "owned sequence".into() });
+    }
+    Ok(deps)
+}
+
+/// Tables, columns and foreign keys of one schema or every user schema.
+pub async fn schema_model(client: &Client, database: &str, schema: Option<&str>) -> DbResult<SchemaModel> {
+    let filter = "(($1::text IS NULL AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema') \
+                   OR n.nspname = $1)";
+    let max_tables = SchemaModel::MAX_TABLES as i64;
+    let rows = client
+        .query(
+            &format!(
+                "WITH rels AS (SELECT c.oid, n.nspname, c.relname, c.relkind FROM pg_class c \
+                     JOIN pg_namespace n ON n.oid = c.relnamespace \
+                     WHERE c.relkind IN {RELKINDS} AND NOT c.relispartition AND {filter} \
+                     ORDER BY n.nspname, c.relname LIMIT $2) \
+                 SELECT r.nspname::text, r.relname::text, r.relkind::text, a.attname::text, \
+                        format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \
+                        EXISTS (SELECT 1 FROM pg_index x WHERE x.indrelid = r.oid AND x.indisprimary AND a.attnum = ANY(x.indkey)) \
+                 FROM rels r JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped \
+                 ORDER BY r.nspname, r.relname, a.attnum LIMIT $3"
+            ),
+            &[&schema, &(max_tables + 1), &(SchemaModel::MAX_COLUMNS as i64)],
+        )
+        .await
+        .map_err(pg)?;
+    let mut model = SchemaModel::default();
+    for r in &rows {
+        let (schema, name): (String, String) = (r.get(0), r.get(1));
+        let same = model.tables.last().is_some_and(|t: &ModelTable| t.object.schema.as_deref() == Some(&schema) && t.object.name == name);
+        if !same {
+            let object = ObjectRef::new(kind_of(&r.get::<_, String>(2)), database, Some(schema), name);
+            model.tables.push(ModelTable { object, columns: Vec::new() });
+        }
+        if let Some(table) = model.tables.last_mut() {
+            table.columns.push(ModelColumn { name: r.get(3), data_type: r.get(4), nullable: r.get(5), primary_key: r.get(6) });
+        }
+    }
+    model.truncated = model.tables.len() > SchemaModel::MAX_TABLES || rows.len() >= SchemaModel::MAX_COLUMNS;
+    model.tables.truncate(SchemaModel::MAX_TABLES);
+    let fks = client
+        .query(&format!("{FK_SELECT}{} ORDER BY tn.nspname, t.relname, c.conname", filter.replace("n.nspname", "tn.nspname")), &[&schema])
+        .await
+        .map_err(pg)?;
+    model.foreign_keys = fks.iter().map(|r| fk_from_row(database, r)).collect();
+    Ok(model)
 }
 
 /// Primary key columns, else the columns of the first NOT NULL unique index
@@ -293,8 +549,89 @@ async fn row_identity(client: &Client, oid: u32) -> DbResult<Vec<String>> {
     Ok(if usable { columns } else { Vec::new() })
 }
 
+/// Definition of an index, sequence, trigger, function or procedure.
+async fn object_ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
+    let schema = object.schema.as_deref().ok_or_else(|| DbError::invalid("A schema is required."))?;
+    let missing = || DbError::not_found(format!("{} no longer exists.", object.name));
+    let d = PostgresDialect;
+    let text: Option<String> = match object.kind {
+        NodeKind::Index => client
+            .query_opt(
+                "SELECT pg_get_indexdef(c.oid) || ';' FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('i', 'I')",
+                &[&schema, &object.name],
+            )
+            .await
+            .map_err(pg)?
+            .map(|r| r.get(0)),
+        NodeKind::Trigger => {
+            let table = object.owner_table().ok_or_else(|| DbError::invalid("A trigger needs its table."))?;
+            let rel = relation(client, &table).await?;
+            client
+                .query_opt(
+                    "SELECT pg_get_triggerdef(oid, true) || ';' FROM pg_trigger WHERE tgrelid = $1 AND tgname = $2",
+                    &[&rel.oid, &object.name],
+                )
+                .await
+                .map_err(pg)?
+                .map(|r| r.get(0))
+        }
+        NodeKind::Function | NodeKind::Procedure => client
+            .query_opt(
+                "SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+                 WHERE n.nspname = $1 AND p.proname = $2 AND pg_get_function_identity_arguments(p.oid) = $3",
+                &[&schema, &object.name, &object.parent.as_deref().unwrap_or_default()],
+            )
+            .await
+            .map_err(pg)?
+            .map(|r| r.get(0)),
+        NodeKind::Sequence => {
+            let row = client
+                .query_opt(
+                    "SELECT s.data_type::text, s.start_value, s.min_value, s.max_value, s.increment_by, s.cycle, \
+                            s.cache_size, \
+                            (SELECT quote_ident(tn.nspname) || '.' || quote_ident(t.relname) || '.' || quote_ident(a.attname) \
+                             FROM pg_depend dp JOIN pg_class t ON t.oid = dp.refobjid \
+                             JOIN pg_namespace tn ON tn.oid = t.relnamespace \
+                             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = dp.refobjsubid \
+                             WHERE dp.objid = c.oid AND dp.classid = 'pg_class'::regclass \
+                               AND dp.refclassid = 'pg_class'::regclass AND dp.deptype IN ('a', 'i') LIMIT 1) \
+                     FROM pg_sequences s \
+                     JOIN pg_namespace n ON n.nspname = s.schemaname \
+                     JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = s.sequencename \
+                     WHERE s.schemaname = $1 AND s.sequencename = $2",
+                    &[&schema, &object.name],
+                )
+                .await
+                .map_err(pg)?;
+            row.map(|r| {
+                let mut out = format!(
+                    "CREATE SEQUENCE {} AS {}\n  INCREMENT BY {}\n  MINVALUE {}\n  MAXVALUE {}\n  START WITH {}\n  CACHE {}{}",
+                    d.display_name(object),
+                    r.get::<_, String>(0),
+                    r.get::<_, i64>(4),
+                    r.get::<_, i64>(2),
+                    r.get::<_, i64>(3),
+                    r.get::<_, i64>(1),
+                    r.get::<_, i64>(6),
+                    if r.get::<_, bool>(5) { "\n  CYCLE" } else { "" },
+                );
+                if let Some(owner) = r.get::<_, Option<String>>(7) {
+                    let _ = write!(out, "\n  OWNED BY {owner}");
+                }
+                out + ";"
+            })
+        }
+        _ => return Err(DbError::invalid("This object has no definition.")),
+    };
+    text.map(|t| t.trim_end().to_owned() + "\n").ok_or_else(missing)
+}
+
 /// DDL reconstructed from the catalog.
 pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
+    if !object.kind.is_relation() {
+        return object_ddl(client, object).await;
+    }
     let d = PostgresDialect;
     let rel = relation(client, object).await?;
     let name = d.display_name(object);

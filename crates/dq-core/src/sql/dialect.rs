@@ -446,7 +446,7 @@ mod tests {
     use crate::node::{NodeKind, ObjectRef};
 
     fn obj(db: &str, schema: Option<&str>, name: &str) -> ObjectRef {
-        ObjectRef { kind: NodeKind::Table, database: db.into(), schema: schema.map(Into::into), name: name.into() }
+        ObjectRef::new(NodeKind::Table, db, schema.map(Into::into), name)
     }
 
     #[test]
