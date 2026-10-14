@@ -12,7 +12,6 @@ async-trait.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 quick-xml.workspace = true
-rustls.workspace = true
 tiberius.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
