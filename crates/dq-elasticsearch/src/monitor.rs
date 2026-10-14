@@ -12,6 +12,7 @@ use dq_core::node::{NodeKind, ObjectRef};
 use serde_json::Value;
 
 use crate::catalog;
+use crate::client::Call;
 use crate::session::EsSession;
 
 /// Task actions shown as processes.
@@ -178,7 +179,12 @@ impl Monitor for EsSession {
     /// Cancels the task (Elasticsearch cannot end a client's connection; terminate is the same).
     async fn kill(&self, pid: i64, _terminate: bool) -> DbResult<bool> {
         let Some(id) = self.tasks.get(pid) else { return Ok(false) };
-        let response = self.client.post(&format!("/_tasks/{}/_cancel", catalog::segment(&id)), &Value::Null).await?;
+        let path = format!("/_tasks/{}/_cancel", catalog::segment(&id));
+        let response = match self.client.call(&Call { method: "POST", path: &path, ..Call::default() }).await {
+            Ok(body) => body.json().clone(),
+            Err(e) if e.kind == dq_core::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
         let cancelled = response["nodes"].as_object().is_some_and(|n| !n.is_empty());
         Ok(cancelled && response["node_failures"].as_array().is_none_or(Vec::is_empty))
     }

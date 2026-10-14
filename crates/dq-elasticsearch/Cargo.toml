@@ -14,9 +14,10 @@ reqwest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-uuid.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

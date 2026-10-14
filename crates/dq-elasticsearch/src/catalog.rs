@@ -207,7 +207,7 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         if actions.is_empty() {
             return Err(DbError::not_found(format!("No alias named {}.", object.name)));
         }
-        return Ok(format!("POST /_aliases\n{}", serde_json::to_string_pretty(&json!({ "actions": actions }))?));
+        return Ok(format!("POST /_aliases\n{}", serde_json::to_string_pretty(&json!({ "actions": actions })).unwrap_or_default()));
     }
     let name = segment(&object.name);
     let (settings, mapping) = tokio::join!(client.get(&format!("/{name}/_settings")), client.get(&format!("/{name}/_mapping")));
@@ -215,7 +215,7 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
     let settings = settings.as_object().and_then(|m| m.values().next()).map(|i| i["settings"]["index"].clone()).unwrap_or_default();
     let mappings = mapping.as_object().and_then(|m| m.values().next()).map(|i| i["mappings"].clone()).unwrap_or_default();
     let body = json!({ "settings": kept_settings(&settings), "mappings": mappings });
-    Ok(format!("PUT /{}\n{}", object.name, serde_json::to_string_pretty(&body)?))
+    Ok(format!("PUT /{}\n{}", object.name, serde_json::to_string_pretty(&body).unwrap_or_default()))
 }
 
 /// Index-level summaries for the Indexes tab: shards, replicas, health, documents, size, aliases.
