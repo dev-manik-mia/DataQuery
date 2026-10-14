@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use dq_core::explain::{ExplainDialect, ExplainResult};
+use dq_core::explain::ExplainResult;
 use dq_core::result::{ExecOptions, RowsPage, StatementResult};
 use dq_core::sql::{
     SqlFlavor, StatementInfo, StatementKind, TxEffect, redact_literals, split_statements, transaction_effect,
@@ -103,7 +103,7 @@ async fn begin_if_manual(
     let only_tx_control = statements.iter().all(|s| s.kind == StatementKind::Transaction);
     if settings.manual_commit && open.tx_status() == TxStatus::Auto && !only_tx_control {
         let options = ExecOptions { row_limit: 1, timeout_secs: settings.timeout_secs };
-        open.session.execute("BEGIN", &[], options).await?;
+        open.session.execute(open.session.dialect().begin_transaction(), &[], options).await?;
         open.set_tx_status(TxStatus::Open);
     }
     Ok(())
@@ -207,7 +207,7 @@ pub async fn transaction(state: State<'_, AppState>, session_id: String, action:
     let open = state.session(&session_id).await?;
     let current = open.tx_status();
     let sql = match (action, current) {
-        (TxAction::Begin, TxStatus::Auto) => "BEGIN",
+        (TxAction::Begin, TxStatus::Auto) => open.session.dialect().begin_transaction(),
         (TxAction::Begin, _) => return Err(DbError::invalid("A transaction is already open.")),
         (TxAction::Commit, TxStatus::Failed) => {
             return Err(DbError::invalid("The transaction failed; only Rollback is possible."));
@@ -252,17 +252,7 @@ pub async fn explain(
         ));
     }
     let settings = state.settings().await?;
-    let dialect = ExplainDialect::new(flavor, &open.session.info().version);
-    let explain_sql = dialect.statement(statement.text(&sql), analyze);
-    let options = ExecOptions { row_limit: 10_000, timeout_secs: settings.timeout_secs };
-    let result = open.session.execute(&explain_sql, &params.unwrap_or_default(), options).await?;
-    let raw = result
-        .rows
-        .iter()
-        .map(|row| row.iter().filter_map(dq_core::value::Cell::to_text).collect::<Vec<_>>().join("\t"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    dialect.parse(raw, analyze)
+    open.session.explain(statement.text(&sql), &params.unwrap_or_default(), analyze, settings.timeout_secs).await
 }
 
 #[tauri::command]
