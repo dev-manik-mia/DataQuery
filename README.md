@@ -1,7 +1,7 @@
 # DataQuery
 
 A fast, safe desktop database client: Tauri 2, a Rust core and a React + TypeScript UI.
-Supports **PostgreSQL**, **CockroachDB**, **MySQL**, **MariaDB**, **SQL Server**, **Oracle**, **ClickHouse**, **DuckDB**, **Snowflake**, **MongoDB**, **DynamoDB**, **Redis**, **Valkey**, **Cassandra** and **ScyllaDB**. Passwords live in the OS keychain, and there is no telemetry, account or cloud service.
+Supports **PostgreSQL**, **CockroachDB**, **MySQL**, **MariaDB**, **SQL Server**, **Oracle**, **ClickHouse**, **DuckDB**, **Snowflake**, **MongoDB**, **DynamoDB**, **Redis**, **Valkey**, **Cassandra**, **ScyllaDB**, **Elasticsearch / OpenSearch** and **Neo4j**. Passwords live in the OS keychain, and there is no telemetry, account or cloud service.
 
 Feature status: [`feature_completed.md`](feature_completed.md) · Task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) · Designs: [`html/`](html)
 
@@ -40,7 +40,8 @@ npm run db:up        # PostgreSQL 17 :55432, MySQL 8.4 :53306, MariaDB 11.4 :533
                      # ClickHouse 25.8 HTTP :58123, fakesnow (Snowflake emulator) :58000,
                      # MongoDB 8.0 replica set :57017, DynamoDB Local :58002,
                      # Redis 8 :56379, Valkey 8 :56380 (password dataquery),
-                     # Cassandra 5.0 :59042 (cassandra/cassandra), ScyllaDB 2025.1 :59043
+npm run db:up:wide   # Cassandra 5.0 :59042 (cassandra/cassandra), ScyllaDB 2025.1 :59043
+npm run db:up:search # Elasticsearch 8.15 :59200 (elastic/dataquery), Neo4j 5 HTTP :57474 (neo4j/dataquery123)
 npm run db:down
 ```
 
@@ -87,8 +88,17 @@ Redis and Valkey connections take a host, an optional ACL user, a password and a
 Cassandra and ScyllaDB connections take one or more contact points (`node1,node2:9043`), an optional user, a
 keyspace and an optional local datacenter. The editor shows consistency and page-size selectors and a banner that
 says whether the statement reads one partition or scans (`ALLOW FILTERING`); result headers mark partition (`PK`)
-and clustering (`CK ↑/↓`) columns. All test databases together need more than 8 GB of Docker memory; stop
-`cassandra` and `scylla` (or other groups) when memory is short.
+and clustering (`CK ↑/↓`) columns. All test databases together need more than 8 GB of Docker memory, so Cassandra /
+ScyllaDB and Elasticsearch / Neo4j are compose profiles (`npm run db:up:wide`, `npm run db:up:search`) with their own
+test scripts (`test:integration:wide`, `test:integration:search`); stop SQL Server and Oracle while they run.
+
+### Elasticsearch and Neo4j connections
+
+Elasticsearch connections take a host and port (9200), a user and password, or an API key in the password field with
+no user. The editor takes Kibana Dev Tools requests (`GET /orders/_search` followed by a JSON body); indices open in
+a read-only Documents view. Neo4j connections use the HTTP Query API (port 7474, Neo4j 5.19 or later; `neo4j://` and
+`bolt://` URLs are mapped to it): Cypher with `$parameters`, EXPLAIN/PROFILE plans and `BEGIN`/`COMMIT`; labels and
+relationship types open in a read-only Documents view.
 
 The SSH bastion reaches the databases by service name (`postgres:5432`, …) for the tunnel tests.
 
@@ -97,6 +107,8 @@ The SSH bastion reaches the databases by service name (`postgres:5432`, …) for
 ```sh
 npm run check             # tsc, eslint, vitest, cargo fmt --check, clippy -D warnings, cargo test
 npm run test:integration  # Rust tests against the Docker databases (includes test:oracle)
+npm run test:integration:wide    # Cassandra and ScyllaDB (after db:up:wide)
+npm run test:integration:search  # Elasticsearch and Neo4j (after db:up:search)
 npm run test:oracle       # Oracle tests only, in a Linux container
 npm run bindings          # regenerate src/bindings/*.ts from the Rust types
 ```
@@ -120,6 +132,8 @@ crates/
   dq-dynamodb   DynamoDB adapter (own SigV4 client): PartiQL, documents, conditional writes.
   dq-redis      Redis and Valkey adapter (redis-rs): SCAN key browser, typed editors, redis-cli console.
   dq-cassandra  Cassandra and ScyllaDB adapter (scylla driver): CQL, prepared binding, LWT edits, traces.
+  dq-elasticsearch  Elasticsearch / OpenSearch adapter (reqwest): Dev Tools requests, documents, profiles.
+  dq-neo4j      Neo4j adapter (HTTP Query API): Cypher, typed parameters, plans, transactions.
   dq-store      Local SQLite store (connections, settings, history, scripts, snippets) and keychain.
   dq-ssh        SSH tunnels (russh): jump hosts, password/key/agent auth, host-key verification.
 src-tauri/      Tauri app: thin async commands, adapter registry, connector (secrets, IAM tokens,
@@ -134,7 +148,7 @@ src/            React UI: components/ (design system), features/ (screens), stor
 ### Safety rules the code enforces
 
 - Values reach SQL only as bound parameters (also user `$n`/`?`/`@Pn`/`:n` parameters, FK navigation and column search). Identifiers are always quoted by the engine's `Dialect`; user-typed types, defaults and checks must be single expressions.
-- Read-only connections are read-only on the server session (PostgreSQL, CockroachDB, MySQL, ClickHouse `readonly=2`, DuckDB read-only file access), and the backend refuses grid edits, imports and schema changes. SQL Server, Oracle, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Cassandra and ScyllaDB have no such session mode, so DataQuery also refuses writing statements there.
+- Read-only connections are read-only on the server session (PostgreSQL, CockroachDB, MySQL, ClickHouse `readonly=2`, DuckDB read-only file access), and the backend refuses grid edits, imports and schema changes. SQL Server, Oracle, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Cassandra and ScyllaDB have no such session mode (Elasticsearch, too; Neo4j runs read-only sessions in the server's read mode), so DataQuery also refuses writing statements there.
 - Secrets (passwords, SSH passwords/passphrases, the AI key) live only in the keychain; cloud IAM tokens are fetched per connect and never stored.
 - Results are always bounded. Exports stream to disk.
 - Table views and exports run on **read-only** connections. Grid edits run in one transaction, and each change must affect exactly one row or everything rolls back.

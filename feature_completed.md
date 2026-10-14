@@ -1,12 +1,12 @@
 # DataQuery — Feature Status
 
 Status of every feature in [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) (the target scope).
-**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅ · ClickHouse ✅ · DuckDB ✅ · Snowflake ✅ (emulator-tested) · MongoDB 5–8 ✅ · DynamoDB ✅ (DynamoDB Local-tested) · Redis 6–8 ✅ · Valkey ✅ · Cassandra 4–5 ✅ · ScyllaDB ✅.
+**Engines done:** PostgreSQL 12–17 ✅ · CockroachDB ✅ (PostgreSQL adapter) · MySQL 5.7–8.4 ✅ · MariaDB 10.6–11 ✅ (shares the MySQL adapter) · SQL Server 2017–2022 ✅ · Oracle 19c–23ai ✅ · ClickHouse ✅ · DuckDB ✅ · Snowflake ✅ (emulator-tested) · MongoDB 5–8 ✅ · DynamoDB ✅ (DynamoDB Local-tested) · Redis 6–8 ✅ · Valkey ✅ · Cassandra 4–5 ✅ · ScyllaDB ✅ · Elasticsearch / OpenSearch ✅ · Neo4j 5 ✅.
 
 Legend: ✅ Done · 🟡 Partial · ⬜ Not started · Pri = priority from the feature list.
 "Done" means it works end-to-end (UI → Tauri command → adapter) and, where it touches a database, is covered by integration tests against real servers.
 
-_Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, CockroachDB, ClickHouse, DuckDB, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Cassandra and ScyllaDB added; task list in [`tasks.md`](tasks.md))._
+_Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, CockroachDB, ClickHouse, DuckDB, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Cassandra, ScyllaDB, Elasticsearch and Neo4j added; task list in [`tasks.md`](tasks.md))._
 
 ---
 
@@ -17,13 +17,13 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | **M1** Foundation + PostgreSQL (MVP) | shell, connections, keychain, explorer, editor, run/cancel, bounded grid, settings, tests | ✅ Done |
 | **M2** Data management (P0) | table data view, safe inline edits, export/import, history, scripts, structure + DDL | ✅ Done |
 | **M3** Beta (P0) | MySQL ✅, MariaDB ✅, SQLite ⬜, production safeguards ✅, URL import ✅, signed updates ✅, Docker integration tests ✅, macOS bundle ✅ (Windows/Linux packaging untested) | 🟡 SQLite left |
-| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). Engines: SQL Server ✅, Oracle ✅, CockroachDB ✅, ClickHouse ✅, DuckDB ✅, Snowflake ✅, MongoDB ✅, DynamoDB ✅, Redis ✅, Valkey ✅, Cassandra ✅, ScyllaDB ✅; Elasticsearch, Neo4j and SQLite ⬜ |
+| **M4 / M5** | P1 / P2 features of §1–§12 | ✅ Done (see [`tasks.md`](tasks.md)). Engines: SQL Server ✅, Oracle ✅, CockroachDB ✅, ClickHouse ✅, DuckDB ✅, Snowflake ✅, MongoDB ✅, DynamoDB ✅, Redis ✅, Valkey ✅, Cassandra ✅, ScyllaDB ✅, Elasticsearch ✅, Neo4j ✅; SQLite (P0) ⬜ |
 
 ### Tests (all passing)
 
 | Suite | Count | Command |
 |---|---|---|
-| Rust unit tests (core, adapters, store, ssh, app) | 302 | `cargo test --workspace` |
+| Rust unit tests (core, adapters, store, ssh, app) | 351 | `cargo test --workspace` |
 | PostgreSQL 17 integration | 24 | `npm run db:up` then `npm run test:integration` |
 | CockroachDB 25.2 integration (PostgreSQL adapter) | 11 | 〃 (port 56257) |
 | SQL Server 2022 integration | 21 | 〃 (port 51433) |
@@ -36,7 +36,9 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | MongoDB 8.0 integration (single-node replica set) | 11 | 〃 (port 57017) |
 | DynamoDB integration against DynamoDB Local | 9 | 〃 (port 58002) |
 | Redis 8 and Valkey 8 integration (each test runs on both) | 10 | 〃 (ports 56379, 56380) |
-| Cassandra 5.0 and ScyllaDB 2025.1 integration (each test runs on both) | 13 | 〃 (ports 59042, 59043) |
+| Cassandra 5.0 and ScyllaDB 2025.1 integration (each test runs on both) | 13 | `npm run db:up:wide` then `npm run test:integration:wide` |
+| Elasticsearch 8.15 integration | 9 | `npm run db:up:search` then `npm run test:integration:search` |
+| Neo4j 5.26 community integration (HTTP Query API) | 11 | 〃 |
 | SSH tunnel integration (OpenSSH bastion → PostgreSQL) | 3 | 〃 (port 52222) |
 | Frontend unit tests (Vitest) | 23 | `npm test` |
 | `cargo fmt --check`, `clippy -D warnings` (pedantic), `tsc --noEmit`, `eslint` | clean | `npm run check` |
@@ -236,6 +238,8 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | Valkey | P2 | ✅ (tested on 8) — the Redis adapter, detected and labelled as Valkey |
 | Cassandra 4–5 | P2 | ✅ (tested on 5.0) — `dq-cassandra` (scylla driver, rustls): keyspaces → tables / materialized views / types / functions; CQL editor with consistency, serial consistency and page-size selectors, paging state kept in memory only, `PK` / `CK ↑↓` header markers, single-partition vs `ALLOW FILTERING` analysis banner; prepared binding by type (exact varint/decimal, collections and UDTs as JSON); grid edits as lightweight transactions (`IF EXISTS`), batches; table views without OFFSET; explain from the analysis and traced explain analyze; system tables monitoring; CQL schema changes |
 | ScyllaDB | P2 | ✅ (tested on 2025.1) — the Cassandra adapter, detected and labelled as ScyllaDB |
+| Elasticsearch / OpenSearch | P2 | ✅ (tested on Elasticsearch 8.15; OpenSearch detected but untested) — `dq-elasticsearch` (reqwest): cluster → indices / aliases / data streams; Kibana Dev Tools editor (`GET /orders/_search` + JSON body) with method/endpoint completion; hits, `_cat`, `_sql` and text responses as grids; read-only Documents view (Query DSL or query-string filters, `_source` fields, sort, search_after paging); Profile-API explain; `_tasks` monitoring with cancel; mapping-based structure and recreate-index DDL; `_bulk` imports; scroll exports; deleting indices or every document asks first |
+| Neo4j 5 | P2 | ✅ (tested on 5.26 community) — `dq-neo4j` over the HTTP Query API (Neo4j 5.19+, explicit transactions 5.26+): databases → labels / relationship types / indexes and constraints with counts; Cypher editor with typed `$parameters`, exact integers, nodes / relationships / paths as JSON; BEGIN / COMMIT / ROLLBACK; EXPLAIN / PROFILE plan trees; read-only Documents view over labels and relationship types (Cypher WHERE / RETURN / ORDER BY); `SHOW TRANSACTIONS` monitoring and `TERMINATE TRANSACTION`; CSV imports as nodes; `DETACH DELETE` without a filter and `DROP` ask first |
 | Everything else | P1/P2 | ⬜ |
 
 ---
@@ -257,10 +261,12 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 - ClickHouse has no transactions or row identity: grid editing is off, schema diff is unavailable, and imports are not atomic (rows already inserted stay when a later batch fails). Indexes, foreign keys and unique constraints cannot be created there.
 - Snowflake was tested only against the fakesnow emulator, not a real account. Key-pair, SSO and MFA sign-in are not supported (password only). Monitoring is off for Snowflake and DuckDB.
 - `EXPLAIN ANALYZE` is not available for ClickHouse, DuckDB and Snowflake; their plans show estimates only.
-- Bundling DuckDB grows the macOS app from about 20 MB to 58.6 MB; MongoDB, DynamoDB, Redis, Valkey, Cassandra and ScyllaDB bring it to 65.7 MB.
+- Bundling DuckDB grows the macOS app from about 20 MB to 58.6 MB; MongoDB, DynamoDB, Redis, Valkey, Cassandra, ScyllaDB, Elasticsearch and Neo4j bring it to 66.3 MB.
 - MongoDB: editor statements are mongosh syntax, not JavaScript (no variables, loops or functions; `bulkWrite` unsupported). `VerifyCa` behaves like `VerifyFull`. Monitoring "terminate" is a `killOp` like cancel (MongoDB cannot end a connection). Editing a document replaces it by `_id` (last write wins).
 - DynamoDB: tested only against DynamoDB Local (which does not check signatures; SigV4 is covered by the AWS test vector). Cancel and timeouts stop waiting but cannot stop a request on the server. Writes report 1 affected item; counts exist only without a filter (table estimate); no sort input. In a transaction, reads run immediately and writes run together at `COMMIT` (at most 100).
 - Document engines: query results and exports take their columns from the first page/batch; an export stops with a clear error instead of dropping a field that appears later. Imports are written in batches and are not atomic. Editing is off while a projection is applied (the documents shown are partial).
 - Redis/Valkey: standalone servers only (no Cluster or Sentinel; with cluster mode on only database 0 is shown); RESP2. Cancel and timeouts kill and reopen the query connection, so an open MULTI is lost. Module types (RedisJSON, time series) are read-only; only RedisJSON values are shown. Binary keys, fields and values show as `\xNN` escapes and are read-only in the editors (use the console). "Largest keys" is the top of a sample of up to 10,000 keys. TLS and SSH tunnels were not tested against a server.
 - Cassandra/ScyllaDB: no transactions — one grid change is a lightweight transaction, 2–20 changes a logged batch, larger imports are written row by row (rows written before a failure stay). Cancel and timeouts stop waiting but cannot stop the request on the server; monitoring cannot end other clients. Table views read the skipped rows (no OFFSET) and stop at row 100,000; sorting a table view needs a restricted partition key (CQL rule). Explain shows the read analysis; Explain analyze shows the query trace. Through a single loopback contact point (local Docker, SSH tunnel) all nodes are reached through it. TLS and SSH tunnels were not tested against a server.
-- The 19 test databases together need more than the default 8 GB of Docker memory: with Cassandra and ScyllaDB running, SQL Server was killed for lack of memory. Stop one group (`docker compose -p dataquery stop cassandra scylla`) or give Docker more memory before `npm run test:integration`.
+- The test databases together need more than the default 8 GB of Docker memory (SQL Server is killed first). Cassandra/ScyllaDB (`wide`) and Elasticsearch/Neo4j (`search`) are compose profiles started with `npm run db:up:wide` / `db:up:search` and tested with `test:integration:wide` / `test:integration:search`; stop SQL Server and Oracle (or give Docker more memory) while they run.
+- Elasticsearch: no grid edits (change documents with requests in the editor). Integers beyond 64 bits and decimals beyond `f64` lose precision, and decimals print in shortest form (`120.50` → `120.5`). Filtered Documents-view pages past 10,000 hits need a sort. Explain applies to `_search` requests only. "Terminate" cancels the task. OpenSearch, TLS and SSH tunnels were not tested.
+- Neo4j: needs Neo4j 5.19+ (Query API), 5.26+ for explicit transactions; Bolt is not used (default port 7474, Bolt URLs map to it). Results arrive whole (up to 256 MB; rows past the limit stay in memory for "fetch more"). Documents view and grid are read-only (change the graph with Cypher). Monitoring has no connection counts; cancel and terminate both end the transaction. TLS, SSH tunnels and clusters were not tested.
