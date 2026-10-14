@@ -113,16 +113,18 @@ export function Explorer({ width }: { width: number }) {
     };
     // The container of tables: the schema, or the database on engines without schemas.
     const isContainer = node.kind === 'schema' || (node.kind === 'database' && !caps?.schemas);
+    // Document engines have no SQL schema: no create/rename/drop forms, ER diagram or migrations.
+    const documents = session?.documents != null;
     const schema = node.kind === 'schema' ? node.name : null;
     if (node.kind === 'database' || node.kind === 'schema') {
       return [
         { label: 'Refresh', onSelect: () => refresh(node) },
         { label: 'Copy name', onSelect: () => void copyName() },
         { label: 'New query', onSelect: () => openQueryTab() },
-        ...(isContainer && !session?.server.read_only
+        ...(isContainer && !documents && !session?.server.read_only
           ? [{ type: 'separator' as const }, { label: 'Create table…', onSelect: () => setCreating(node) }]
           : []),
-        ...(isContainer
+        ...(isContainer && !documents
           ? [
               { type: 'separator' as const },
               { label: 'ER diagram', onSelect: () => openContainerTab('diagram', node.database, schema) },
@@ -152,6 +154,21 @@ export function Explorer({ width }: { width: number }) {
     }
     const table = node.kind === 'table';
     const writable = table && !session?.server.read_only;
+    if (documents) {
+      return [
+        { label: 'Open documents', onSelect: () => openTableTab(node, 'data') },
+        { type: 'separator' },
+        { label: 'Copy name', onSelect: () => void copyName() },
+        { label: session?.flavor === 'mongodb' ? 'Generate find' : 'Generate SELECT', onSelect: () => void template(node, 'select') },
+        ...(table
+          ? [
+              { label: session?.flavor === 'mongodb' ? 'Generate insertOne' : 'Generate INSERT', onSelect: () => void template(node, 'insert') },
+              { label: session?.flavor === 'mongodb' ? 'Generate updateOne' : 'Generate UPDATE', onSelect: () => void template(node, 'update') },
+              { label: session?.flavor === 'mongodb' ? 'Generate deleteOne' : 'Generate DELETE', onSelect: () => void template(node, 'delete') },
+            ]
+          : []),
+      ];
+    }
     return [
       { label: 'Open data', onSelect: () => openTableTab(node, 'data') },
       { label: 'Open structure', onSelect: () => openTableTab(node, 'structure') },

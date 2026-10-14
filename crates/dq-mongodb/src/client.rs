@@ -134,7 +134,6 @@ pub async fn connect(params: &ConnectParams) -> DbResult<Connected> {
             Tls::Enabled(
                 TlsOptions::builder()
                     .allow_invalid_certificates(matches!(mode, SslMode::Prefer | SslMode::Require).then_some(true))
-                    .allow_invalid_hostnames((mode == SslMode::VerifyCa).then_some(true))
                     .ca_file_path(files.ca_file.as_ref().map(PathBuf::from))
                     .cert_key_file_path(cert_key_file_path)
                     .build(),
@@ -202,7 +201,7 @@ pub fn map_error(e: mongodb::error::Error) -> DbError {
     use mongodb::error::ErrorKind as K;
     let message = e.to_string();
     match e.kind.as_ref() {
-        K::Authentication { message } => DbError::new(ErrorKind::Auth, format!("Authentication failed: {message}")),
+        K::Authentication { message, .. } => DbError::new(ErrorKind::Auth, format!("Authentication failed: {message}")),
         K::Command(c) => server_error(c.code, Some(&c.code_name), &c.message),
         K::Write(mongodb::error::WriteFailure::WriteError(w)) => {
             server_error(w.code, w.code_name.as_deref(), &w.message)
@@ -214,9 +213,9 @@ pub fn map_error(e: mongodb::error::Error) -> DbError {
             DbError::new(ErrorKind::Tls, format!("TLS failed: {io}"))
         }
         K::Io(io) => DbError::new(ErrorKind::Network, format!("Network error: {io}")),
-        K::InvalidTlsConfig { message } => DbError::new(ErrorKind::Tls, message),
-        K::DnsResolve { message } => DbError::new(ErrorKind::Network, format!("Cannot resolve the host: {message}")),
-        K::ServerSelection { message } => {
+        K::InvalidTlsConfig { message, .. } => DbError::new(ErrorKind::Tls, message),
+        K::DnsResolve { message, .. } => DbError::new(ErrorKind::Network, format!("Cannot resolve the host: {message}")),
+        K::ServerSelection { message, .. } => {
             let kind = if message.to_lowercase().contains("certificate") || message.contains("TLS") {
                 ErrorKind::Tls
             } else if message.contains("Authentication") || message.contains("auth") && message.contains("fail") {
@@ -226,8 +225,8 @@ pub fn map_error(e: mongodb::error::Error) -> DbError {
             };
             DbError::new(kind, format!("Cannot reach a server: {message}"))
         }
-        K::InvalidArgument { message } => DbError::invalid(message),
-        K::Transaction { message } => DbError::invalid(message),
+        K::InvalidArgument { message, .. } => DbError::invalid(message),
+        K::Transaction { message, .. } => DbError::invalid(message),
         K::SessionsNotSupported => DbError::unsupported("This server does not support sessions or transactions."),
         _ => DbError::new(ErrorKind::Server, message),
     }

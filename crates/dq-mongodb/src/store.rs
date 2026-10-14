@@ -100,7 +100,7 @@ fn infer(text: &str) -> Bson {
         "false" => return Bson::Boolean(false),
         _ => {}
     }
-    if (t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']'))
+    if ((t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')))
         && let Ok(v) = literal::parse(t)
     {
         return v;

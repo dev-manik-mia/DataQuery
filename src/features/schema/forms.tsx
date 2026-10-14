@@ -20,6 +20,9 @@ export const TYPE_SUGGESTIONS: Record<SqlFlavor, string[]> = {
   duckdb: ['BIGINT', 'INTEGER', 'SMALLINT', 'DECIMAL(12,2)', 'DOUBLE', 'BOOLEAN', 'VARCHAR', 'UUID', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'INTERVAL', 'BLOB', 'JSON', 'VARCHAR[]', 'STRUCT(a INTEGER)'],
   snowflake: ['NUMBER(38,0)', 'NUMBER(12,2)', 'FLOAT', 'BOOLEAN', 'VARCHAR', 'VARCHAR(255)', 'DATE', 'TIME', 'TIMESTAMP_NTZ', 'TIMESTAMP_TZ', 'VARIANT', 'OBJECT', 'ARRAY', 'BINARY', 'GEOGRAPHY'],
   oracle: ['NUMBER(19)', 'NUMBER(10)', 'NUMBER(12,2)', 'BINARY_DOUBLE', 'VARCHAR2(255 CHAR)', 'NVARCHAR2(255)', 'CHAR(1)', 'CLOB', 'DATE', 'TIMESTAMP(6)', 'TIMESTAMP(6) WITH TIME ZONE', 'RAW(16)', 'BLOB', 'JSON'],
+  // Document engines have no schema forms.
+  mongodb: [],
+  partiql: [],
 };
 
 /** What the engine calls a column that numbers itself. */
@@ -30,6 +33,8 @@ const IDENTITY_LABEL: Record<SqlFlavor, string> = {
   oracle: 'Identity',
   clickhouse: 'Identity (not supported)',
   duckdb: 'Identity (use a sequence default)',
+  mongodb: 'Identity (not supported)',
+  partiql: 'Identity (not supported)',
   snowflake: 'IDENTITY',
 };
 

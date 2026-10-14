@@ -8,6 +8,7 @@ import { api } from '@/lib/ipc';
 import { useWorkspace, type TableTab, type TableView } from '@/stores/workspace';
 
 import { KIND_LABEL, isRelation, objectLabel } from '@/lib/objects';
+import { DocumentsView } from '@/features/documents/DocumentsView';
 
 import { DataView } from './DataView';
 import { DependenciesView } from './DependenciesView';
@@ -24,9 +25,11 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
   const [version, setVersion] = useState(0);
 
   const relation = isRelation(tab.object);
+  // Document engines show collections in the Documents view (screen 13).
+  const documents = session.documents !== null && relation;
 
   useEffect(() => {
-    if (!relation) return;
+    if (!relation || documents) return;
     let stale = false;
     setError(null);
     api
@@ -36,7 +39,7 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
     return () => {
       stale = true;
     };
-  }, [tab.object, session.session_id, version, relation]);
+  }, [tab.object, session.session_id, version, relation, documents]);
 
   const reloadStructure = useCallback(() => setVersion((v) => v + 1), []);
   const openSql = (sql: string) => openQueryTab({ sql, title: `${tab.object.name}.sql` });
@@ -54,6 +57,14 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
       ]}
     />
   );
+
+  if (documents) {
+    return (
+      <div className={styles.tab} style={active ? undefined : { display: 'none' }}>
+        <DocumentsView object={tab.object} />
+      </div>
+    );
+  }
 
   if (!relation) {
     // Indexes, sequences, triggers and routines: their definition only.

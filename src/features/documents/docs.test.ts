@@ -16,8 +16,8 @@ describe('documentsGrid', () => {
     ]);
     expect(columns.map((c) => c.name)).toEqual(['_id', 'big', 'note']);
     expect(columns[1]!.numeric).toBe(true);
-    expect(rows[0]![1]).toEqual({ kind: 'number', value: '9007199254740993' });
-    expect(rows[1]![1]).toEqual({ kind: 'null' });
+    expect(rows[0]!.cells[1]).toEqual({ kind: 'number', value: '9007199254740993' });
+    expect(rows[1]!.cells[1]).toEqual({ kind: 'null' });
   });
 });
 

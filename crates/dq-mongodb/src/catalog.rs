@@ -98,8 +98,9 @@ pub async fn estimate(session: &MongoSession, database: &str, collection: &str) 
 pub async fn collections(session: &MongoSession, database: &str) -> DbResult<Vec<Node>> {
     let mut specs = list_collections(session, database, Document::new()).await?;
     specs.sort_by(|a, b| a.name.cmp(&b.name));
-    let counts: HashMap<String, i64> = stream::iter(specs.iter().filter(|s| !s.view).take(MAX_ESTIMATES))
-        .map(|s| async move { estimate(session, database, &s.name).await.ok().map(|n| (s.name.clone(), n)) })
+    let names: Vec<String> = specs.iter().filter(|s| !s.view).take(MAX_ESTIMATES).map(|s| s.name.clone()).collect();
+    let counts: HashMap<String, i64> = stream::iter(names)
+        .map(|name| async move { estimate(session, database, &name).await.ok().map(|n| (name, n)) })
         .buffer_unordered(8)
         .filter_map(|r| async move { r })
         .collect()
@@ -323,9 +324,9 @@ pub async fn dependencies(session: &MongoSession, object: &ObjectRef) -> DbResul
 pub async fn schema_model(session: &MongoSession, database: &str) -> DbResult<SchemaModel> {
     let specs = list_collections(session, database, Document::new()).await?;
     let truncated = specs.len() > SchemaModel::MAX_TABLES;
-    let tables = stream::iter(specs.iter().take(SchemaModel::MAX_TABLES))
-        .map(|s| async move {
-            let object = object(database, s);
+    let objects: Vec<ObjectRef> = specs.iter().take(SchemaModel::MAX_TABLES).map(|s| object(database, s)).collect();
+    let tables = stream::iter(objects)
+        .map(|object| async move {
             let docs = sample(session, &object).await.unwrap_or_default();
             let columns = sampled_columns(&docs)
                 .into_iter()

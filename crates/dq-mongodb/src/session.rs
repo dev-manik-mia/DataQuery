@@ -555,7 +555,7 @@ impl Session for MongoSession {
         }
         let mut all = Vec::new();
         self.read_batches(database, sql, |docs| {
-            all.extend(docs.iter().map(|d| crate::values::fields(d, limits)));
+            all.extend(docs.iter().map(|d| fields(d, limits)));
             Ok(())
         })
         .await?;

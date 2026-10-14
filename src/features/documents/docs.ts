@@ -1,6 +1,6 @@
 import type { Cell } from '@/bindings/Cell';
-import type { ColumnMeta } from '@/bindings/ColumnMeta';
 import type { Document } from '@/bindings/Document';
+import type { GridColumn, GridRow } from '@/features/grid/DataGrid';
 
 /** Numeric type labels of MongoDB and DynamoDB (right-aligned in the table view). */
 const NUMERIC = new Set(['Int32', 'Int64', 'Double', 'Decimal128', 'N']);
@@ -9,21 +9,21 @@ const NUMERIC = new Set(['Int32', 'Int64', 'Double', 'Decimal128', 'N']);
  * Table view of documents: one column per top-level field in order of first
  * appearance, nested values as JSON cells. Mirrors `dq_core::document::to_grid`.
  */
-export function documentsGrid(documents: Document[]): { columns: ColumnMeta[]; rows: Cell[][] } {
-  const columns: ColumnMeta[] = [];
+export function documentsGrid(documents: Document[]): { columns: GridColumn[]; rows: GridRow[] } {
+  const columns: GridColumn[] = [];
   const index = new Map<string, number>();
   for (const d of documents) {
     for (const f of d.fields) {
       if (!index.has(f.key)) {
         index.set(f.key, columns.length);
-        columns.push({ name: f.key, type_name: f.type_label, numeric: NUMERIC.has(f.type_label) });
+        columns.push({ name: f.key, typeName: f.type_label, numeric: NUMERIC.has(f.type_label) });
       }
     }
   }
-  const rows = documents.map((d) => {
-    const row: Cell[] = columns.map(() => ({ kind: 'null' }));
-    for (const f of d.fields) row[index.get(f.key)!] = f.value;
-    return row;
+  const rows = documents.map((d, i) => {
+    const cells: Cell[] = columns.map(() => ({ kind: 'null' }));
+    for (const f of d.fields) cells[index.get(f.key)!] = f.value;
+    return { key: d.key || String(i), cells };
   });
   return { columns, rows };
 }
