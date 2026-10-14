@@ -185,14 +185,16 @@ async fn columns(client: &Client, object: &ObjectRef) -> DbResult<(Vec<ColumnInf
             if flag(r, 6) {
                 sorting.push(name.clone());
             }
+            let generated = matches!(default_kind.as_str(), "MATERIALIZED" | "ALIAS" | "EPHEMERAL");
             ColumnInfo {
                 nullable: data_type.starts_with("Nullable(") || data_type.contains("(Nullable("),
                 default: opt(r, 3).filter(|_| default_kind == "DEFAULT"),
                 primary_key: flag(r, 5),
                 // MATERIALIZED and ALIAS columns are computed by the server.
-                generated: matches!(default_kind.as_str(), "MATERIALIZED" | "ALIAS" | "EPHEMERAL"),
+                generated,
                 identity: false,
-                editable: false,
+                // Writable from text (imports); grid edits stay off: rows have no identity.
+                editable: !generated && !read_as_text(&data_type),
                 numeric: is_numeric(&data_type),
                 comment: opt(r, 4),
                 read_as_text: read_as_text(&data_type),

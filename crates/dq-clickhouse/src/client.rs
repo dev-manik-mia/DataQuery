@@ -166,7 +166,8 @@ pub fn server_error(code: Option<u32>, body: &str, status: u16, secret: Option<&
     let (kind, action) = match code {
         Some(516 | 192 | 193 | 194) => (ErrorKind::Auth, Some("Check the username and password. The saved password was not changed.")),
         Some(81) => (ErrorKind::NotFound, Some("Check the database name.")),
-        Some(60 | 16 | 47 | 46) => (ErrorKind::NotFound, Some("Check the name and its database.")),
+        Some(60 | 46) => (ErrorKind::NotFound, Some("Check the name and its database.")),
+        Some(16 | 47) => (ErrorKind::Syntax, Some("Check the column name.")),
         Some(164) => (ErrorKind::Permission, Some("This connection is read-only.")),
         Some(497) => (ErrorKind::Permission, Some("Your user lacks the privilege for this action.")),
         Some(159 | 160) => (ErrorKind::Timeout, Some("Narrow the query or raise the statement timeout in Settings.")),

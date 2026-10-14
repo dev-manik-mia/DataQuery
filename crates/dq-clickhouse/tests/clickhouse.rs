@@ -174,12 +174,13 @@ async fn sessions_parameters_and_writes() {
     let r = s
         .execute(
             "SELECT total, {note:Nullable(String)} IS NULL, {text:String} FROM dataquery_test.orders WHERE id = {id:UInt64}",
-            &[Some("7".into()), None, Some("it's; DROP".into())],
+            // Values follow the parameters in order of first appearance.
+            &[None, Some("it's; DROP".into()), Some("7".into())],
             OPTS,
         )
         .await
         .unwrap();
-    assert_eq!((text(&r.rows[0][1]).as_str(), text(&r.rows[0][2]).as_str()), ("true", "it's; DROP"));
+    assert_eq!((text(&r.rows[0][1]).as_str(), text(&r.rows[0][2]).as_str()), ("1", "it's; DROP"));
 }
 
 #[tokio::test]
@@ -199,7 +200,7 @@ async fn structure_ddl_and_model() {
     let s = session(&cfg).await;
     let st = s.structure(&table("orders")).await.unwrap();
     assert!(st.row_identity.is_empty(), "no grid edits");
-    assert!(st.columns.iter().all(|c| !c.editable));
+    assert!(!st.editable());
     let total = st.column("total").unwrap();
     assert!(total.numeric && !total.nullable && total.data_type == "Decimal(12, 2)");
     assert!(st.column("discount").unwrap().nullable);

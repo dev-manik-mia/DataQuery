@@ -38,6 +38,7 @@ pub struct ChSession {
 struct Cursor {
     rows: Rows,
     pending: Option<Vec<serde_json::Value>>,
+    query_id: String,
 }
 
 /// Binds values to `{name:Type}` parameters: `p1`, `p2`, … by number (as
@@ -134,7 +135,7 @@ impl ChSession {
         };
         self.set_running(Some(query_id.clone()));
         let outcome = async {
-            let mut rows = Rows::open(self.client.send(sql, &request).await?, None).await?;
+            let mut rows = Rows::open(self.send_in_session(sql, &request).await?, None).await?;
             let command = command_tag(sql, SqlFlavor::Clickhouse);
             if rows.names.is_empty() {
                 while rows.next().await?.is_some() {}
@@ -153,7 +154,7 @@ impl ChSession {
                 ));
             }
             let columns = column_meta(&rows.names, &rows.types);
-            let mut open = Cursor { rows, pending: None };
+            let mut open = Cursor { rows, pending: None, query_id: query_id.clone() };
             let (first, has_more) = read_rows(&mut open, options.row_limit).await?;
             let result = StatementResult {
                 columns,
@@ -171,6 +172,31 @@ impl ChSession {
         let (result, open) = outcome?;
         *cursor = open;
         Ok(result)
+    }
+
+    /// The session serves one statement at a time; a statement that was just
+    /// stopped can hold it for a moment, so retry briefly.
+    async fn send_in_session(&self, sql: &str, request: &Request<'_>) -> DbResult<reqwest::Response> {
+        let mut delay = std::time::Duration::from_millis(50);
+        for _ in 0..8 {
+            match self.client.send(sql, request).await {
+                Err(e) if e.code.as_deref() == Some("373") => {
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                }
+                other => return other,
+            }
+        }
+        self.client.send(sql, request).await
+    }
+
+    /// Stops a result that was not read to the end, so the session is free.
+    async fn close_cursor(&self, cursor: &mut Option<Cursor>) {
+        if let Some(open) = cursor.take() {
+            drop(open.rows);
+            let request = Request { params: vec![("id".into(), Some(open.query_id))], timeout_secs: 30, ..Request::default() };
+            let _ = self.client.text_rows("KILL QUERY WHERE query_id = {id:String} SYNC", &request).await;
+        }
     }
 
     async fn read_batches(&self, database: &str, sql: &str, params: Params<'_>, limits: CellLimits, on_batch: &mut BatchFn<'_>) -> DbResult<u64> {
@@ -220,8 +246,7 @@ impl Session for ChSession {
     async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
         let options = options.clamped();
         let mut cursor = self.query.lock().await;
-        // Dropping the open response tells the server to stop the old query.
-        *cursor = None;
+        self.close_cursor(&mut cursor).await;
         self.run(&mut cursor, sql, params, options).await
     }
 
