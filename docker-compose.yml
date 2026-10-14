@@ -103,6 +103,11 @@ services:
       interval: 2s
       retries: 60
 
+  # Snowflake emulator (fakesnow on DuckDB) speaking the Snowflake REST protocol.
+  fakesnow:
+    build: { context: docker, dockerfile: fakesnow.Dockerfile }
+    ports: ["58000:8000"]
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }
