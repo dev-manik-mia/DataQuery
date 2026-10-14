@@ -219,6 +219,17 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 21. AI assistant: bring your own key
+
+- [x] T21.1 Providers (`dq_store::AiProvider`): Claude (Anthropic), OpenAI, Google Gemini, DeepSeek, Mistral and Custom (any OpenAI-compatible endpoint); older "local model" settings load as Custom. DataQuery ships no AI service of its own.
+- [x] T21.2 `src-tauri/ai_client.rs`: one provider table and three request formats (Anthropic Messages, OpenAI chat completions for OpenAI / DeepSeek / Mistral / Custom, Gemini `generateContent`); readable errors (bad key, unknown model, rate limit, declined) naming the provider.
+- [x] T21.3 Keys per provider in the keychain (`ai:<provider>`; the Anthropic key keeps its id); never sent over plain HTTP to another machine; the disclosure names the provider and model.
+- [x] T21.4 Models: defaults only where the name is stable (`claude-opus-5-5`, `deepseek-chat`, `mistral-large-latest`); "Load models" lists the chat models a key can use (and checks the key) without spending tokens.
+- [x] T21.5 Settings → AI assistant: provider picker, per-provider key, endpoint for Custom, model with suggestions from Load models.
+- [x] T21.6 Tests: request shape, headers and replies of all three formats against a mock HTTP server; settings migration; key safety; end to end against a local Ollama (`DATAQUERY_TEST_OLLAMA=http://localhost:11434/v1`).
+
+---
+
 ## Verification
 
 | Area | How it was verified |

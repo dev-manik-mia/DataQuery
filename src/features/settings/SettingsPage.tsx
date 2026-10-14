@@ -6,7 +6,8 @@ import type { KeychainStatus } from '@/bindings/KeychainStatus';
 import type { Settings } from '@/bindings/Settings';
 import type { Theme } from '@/bindings/Theme';
 import type { AiProvider } from '@/bindings/AiProvider';
-import { Button, Card, Checkbox, Chip, EngineMark, PageHead, Segmented, TextField } from '@/components/ui';
+import type { ProviderInfo } from '@/bindings/ProviderInfo';
+import { Button, Card, Checkbox, Chip, EngineMark, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { openNewWindow } from '@/features/commands/commands';
 import { languages, t } from '@/i18n';
 import { api } from '@/lib/ipc';
@@ -308,24 +309,56 @@ function MaskPatterns() {
 
 function AiSettings() {
   const { settings, update } = useSettings();
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [key, setKey] = useState('');
   const [model, setModel] = useState(settings.ai_model);
   const [endpoint, setEndpoint] = useState(settings.ai_endpoint);
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const provider = settings.ai_provider;
+  const info = providers.find((p) => p.provider === provider);
+  const custom = provider === 'custom';
+
   useEffect(() => {
-    api.aiKeyStatus().then(setHasKey).catch(() => setHasKey(false));
+    api.aiProviders().then(setProviders).catch(() => setProviders([]));
   }, []);
+  // Each provider has its own key and model list.
+  useEffect(() => {
+    setKey('');
+    setModels([]);
+    setModel(settings.ai_model);
+    api
+      .aiKeyStatus(provider)
+      .then(setHasKey)
+      .catch(() => setHasKey(false));
+  }, [provider, settings.ai_model]);
+
+  const choose = (next: AiProvider) => void update({ ai_provider: next, ai_model: '' });
   const saveKey = async (value: string | null) => {
     try {
-      await api.aiSetKey(value);
+      await api.aiSetKey(provider, value);
       setHasKey(Boolean(value));
       setKey('');
-      useUi.getState().toast(value ? 'API key saved in the keychain.' : 'API key removed.', 'positive');
+      useUi.getState().toast(value ? `${info?.name ?? 'API'} key saved in the keychain.` : 'API key removed.', 'positive');
     } catch (e) {
       useUi.getState().toastError(e);
     }
   };
-  const anthropic = settings.ai_provider === 'anthropic';
+  /** Lists the models the saved key can use; doubles as a key test. */
+  const loadModels = async () => {
+    setLoading(true);
+    try {
+      const found = await api.aiModels();
+      setModels(found);
+      useUi.getState().toast(found.length ? `${found.length} models available — pick one in Model.` : 'The provider listed no chat models.', found.length ? 'positive' : 'info');
+    } catch (e) {
+      useUi.getState().toastError(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
       <PageHead eyebrow="Settings" title="AI assistant" />
@@ -333,62 +366,72 @@ function AiSettings() {
         <div className={styles.check}>
           <Checkbox
             label="Turn on the AI assistant"
-            help="Off by default. When on, an Assistant button appears in query tabs. Each request lists what it sends: your question and table/column names and types — never credentials, rows or results."
+            help="Off by default, and DataQuery includes no AI service of its own: you bring an API key from the provider you choose. When on, an Assistant button appears in query tabs. Each request lists what it sends: your question and table/column names and types — never credentials, rows or results."
             checked={settings.ai_enabled}
             onChange={(v) => void update({ ai_enabled: v })}
           />
         </div>
-        <Row title="Provider">
-          <Segmented<AiProvider>
-            label="Provider"
-            value={settings.ai_provider}
-            onChange={(ai_provider) => void update({ ai_provider })}
-            options={[
-              { value: 'anthropic', label: 'Anthropic (your API key)' },
-              { value: 'open_ai_compatible', label: 'Local model' },
-            ]}
-          />
-        </Row>
         <div className={styles.fields}>
-          <TextField
-            label="Model"
-            mono
-            placeholder={anthropic ? 'claude-opus-5-5' : 'e.g. qwen2.5-coder'}
-            hint={anthropic ? 'Leave empty for claude-opus-5-5.' : 'The model name your local server serves.'}
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            onBlur={() => model !== settings.ai_model && void update({ ai_model: model.trim() })}
+          <SelectField
+            label="Provider"
+            value={provider}
+            onChange={(e) => choose(e.target.value as AiProvider)}
+            options={(providers.length ? providers : [{ provider, name: provider } as ProviderInfo]).map((p) => ({ value: p.provider, label: p.name }))}
+            hint={custom ? 'Any server with an OpenAI-compatible chat API: Ollama, LM Studio, OpenRouter, a company gateway…' : info?.key_url ? `Create a key at ${info.key_url}` : undefined}
           />
-          {!anthropic && (
+          {custom ? (
             <TextField
               label="Endpoint"
               mono
-              hint="OpenAI-compatible base URL, e.g. Ollama or LM Studio."
+              placeholder="http://localhost:11434/v1"
+              hint="Base URL; DataQuery calls /chat/completions and /models under it. A key is only sent over https:// (or to this computer)."
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
               onBlur={() => endpoint !== settings.ai_endpoint && void update({ ai_endpoint: endpoint.trim() })}
             />
+          ) : (
+            <span />
           )}
           <TextField
-            label={anthropic ? 'Anthropic API key' : 'API key (optional)'}
+            label={custom ? 'API key (optional)' : `${info?.name ?? 'Provider'} API key`}
             type="password"
             mono
             autoComplete="off"
-            placeholder={hasKey ? '•••••••• (saved in the keychain)' : ''}
-            hint="Stored in the system keychain, never in the settings file."
+            placeholder={hasKey ? '•••••••• (saved in the keychain)' : custom ? 'none' : 'Paste your API key'}
+            hint="Stored in the system keychain for this provider only, never in the settings file or logs."
             value={key}
             onChange={(e) => setKey(e.target.value)}
           />
-        </div>
-        <div className={styles.check} style={{ display: 'flex', gap: 8 }}>
-          <Button size="sm" disabled={!key.trim()} onClick={() => void saveKey(key.trim())}>
-            Save key
-          </Button>
-          {hasKey && (
-            <Button size="sm" variant="plain" onClick={() => void saveKey(null)}>
-              Remove saved key
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', alignSelf: 'start', paddingTop: 22 }}>
+            <Button size="sm" disabled={!key.trim()} onClick={() => void saveKey(key.trim())}>
+              Save key
             </Button>
-          )}
+            {hasKey && (
+              <Button size="sm" variant="plain" onClick={() => void saveKey(null)}>
+                Remove saved key
+              </Button>
+            )}
+          </div>
+          <TextField
+            label="Model"
+            mono
+            list="dq-ai-models"
+            placeholder={info?.default_model ?? 'Load models, then pick one'}
+            hint={info?.default_model ? `Leave empty for ${info.default_model}.` : 'Required: use Load models to see what your key can use, or type a model id.'}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={() => model.trim() !== settings.ai_model && void update({ ai_model: model.trim() })}
+          />
+          <datalist id="dq-ai-models">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', alignSelf: 'start', paddingTop: 22 }}>
+            <Button size="sm" busy={loading} disabled={!custom && !hasKey} onClick={() => void loadModels()} title="Asks the provider which models this key can use (also checks the key)">
+              Load models
+            </Button>
+          </div>
         </div>
       </Card>
     </>

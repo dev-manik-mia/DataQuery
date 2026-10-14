@@ -3,21 +3,15 @@
 //! and types. Never credentials, rows or results. Answers come back as text
 //! and SQL that the UI places in the editor; nothing here executes SQL.
 
-use std::time::Duration;
-
 use dq_core::schema::SchemaModel;
 use dq_core::sql::SqlFlavor;
-use dq_core::{DbError, DbResult, ErrorKind};
+use dq_core::{DbError, DbResult};
 use dq_store::{AiProvider, Settings};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use ts_rs::TS;
 
-/// Keychain id of the Anthropic API key.
-pub const ANTHROPIC_KEY_ID: &str = "ai:anthropic";
-pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
-const FALLBACK_MODELS: &[&str] = &["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
-const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+use crate::ai_client;
+
 /// Schema text sent with a request, at most.
 const MAX_SCHEMA_CHARS: usize = 60_000;
 const MAX_INPUT_CHARS: usize = 20_000;
@@ -70,14 +64,6 @@ pub struct Prepared {
     system: String,
     user: String,
     pub disclosure: AiDisclosure,
-}
-
-fn model(settings: &Settings) -> String {
-    let m = settings.ai_model.trim();
-    match (settings.ai_provider, m.is_empty()) {
-        (AiProvider::Anthropic, true) => DEFAULT_MODEL.into(),
-        _ => m.to_owned(),
-    }
 }
 
 fn clip(text: &str, max: usize) -> &str {
@@ -225,20 +211,16 @@ pub fn prepare(
     );
     let disclosure = AiDisclosure {
         provider: match settings.ai_provider {
-            AiProvider::Anthropic => "Anthropic".into(),
-            AiProvider::OpenAiCompatible => format!("Local endpoint {}", settings.ai_endpoint),
+            AiProvider::Custom => format!("Custom endpoint {}", settings.ai_endpoint.trim()),
+            other => ai_client::info(other).name.to_owned(),
         },
-        model: model(settings),
+        model: ai_client::model(settings)?,
         sent,
         not_sent: vec!["Credentials and connection details".into(), "Row data".into(), "Query results".into()],
         tables,
         characters: (system.len() + task.len()) as u64,
     };
     Ok(Prepared { system, user: task, disclosure })
-}
-
-fn ai_error(message: impl AsRef<str>) -> DbError {
-    DbError::new(ErrorKind::Network, message.as_ref()).with_code("AI")
 }
 
 /// The first fenced SQL code block of an answer.
@@ -249,90 +231,11 @@ pub fn extract_sql(text: &str) -> Option<String> {
     Some(rest[..end].trim().to_owned()).filter(|s| !s.is_empty())
 }
 
-/// Sends a prepared request to the configured provider.
+/// Sends a prepared request to the configured provider with that provider's key.
 pub async fn ask(settings: &Settings, api_key: Option<String>, prepared: Prepared) -> DbResult<AiAnswer> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| ai_error(format!("HTTP client: {e}")))?;
+    let target = ai_client::Target::new(settings, api_key)?;
     let model = prepared.disclosure.model.clone();
-    let text = match settings.ai_provider {
-        AiProvider::Anthropic => {
-            let key = api_key
-                .filter(|k| !k.trim().is_empty())
-                .ok_or_else(|| DbError::invalid("Add your Anthropic API key in Settings → AI assistant."))?;
-            let mut body = json!({
-                "model": model,
-                "max_tokens": 16000,
-                "output_config": { "effort": "medium" },
-                "system": prepared.system,
-                "messages": [{ "role": "user", "content": prepared.user }],
-            });
-            // Server-side refusal fallback, on the models that accept it.
-            let fallback = FALLBACK_MODELS.contains(&model.as_str());
-            if fallback {
-                body["fallbacks"] = json!("default");
-            }
-            let mut request =
-                client.post(ANTHROPIC_URL).header("x-api-key", key).header("anthropic-version", "2023-06-01");
-            if fallback {
-                request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
-            }
-            let response =
-                request.json(&body).send().await.map_err(|e| ai_error(format!("Cannot reach Anthropic: {e}")))?;
-            let status = response.status();
-            let value: Value = response.json().await.map_err(|e| ai_error(format!("Unreadable reply: {e}")))?;
-            if !status.is_success() {
-                let message = value["error"]["message"].as_str().unwrap_or("request failed");
-                let kind = if status.as_u16() == 401 { ErrorKind::Auth } else { ErrorKind::Server };
-                return Err(DbError::new(kind, format!("Anthropic API {status}: {message}")).with_code("AI"));
-            }
-            if value["stop_reason"] == "refusal" {
-                return Err(DbError::new(ErrorKind::Server, "The model declined this request.").with_code("AI"));
-            }
-            value["content"]
-                .as_array()
-                .map(|blocks| {
-                    blocks
-                        .iter()
-                        .filter(|b| b["type"] == "text")
-                        .filter_map(|b| b["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .unwrap_or_default()
-        }
-        AiProvider::OpenAiCompatible => {
-            let url = format!("{}/chat/completions", settings.ai_endpoint.trim_end_matches('/'));
-            if !(url.starts_with("http://") || url.starts_with("https://")) {
-                return Err(DbError::invalid("The local endpoint must start with http:// or https://."));
-            }
-            if model.is_empty() {
-                return Err(DbError::invalid("Enter the local model name in Settings → AI assistant."));
-            }
-            let body = json!({
-                "model": model,
-                "messages": [
-                    { "role": "system", "content": prepared.system },
-                    { "role": "user", "content": prepared.user },
-                ],
-            });
-            let mut request = client.post(&url).json(&body);
-            if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
-                request = request.bearer_auth(key);
-            }
-            let response = request.send().await.map_err(|e| ai_error(format!("Cannot reach {url}: {e}")))?;
-            let status = response.status();
-            let value: Value = response.json().await.map_err(|e| ai_error(format!("Unreadable reply: {e}")))?;
-            if !status.is_success() {
-                return Err(ai_error(format!("{url} returned {status}")));
-            }
-            value["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_owned()
-        }
-    };
-    if text.trim().is_empty() {
-        return Err(ai_error("The model returned no text."));
-    }
+    let text = ai_client::complete(&target, &model, &prepared.system, &prepared.user).await?;
     Ok(AiAnswer { sql: extract_sql(&text), text, model, disclosure: prepared.disclosure })
 }
 
@@ -365,7 +268,8 @@ mod tests {
             &AiRequest::Sql { question: "Which customers have most orders?".into() },
         )
         .unwrap();
-        assert_eq!(p.disclosure.model, DEFAULT_MODEL);
+        assert_eq!(p.disclosure.model, "claude-opus-5-5");
+        assert_eq!(p.disclosure.provider, "Claude (Anthropic)");
         assert_eq!(p.disclosure.sent, ["Column names and types for 3 tables", "Your question"]);
         assert!(p.disclosure.not_sent.iter().any(|n| n == "Row data"));
         assert_ne!(p.disclosure.tables[0], "public.audit_log");

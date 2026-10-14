@@ -1,6 +1,7 @@
 //! DataQuery desktop application: Tauri setup and command registration.
 
 mod ai;
+mod ai_client;
 mod cloud_auth;
 mod commands;
 mod connector;
@@ -42,6 +43,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ai::ai_disclosure,
             commands::ai::ai_ask,
+            commands::ai::ai_providers,
+            commands::ai::ai_models,
             commands::ai::ai_key_status,
             commands::ai::ai_set_key,
             commands::system::app_info,

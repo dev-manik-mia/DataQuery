@@ -282,7 +282,17 @@ const handlers: Record<string, (a: Args) => unknown> = {
   largest_tables: () => [{ object: obj('table', 'app_dev', 'public', 'sessions'), total_bytes: 734003200, table_bytes: 524288000, index_bytes: 209715200, rows: 1200000 }],
   framework_migrations: () => [{ framework: 'Prisma', table: obj('table', 'app_dev', 'public', '_prisma_migrations'), entries: [{ version: 'a1', name: '20260101_init', applied_at: '2026-01-01 10:00:00', status: 'applied', batch: null }] }],
   list_snippets: () => [{ id: 'sn1', name: 'Count rows', prefix: 'cnt', body: 'SELECT count(*) FROM ${1:table};', updated_at: now }],
-  ai_key_status: () => true,
+  ai_key_status: (a) => a.provider === 'anthropic' || a.provider === 'openai',
+  ai_set_key: () => null,
+  ai_models: () => ['gpt-mini', 'gpt-large', 'o-reasoner'],
+  ai_providers: () => [
+    { provider: 'anthropic', name: 'Claude (Anthropic)', base_url: 'https://api.anthropic.com/v1', default_model: 'claude-opus-5-5', key_required: true, key_url: 'https://console.anthropic.com/settings/keys' },
+    { provider: 'openai', name: 'OpenAI', base_url: 'https://api.openai.com/v1', default_model: null, key_required: true, key_url: 'https://platform.openai.com/api-keys' },
+    { provider: 'google', name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta', default_model: null, key_required: true, key_url: 'https://aistudio.google.com/app/apikey' },
+    { provider: 'deepseek', name: 'DeepSeek', base_url: 'https://api.deepseek.com', default_model: 'deepseek-chat', key_required: true, key_url: 'https://platform.deepseek.com/api_keys' },
+    { provider: 'mistral', name: 'Mistral', base_url: 'https://api.mistral.ai/v1', default_model: 'mistral-large-latest', key_required: true, key_url: 'https://console.mistral.ai/api-keys' },
+    { provider: 'custom', name: 'Custom (OpenAI-compatible)', base_url: '', default_model: null, key_required: false, key_url: '' },
+  ],
   ai_disclosure: () => ({ provider: 'Anthropic', model: 'claude-opus-5-5', sent: ['Column names and types for 5 tables', 'Your question'], not_sent: ['Credentials and connection details', 'Row data', 'Query results'], tables: ['public.orders', 'public.customers'], characters: 1800 }),
   ai_ask: () => ({ text: 'Here is a query:\n```sql\nSELECT 1;\n```', sql: 'SELECT 1;', model: 'claude-opus-5-5', disclosure: null }),
   run_sql: (a) => {

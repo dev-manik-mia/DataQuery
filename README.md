@@ -137,7 +137,8 @@ crates/
   dq-store      Local SQLite store (connections, settings, history, scripts, snippets) and keychain.
   dq-ssh        SSH tunnels (russh): jump hosts, password/key/agent auth, host-key verification.
 src-tauri/      Tauri app: thin async commands, adapter registry, connector (secrets, IAM tokens,
-                tunnels, retries), safety confirmations, opt-in AI assistant.
+                tunnels, retries), safety confirmations, opt-in AI assistant (bring your own key: Claude,
+                OpenAI, Gemini, DeepSeek, Mistral or any OpenAI-compatible endpoint).
 src/            React UI: components/ (design system), features/ (screens), stores/ (zustand),
                 lib/ (typed IPC, formatting), i18n/ (string table), bindings/ (generated from Rust,
                 do not edit). Commands, shortcuts and the palette share features/commands.
@@ -149,7 +150,7 @@ src/            React UI: components/ (design system), features/ (screens), stor
 
 - Values reach SQL only as bound parameters (also user `$n`/`?`/`@Pn`/`:n` parameters, FK navigation and column search). Identifiers are always quoted by the engine's `Dialect`; user-typed types, defaults and checks must be single expressions.
 - Read-only connections are read-only on the server session (PostgreSQL, CockroachDB, MySQL, ClickHouse `readonly=2`, DuckDB read-only file access), and the backend refuses grid edits, imports and schema changes. SQL Server, Oracle, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Cassandra and ScyllaDB have no such session mode (Elasticsearch, too; Neo4j runs read-only sessions in the server's read mode), so DataQuery also refuses writing statements there.
-- Secrets (passwords, SSH passwords/passphrases, the AI key) live only in the keychain; cloud IAM tokens are fetched per connect and never stored.
+- Secrets (passwords, SSH passwords/passphrases, AI provider keys) live only in the keychain; cloud IAM tokens are fetched per connect and never stored.
 - Results are always bounded. Exports stream to disk.
 - Table views and exports run on **read-only** connections. Grid edits run in one transaction, and each change must affect exactly one row or everything rolls back.
 - Destructive statements and production writes need a confirmation, checked in the backend and not only in the UI.

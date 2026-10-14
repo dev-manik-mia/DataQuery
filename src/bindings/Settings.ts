@@ -47,7 +47,7 @@ autosave_scripts: boolean,
  */
 ai_enabled: boolean, ai_provider: AiProvider, ai_model: string, 
 /**
- * Base URL for the OpenAI-compatible provider, e.g. `http://localhost:11434/v1`.
+ * Base URL for the custom provider (OpenAI-compatible), e.g. `http://localhost:11434/v1`.
  */
 ai_endpoint: string, 
 /**

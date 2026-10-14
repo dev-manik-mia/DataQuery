@@ -240,16 +240,25 @@ pub enum Theme {
     System,
 }
 
-/// Which model provider the opt-in AI assistant uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+/// Which model provider the opt-in AI assistant uses. Every provider is used
+/// with the user's own API key, kept in the keychain per provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum AiProvider {
-    /// Anthropic's API with the user's own key (kept in the keychain).
+    /// Claude, through Anthropic's Messages API.
     #[default]
     Anthropic,
-    /// A local or self-hosted server with an OpenAI-compatible chat API, e.g. Ollama.
-    OpenAiCompatible,
+    Openai,
+    /// Google's Gemini API.
+    Google,
+    Deepseek,
+    Mistral,
+    /// Any server with an OpenAI-compatible chat API at `ai_endpoint` (Ollama,
+    /// LM Studio, `OpenRouter`, a company gateway, …). Older settings called it
+    /// `open_ai_compatible`.
+    #[serde(alias = "open_ai_compatible")]
+    Custom,
 }
 
 /// User preferences. Missing fields take their defaults, so older files load.
@@ -290,7 +299,7 @@ pub struct Settings {
     pub ai_enabled: bool,
     pub ai_provider: AiProvider,
     pub ai_model: String,
-    /// Base URL for the OpenAI-compatible provider, e.g. `http://localhost:11434/v1`.
+    /// Base URL for the custom provider (OpenAI-compatible), e.g. `http://localhost:11434/v1`.
     pub ai_endpoint: String,
     /// Look for a signed update when the app starts. Off by default: no network calls unless asked.
     pub check_updates_on_launch: bool,
@@ -364,5 +373,18 @@ impl Settings {
         self.ai_model = clean_text(&self.ai_model, 100);
         self.ai_endpoint = clean_text(&self.ai_endpoint, 500);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_local_model_setting_loads_as_custom() {
+        let s: Settings = serde_json::from_str(r#"{"ai_provider":"open_ai_compatible"}"#).unwrap();
+        assert_eq!(s.ai_provider, AiProvider::Custom);
+        let s: Settings = serde_json::from_str(r#"{"ai_provider":"google"}"#).unwrap();
+        assert_eq!(s.ai_provider, AiProvider::Google);
     }
 }

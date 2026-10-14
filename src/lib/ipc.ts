@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 import type { AiAnswer } from '@/bindings/AiAnswer';
 import type { AiDisclosure } from '@/bindings/AiDisclosure';
+import type { AiProvider } from '@/bindings/AiProvider';
 import type { AiRequest } from '@/bindings/AiRequest';
 import type { AppInfo } from '@/bindings/AppInfo';
 import type { ApplyReport } from '@/bindings/ApplyReport';
@@ -47,6 +48,7 @@ import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
 import type { ObjectSize } from '@/bindings/ObjectSize';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
+import type { ProviderInfo } from '@/bindings/ProviderInfo';
 import type { QueryAnalysis } from '@/bindings/QueryAnalysis';
 import type { RowChange } from '@/bindings/RowChange';
 import type { RowCount } from '@/bindings/RowCount';
@@ -246,8 +248,10 @@ export const api = {
   // AI assistant (opt-in; never runs SQL)
   aiDisclosure: ({ sessionId }: Sid, request: AiRequest) => call<AiDisclosure>('ai_disclosure', { sessionId, request }),
   aiAsk: ({ sessionId }: Sid, request: AiRequest) => call<AiAnswer>('ai_ask', { sessionId, request }),
-  aiKeyStatus: () => call<boolean>('ai_key_status'),
-  aiSetKey: (key: string | null) => call<void>('ai_set_key', { key }),
+  aiProviders: () => call<ProviderInfo[]>('ai_providers'),
+  aiModels: () => call<string[]>('ai_models'),
+  aiKeyStatus: (provider: AiProvider) => call<boolean>('ai_key_status', { provider }),
+  aiSetKey: (provider: AiProvider, key: string | null) => call<void>('ai_set_key', { provider, key }),
 };
 
 /** An empty row filter. */

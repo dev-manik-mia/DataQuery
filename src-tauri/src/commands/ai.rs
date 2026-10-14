@@ -1,10 +1,13 @@
-//! Commands for the opt-in AI assistant. Nothing here runs SQL.
+//! Commands for the opt-in AI assistant. Every provider is used with the
+//! user's own API key, kept in the keychain per provider. Nothing here runs SQL.
 
 use dq_core::DbError;
+use dq_store::AiProvider;
 use tauri::State;
 
 use super::CmdResult;
 use crate::ai::{self, AiAnswer, AiDisclosure, AiRequest, Prepared};
+use crate::ai_client::{self, ProviderInfo};
 use crate::state::{AppState, blocking};
 
 async fn prepared(
@@ -23,6 +26,17 @@ async fn prepared(
     Ok((settings, prepared))
 }
 
+async fn saved_key(state: &AppState, provider: AiProvider) -> CmdResult<Option<String>> {
+    let secrets = state.secrets.clone();
+    blocking(move || secrets.get(ai_client::key_id(provider))).await
+}
+
+/// The supported providers, for the settings page.
+#[tauri::command]
+pub fn ai_providers() -> Vec<ProviderInfo> {
+    ai_client::PROVIDERS.to_vec()
+}
+
 /// What a request would send, for the disclosure panel.
 #[tauri::command]
 pub async fn ai_disclosure(
@@ -36,25 +50,32 @@ pub async fn ai_disclosure(
 #[tauri::command]
 pub async fn ai_ask(state: State<'_, AppState>, session_id: String, request: AiRequest) -> CmdResult<AiAnswer> {
     let (settings, prepared) = prepared(&state, &session_id, &request).await?;
-    let secrets = state.secrets.clone();
-    let key = blocking(move || secrets.get(ai::ANTHROPIC_KEY_ID)).await?;
+    let key = saved_key(&state, settings.ai_provider).await?;
     ai::ask(&settings, key, prepared).await
 }
 
-/// Whether an API key is saved (never the key itself).
+/// Models the saved key can use with the current provider and endpoint; also a key test.
 #[tauri::command]
-pub async fn ai_key_status(state: State<'_, AppState>) -> CmdResult<bool> {
-    let secrets = state.secrets.clone();
-    Ok(blocking(move || secrets.get(ai::ANTHROPIC_KEY_ID)).await?.is_some())
+pub async fn ai_models(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let settings = state.settings().await?;
+    let key = saved_key(&state, settings.ai_provider).await?;
+    ai_client::list_models(&ai_client::Target::new(&settings, key)?).await
 }
 
-/// Saves the API key in the keychain, or removes it when `key` is empty.
+/// Whether a key is saved for `provider` (never the key itself).
 #[tauri::command]
-pub async fn ai_set_key(state: State<'_, AppState>, key: Option<String>) -> CmdResult<()> {
+pub async fn ai_key_status(state: State<'_, AppState>, provider: AiProvider) -> CmdResult<bool> {
+    Ok(saved_key(&state, provider).await?.is_some())
+}
+
+/// Saves `provider`'s API key in the keychain, or removes it when `key` is empty.
+#[tauri::command]
+pub async fn ai_set_key(state: State<'_, AppState>, provider: AiProvider, key: Option<String>) -> CmdResult<()> {
     let secrets = state.secrets.clone();
+    let id = ai_client::key_id(provider);
     blocking(move || match key.map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()) {
-        Some(k) => secrets.set(ai::ANTHROPIC_KEY_ID, &k),
-        None => secrets.delete(ai::ANTHROPIC_KEY_ID),
+        Some(k) => secrets.set(id, &k),
+        None => secrets.delete(id),
     })
     .await
 }

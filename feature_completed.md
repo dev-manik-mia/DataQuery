@@ -207,7 +207,7 @@ _Last updated: 2026-10-14 (all of §1–§12 complete; SQL Server, Oracle, Cockr
 | Locks and blocking chains | P1 | ✅ | `pg_locks` / `performance_schema.data_locks` / InnoDB views; tested |
 | Table sizes, server settings | P1 | ✅ | |
 | Unsupported panels hidden with the reason | P1 | ✅ | |
-| AI assistant: opt-in, own key or local model, NL→SQL, explain query/error, schema summary, disclosure, never runs SQL | P1/P2 | ✅ | Not exercised against the live API |
+| AI assistant: opt-in, bring your own API key (Claude, OpenAI, Google Gemini, DeepSeek, Mistral, or a custom OpenAI-compatible endpoint), NL→SQL, explain query/error, schema summary, disclosure, never runs SQL | P1/P2 | ✅ | No built-in AI service: keys per provider in the keychain; Load models lists what a key can use (and checks it); keys never sent over plain HTTP to another machine. Request formats tested against a mock server for all three APIs and end to end against a local Ollama; the cloud providers were not called with real keys |
 
 ## 12. About and updates
 
