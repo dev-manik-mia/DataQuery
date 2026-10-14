@@ -1,0 +1,151 @@
+/* ==========================================================================
+   RustBase design tokens — IDE theme (from html/RustBase Design System.html).
+   Components use the semantic layer only; never raw hex values.
+   ========================================================================== */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('../assets/fonts/JetBrainsMono.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('../assets/fonts/JetBrainsMono-Italic.woff2') format('woff2');
+}
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-micro: 11px;
+  --text-caption: 12px;
+  --text-ui: 13px;
+  --text-body: 14px;
+  --text-heading: 15px;
+  --text-title-sm: 19px;
+  --text-title: 23px;
+  --text-display-sm: 28px;
+
+  --track-display: -0.034em;
+  --track-title: -0.02em;
+  --track-label: 0.1em;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --radius: 4px;
+  --ring-w: 2px;
+  --ring-o: 2px;
+
+  --dur-color: 150ms;
+  --dur-move: 200ms;
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Layout */
+  --titlebar-h: 40px;
+  --statusbar-h: 24px;
+  --tabbar-h: 36px;
+  --toolbar-h: 44px;
+  --row-h: 28px;
+  --tree-row-h: 26px;
+  --input-h: 38px;
+  --input-h-sm: 28px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-color: 1ms;
+    --dur-move: 1ms;
+  }
+}
+
+:root,
+[data-mode='light'] {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --sunk: #eef0f3;
+  --ink: #1e2024;
+  --ink-2: #4c525c;
+  --ink-3: #676d77;
+  --line: #e1e4e8;
+  --line-2: #eaecef;
+  --border-control: #8a9099;
+  --accent: #2f6be6;
+  --accent-ink: #ffffff;
+  --accent-text: #2459c9;
+  --accent-tint: #e7eefd;
+  --accent-on-tint: #1d4baf;
+  --positive: #1f7a3f;
+  --positive-tint: #e4f3ea;
+  --caution: #865800;
+  --caution-tint: #fbf0d9;
+  --critical: #c42b2b;
+  --critical-tint: #fce8e8;
+  --critical-ink: #ffffff;
+  --track: #e6e9ee;
+  --nav-active-bg: #e1eafc;
+  --nav-active-ink: #1d4baf;
+  --toast-bg: #1e2024;
+  --toast-ink: #f7f8fa;
+  --ring-color: #2f6be6;
+  --syn-kw: #a33b8a;
+  --syn-type: #2459c9;
+  --syn-comment: #676d77;
+  --engine-ink: #15171a;
+  --engine-l: 0.82;
+  --elevation-1: 0 1px 2px rgba(20, 24, 32, 0.06), 0 8px 24px rgba(20, 24, 32, 0.1);
+  --elevation-2: 0 2px 6px rgba(20, 24, 32, 0.1), 0 16px 40px rgba(20, 24, 32, 0.16);
+  --scrim: rgba(20, 24, 32, 0.4);
+}
+
+[data-mode='dark'] {
+  color-scheme: dark;
+  --bg: #1c1e22;
+  --surface: #23252a;
+  --sunk: #18191c;
+  --ink: #dfe1e5;
+  --ink-2: #a9aeb8;
+  --ink-3: #8a909b;
+  --line: #31343a;
+  --line-2: #2b2e33;
+  --border-control: #565b64;
+  --accent: #3574f0;
+  --accent-ink: #ffffff;
+  --accent-text: #73a5ff;
+  --accent-tint: #23314d;
+  --accent-on-tint: #b3ccff;
+  --positive: #67bf80;
+  --positive-tint: #1e3327;
+  --caution: #e2b358;
+  --caution-tint: #3a3121;
+  --critical: #f2786f;
+  --critical-tint: #3f2426;
+  --critical-ink: #1a1714;
+  --track: #31343a;
+  --nav-active-bg: #2d3e60;
+  --nav-active-ink: #dce6ff;
+  --toast-bg: #dfe1e5;
+  --toast-ink: #1c1e22;
+  --ring-color: #73a5ff;
+  --syn-kw: #db9a6e;
+  --syn-type: #73a5ff;
+  --syn-comment: #8a909b;
+  --engine-ink: #15171a;
+  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --elevation-2: 0 2px 6px rgba(0, 0, 0, 0.45), 0 16px 40px rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.5);
+}

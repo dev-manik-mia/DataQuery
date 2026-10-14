@@ -1,0 +1,29 @@
+[package]
+name = "rb-postgres"
+description = "PostgreSQL adapter for RustBase."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rb-core.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+fallible-iterator = "0.2"
+futures-util.workspace = true
+postgres-protocol.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+webpki-roots.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

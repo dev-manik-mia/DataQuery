@@ -1,0 +1,1 @@
+doc-valid-idents = ["RustBase", "PostgreSQL", "MySQL", "MariaDB", "SQLite", "SQLSTATE", "..", "TypeScript", "CodeMirror"]

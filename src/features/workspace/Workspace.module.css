@@ -1,0 +1,131 @@
+.workspace {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tabbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: var(--tabbar-h);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 240px;
+  padding: 0 6px 0 14px;
+  border: none;
+  border-right: 1px solid var(--line);
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--text-ui);
+}
+
+.tab[aria-selected='true'] {
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tabKind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.dirty {
+  color: var(--syn-type);
+  font-size: 10px;
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-3);
+  visibility: hidden;
+}
+
+.tab:hover .close,
+.tab[aria-selected='true'] .close,
+.close:focus-visible {
+  visibility: visible;
+}
+
+.close:hover {
+  background: var(--sunk);
+  color: var(--ink);
+}
+
+.newTab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+}
+
+.newTab:hover {
+  color: var(--ink);
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 340px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink-3);
+  font-size: var(--text-caption);
+}
+
+.search:hover {
+  border-color: var(--ink-3);
+}
+
+.connMenu {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink);
+  font-size: var(--text-ui);
+  font-weight: 600;
+}
+
+.connMenu:hover {
+  background: var(--sunk);
+}

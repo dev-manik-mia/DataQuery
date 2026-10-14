@@ -1,0 +1,842 @@
+/* ==========================================================================
+   UI primitives. Classes are prefixed `rb-` and used only by
+   src/components/ui. Feature layouts use CSS modules with the tokens.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- Button */
+.rb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 15px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-ui);
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-color) var(--ease-inout),
+    border-color var(--dur-color) var(--ease-inout),
+    color var(--dur-color) var(--ease-inout),
+    filter var(--dur-color) var(--ease-inout);
+}
+
+.rb-btn--sm {
+  padding: 6px 10px;
+  font-size: var(--text-caption);
+}
+
+.rb-btn--xs {
+  padding: 4px 8px;
+  font-size: var(--text-caption);
+}
+
+.rb-btn--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.rb-btn--danger {
+  background: var(--critical);
+  color: var(--critical-ink);
+}
+
+.rb-btn--ghost {
+  border-color: var(--line);
+}
+
+.rb-btn--caution {
+  border-color: var(--caution);
+  color: var(--caution);
+}
+
+.rb-btn--plain {
+  padding-inline: 6px;
+}
+
+.rb-btn--primary:hover:not(:disabled),
+.rb-btn--danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.rb-btn--ghost:hover:not(:disabled),
+.rb-btn--plain:hover:not(:disabled) {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+.rb-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.rb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rb-btn__kbd {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.rb-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.rb-icon-btn--bare {
+  border-color: transparent;
+}
+
+.rb-icon-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+
+.rb-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --------------------------------------------------------------- Spinner */
+.rb-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: rb-spin 700ms linear infinite;
+}
+
+.rb-spinner--current {
+  border-color: currentColor;
+  border-right-color: transparent;
+}
+
+@keyframes rb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------- Fields */
+.rb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rb-field__label {
+  font-size: var(--text-ui);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.rb-field__hint {
+  font-size: var(--text-caption);
+  color: var(--ink-2);
+}
+
+.rb-field__error {
+  font-size: var(--text-caption);
+  color: var(--critical);
+}
+
+.rb-input {
+  height: var(--input-h);
+  width: 100%;
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  font-size: var(--text-ui);
+  transition: border-color var(--dur-color) var(--ease-inout);
+}
+
+.rb-input--sm {
+  height: var(--input-h-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--text-caption);
+}
+
+.rb-input--mono {
+  font-family: var(--font-mono);
+}
+
+.rb-input::placeholder {
+  color: var(--ink-3);
+}
+
+.rb-input:hover:not(:disabled) {
+  border-color: var(--ink-2);
+}
+
+.rb-input:focus-visible {
+  border-color: var(--accent);
+}
+
+.rb-input:disabled {
+  opacity: 0.45;
+}
+
+.rb-input[aria-invalid='true'] {
+  border-color: var(--critical);
+}
+
+.rb-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.rb-input-wrap .rb-input {
+  padding-right: 64px;
+}
+
+.rb-input-wrap__suffix {
+  position: absolute;
+  right: var(--space-3);
+  color: var(--ink-3);
+  font-size: var(--text-ui);
+  pointer-events: none;
+}
+
+select.rb-input {
+  appearance: none;
+  padding-right: 30px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-3) 50%), linear-gradient(135deg, var(--ink-3) 50%, transparent 50%);
+  background-position:
+    right 15px top 50%,
+    right 10px top 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+textarea.rb-input {
+  height: auto;
+  min-height: 88px;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+
+/* ------------------------------------------------------------- Segmented */
+.rb-seg {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.rb-seg__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+  font-weight: 700;
+}
+
+.rb-seg__opt:first-child {
+  border-left: none;
+}
+
+.rb-seg--md .rb-seg__opt {
+  padding: 8px 14px;
+}
+
+.rb-seg__opt:hover:not(:disabled):not([aria-checked='true']) {
+  color: var(--ink);
+}
+
+.rb-seg__opt[aria-checked='true'] {
+  background: var(--accent-tint);
+  color: var(--accent-on-tint);
+}
+
+.rb-seg__opt:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rb-seg__count {
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------- Chip and badge */
+.rb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-size: var(--text-micro);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.rb-chip--sm {
+  padding: 2px 6px;
+  letter-spacing: 0.08em;
+}
+
+.rb-chip__dot {
+  width: 6px;
+  height: 6px;
+  background: currentColor;
+}
+
+.rb-chip--positive {
+  background: var(--positive-tint);
+  color: var(--positive);
+}
+
+.rb-chip--caution {
+  background: var(--caution-tint);
+  color: var(--caution);
+}
+
+.rb-chip--critical {
+  background: var(--critical-tint);
+  color: var(--critical);
+}
+
+.rb-chip--accent {
+  background: var(--accent-tint);
+  color: var(--accent-on-tint);
+}
+
+.rb-chip--mute {
+  border-color: var(--line);
+  color: var(--ink-2);
+}
+
+.rb-chip--faint {
+  border-color: var(--line);
+  color: var(--ink-3);
+}
+
+.rb-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-micro);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------- Engine mark */
+.rb-engine {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: var(--radius);
+  color: var(--engine-ink);
+  font-weight: 800;
+}
+
+/* ------------------------------------------------------------------ Card */
+.rb-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.rb-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 12px var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.rb-card__title {
+  font-size: var(--text-heading);
+  font-weight: 600;
+}
+
+.rb-card__body {
+  padding: var(--space-4);
+}
+
+.rb-card__foot {
+  padding: 10px var(--space-4);
+  border-top: 1px solid var(--line);
+  font-size: var(--text-caption);
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------- Headings */
+.rb-eyebrow {
+  font-size: var(--text-micro);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.rb-pagehead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.rb-pagehead__text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rb-pagehead__title {
+  font-size: var(--text-display-sm);
+  font-weight: 800;
+  letter-spacing: var(--track-display);
+  line-height: 1.1;
+}
+
+.rb-pagehead__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* ----------------------------------------------------------------- Alert */
+.rb-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--text-caption);
+  line-height: 1.5;
+}
+
+.rb-alert__title {
+  font-size: var(--text-ui);
+  font-weight: 600;
+}
+
+.rb-alert--positive {
+  background: var(--positive-tint);
+  color: var(--positive);
+}
+
+.rb-alert--caution {
+  background: var(--caution-tint);
+  color: var(--caution);
+}
+
+.rb-alert--critical {
+  background: var(--critical-tint);
+  color: var(--critical);
+}
+
+.rb-alert--info {
+  border-left: 2px solid var(--ink-3);
+  color: var(--ink-2);
+}
+
+/* -------------------------------------------------------------- Checkbox */
+.rb-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  cursor: pointer;
+}
+
+.rb-check input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.rb-check__box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 1px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: transparent;
+}
+
+.rb-check input:checked + .rb-check__box {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.rb-check input:focus-visible + .rb-check__box {
+  outline: var(--ring-w) solid var(--ring-color);
+  outline-offset: var(--ring-o);
+}
+
+.rb-check input:disabled + .rb-check__box {
+  opacity: 0.45;
+}
+
+.rb-check__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rb-check__label {
+  font-size: var(--text-ui);
+  font-weight: 600;
+}
+
+.rb-check__help {
+  font-size: var(--text-caption);
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------- Dialog/scrim */
+.rb-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--scrim);
+  animation: rb-fade var(--dur-color) var(--ease-out);
+}
+
+.rb-scrim--top {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.rb-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 480px;
+  max-height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-2);
+  animation: rb-rise var(--dur-move) var(--ease-out);
+  user-select: text;
+}
+
+.rb-dialog--wide {
+  max-width: 760px;
+}
+
+.rb-dialog__head {
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.rb-dialog__title {
+  font-size: var(--text-title-sm);
+  font-weight: 600;
+  letter-spacing: var(--track-title);
+}
+
+.rb-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
+  overflow: auto;
+  font-size: var(--text-body);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.rb-dialog__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.rb-dialog__critical-rule {
+  height: 3px;
+  background: var(--critical);
+}
+
+@keyframes rb-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes rb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* ------------------------------------------------------------------ Menu */
+.rb-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-2);
+}
+
+.rb-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-ui);
+  text-align: left;
+}
+
+.rb-menu__item:hover:not(:disabled),
+.rb-menu__item:focus-visible {
+  background: var(--nav-active-bg);
+  color: var(--nav-active-ink);
+  outline: none;
+}
+
+.rb-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rb-menu__item--danger {
+  color: var(--critical);
+}
+
+.rb-menu__hint {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+.rb-menu__sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line);
+}
+
+.rb-menu__label {
+  padding: 6px 10px 2px;
+  font-size: var(--text-micro);
+  font-weight: 700;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ----------------------------------------------------------------- Toast */
+.rb-toasts {
+  position: fixed;
+  right: var(--space-6);
+  bottom: calc(var(--statusbar-h) + var(--space-4));
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rb-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 420px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--toast-bg);
+  color: var(--toast-ink);
+  border-radius: var(--radius);
+  box-shadow: var(--elevation-2);
+  font-size: var(--text-ui);
+  line-height: 1.4;
+  animation: rb-rise var(--dur-move) var(--ease-out);
+  user-select: text;
+}
+
+.rb-toast__dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-top: 6px;
+  background: var(--accent);
+}
+
+.rb-toast--critical .rb-toast__dot {
+  background: var(--critical);
+}
+
+.rb-toast--positive .rb-toast__dot {
+  background: var(--positive);
+}
+
+/* -------------------------------------------------------------- Skeleton */
+.rb-skeleton {
+  display: block;
+  height: 10px;
+  background: var(--sunk);
+  border-radius: 2px;
+  animation: rb-pulse 1400ms var(--ease-inout) infinite;
+}
+
+@keyframes rb-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-skeleton,
+  .rb-spinner {
+    animation-duration: 2400ms;
+  }
+}
+
+/* --------------------------------------------------------- Empty states */
+.rb-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  height: 100%;
+}
+
+.rb-state__title {
+  font-size: var(--text-heading);
+  font-weight: 600;
+}
+
+.rb-state__body {
+  max-width: 52ch;
+  font-size: var(--text-ui);
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.rb-state--error .rb-state__title {
+  color: var(--critical);
+}
+
+/* ------------------------------------------------------------------ Kbd */
+.rb-kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+/* -------------------------------------------------------------- Splitter */
+.rb-splitter {
+  flex: none;
+  position: relative;
+  z-index: 5;
+  background: transparent;
+}
+
+.rb-splitter--x {
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+}
+
+.rb-splitter--y {
+  height: 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+}
+
+.rb-splitter:hover,
+.rb-splitter[data-dragging='true'] {
+  background: var(--accent);
+  opacity: 0.6;
+}
+
+/* ------------------------------------------------------- Underline tabs */
+.rb-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  height: 34px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.rb-tabs__tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+  font-weight: 700;
+}
+
+.rb-tabs__tab[aria-selected='true'] {
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.rb-tabs__tab--critical {
+  color: var(--critical);
+}
+
+.rb-tabs__count {
+  font-weight: 500;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,409 @@
+import { create } from 'zustand';
+
+import type { Cell } from '@/bindings/Cell';
+import type { ColumnMeta } from '@/bindings/ColumnMeta';
+import type { DbError } from '@/bindings/DbError';
+import type { ObjectRef } from '@/bindings/ObjectRef';
+import type { RunReport } from '@/bindings/RunReport';
+import type { SessionInfo } from '@/bindings/SessionInfo';
+import { toAppError } from '@/lib/errors';
+import { formatCount, plural } from '@/lib/format';
+import { uid } from '@/lib/id';
+import { api } from '@/lib/ipc';
+
+import { useExplorer } from './explorer';
+import { useSettings } from './settings';
+import { guarded, useUi } from './ui';
+
+export type TableView = 'data' | 'structure' | 'ddl';
+
+export interface ResultSet {
+  id: string;
+  statement: number;
+  /** The statement text, for export (which re-runs it on a read-only connection). */
+  sql: string;
+  columns: ColumnMeta[];
+  rows: Cell[][];
+  hasMore: boolean;
+  /** Only the latest statement keeps a server cursor open. */
+  canFetchMore: boolean;
+  command: string;
+  durationMs: number;
+}
+
+export interface RunMessage {
+  id: string;
+  kind: 'ok' | 'error' | 'notice' | 'info';
+  statement: number | null;
+  text: string;
+  error?: DbError;
+  durationMs?: number;
+}
+
+export interface RunState {
+  status: 'idle' | 'running' | 'done';
+  startedAt: number | null;
+  results: ResultSet[];
+  messages: RunMessage[];
+  active: number | 'messages';
+  fetching: boolean;
+  /** Absolute editor range of the error position, for the squiggle. */
+  errorAt: number | null;
+  lastDurationMs: number | null;
+}
+
+export interface QueryTab {
+  id: string;
+  kind: 'query';
+  title: string;
+  sql: string;
+  /** SQL as last saved to a script or file; the tab is dirty when it differs. */
+  savedSql: string;
+  scriptId: string | null;
+  filePath: string | null;
+  run: RunState;
+}
+
+export interface TableTab {
+  id: string;
+  kind: 'table';
+  title: string;
+  object: ObjectRef;
+  view: TableView;
+}
+
+export type Tab = QueryTab | TableTab;
+
+const EMPTY_RUN: RunState = {
+  status: 'idle',
+  startedAt: null,
+  results: [],
+  messages: [],
+  active: 'messages',
+  fetching: false,
+  errorAt: null,
+  lastDurationMs: null,
+};
+
+export function isDirty(tab: Tab): boolean {
+  return tab.kind === 'query' && tab.sql !== tab.savedSql && (tab.sql.trim() !== '' || tab.savedSql !== '');
+}
+
+interface OpenQueryOptions {
+  sql?: string;
+  title?: string;
+  scriptId?: string | null;
+  filePath?: string | null;
+}
+
+interface WorkspaceState {
+  session: SessionInfo | null;
+  connectingId: string | null;
+  connectError: DbError | null;
+  tabs: Tab[];
+  activeTabId: string | null;
+
+  connect: (connectionId: string) => Promise<boolean>;
+  disconnect: () => Promise<void>;
+  openQueryTab: (options?: OpenQueryOptions) => string;
+  openTableTab: (object: ObjectRef, view?: TableView) => void;
+  closeTab: (id: string) => Promise<void>;
+  activate: (id: string) => void;
+  cycleTab: (step: 1 | -1) => void;
+  updateSql: (id: string, sql: string) => void;
+  markSaved: (id: string, patch: { title?: string; scriptId?: string | null; filePath?: string | null }) => void;
+  setTableView: (id: string, view: TableView) => void;
+  run: (tabId: string, sql: string, base: number) => Promise<void>;
+  fetchMore: (tabId: string) => Promise<void>;
+  cancel: () => Promise<void>;
+  setActiveResult: (tabId: string, active: number | 'messages') => void;
+}
+
+function nextQueryTitle(tabs: Tab[]): string {
+  const used = new Set(tabs.map((t) => t.title));
+  for (let n = 1; ; n += 1) if (!used.has(`Query ${n}`)) return `Query ${n}`;
+}
+
+function newQueryTab(tabs: Tab[], options: OpenQueryOptions = {}): QueryTab {
+  return {
+    id: uid('tab'),
+    kind: 'query',
+    title: options.title ?? nextQueryTitle(tabs),
+    sql: options.sql ?? '',
+    savedSql: options.scriptId || options.filePath ? (options.sql ?? '') : '',
+    scriptId: options.scriptId ?? null,
+    filePath: options.filePath ?? null,
+    run: EMPTY_RUN,
+  };
+}
+
+function sameObject(a: ObjectRef, b: ObjectRef): boolean {
+  return a.kind === b.kind && a.database === b.database && a.schema === b.schema && a.name === b.name;
+}
+
+/** Builds result tabs and the Messages list from a run report. */
+function digest(report: RunReport, sql: string, base: number, previous: RunState): Partial<RunState> {
+  const results: ResultSet[] = [];
+  const messages: RunMessage[] = [];
+  let errorAt: number | null = null;
+  for (const outcome of report.outcomes) {
+    const r = outcome.result;
+    if (r) {
+      if (r.columns.length > 0) {
+        results.push({
+          id: uid('result'),
+          statement: outcome.index,
+          sql: sql.slice(outcome.from, outcome.to),
+          columns: r.columns,
+          rows: r.rows,
+          hasMore: r.has_more,
+          canFetchMore: outcome.can_fetch_more,
+          command: r.command,
+          durationMs: r.duration_ms,
+        });
+      }
+      const summary =
+        r.columns.length > 0
+          ? `${plural(r.rows.length, 'row')}${r.has_more ? ' (more available)' : ''}`
+          : r.affected !== null
+            ? `${plural(r.affected, 'row')} affected`
+            : 'Done';
+      messages.push({ id: uid('msg'), kind: 'ok', statement: outcome.index, text: `${r.command || 'Statement'} · ${summary}`, durationMs: r.duration_ms });
+      for (const notice of r.notices) messages.push({ id: uid('msg'), kind: 'notice', statement: outcome.index, text: notice });
+    }
+    if (outcome.error) {
+      messages.push({ id: uid('msg'), kind: 'error', statement: outcome.index, text: outcome.error.message, error: outcome.error });
+      if (outcome.error.position !== null) errorAt = base + outcome.from + outcome.error.position - 1;
+    }
+  }
+  if (report.skipped > 0) {
+    messages.push({ id: uid('msg'), kind: 'info', statement: null, text: `${plural(report.skipped, 'statement')} after the error ${report.skipped === 1 ? 'was' : 'were'} not run.` });
+  }
+  const failed = report.outcomes.some((o) => o.error);
+  // Keep earlier result tabs when this run produced none (e.g. it failed).
+  const keepPrevious = results.length === 0 && failed;
+  const shown = keepPrevious ? previous.results.map((r) => ({ ...r, canFetchMore: false })) : results;
+  return {
+    results: shown,
+    messages,
+    errorAt,
+    active: failed || shown.length === 0 ? 'messages' : shown.length - 1,
+    lastDurationMs: report.duration_ms,
+  };
+}
+
+export const useWorkspace = create<WorkspaceState>((set, get) => {
+  const patchTab = (id: string, patch: (tab: Tab) => Tab) => set({ tabs: get().tabs.map((t) => (t.id === id ? patch(t) : t)) });
+  const patchRun = (id: string, patch: Partial<RunState> | ((run: RunState) => Partial<RunState>)) =>
+    patchTab(id, (t) => (t.kind === 'query' ? { ...t, run: { ...t.run, ...(typeof patch === 'function' ? patch(t.run) : patch) } } : t));
+
+  return {
+    session: null,
+    connectingId: null,
+    connectError: null,
+    tabs: [],
+    activeTabId: null,
+
+    connect: async (connectionId) => {
+      const current = get().session;
+      if (current?.connection.id === connectionId) {
+        useUi.getState().navigate({ name: 'workspace' });
+        return true;
+      }
+      set({ connectingId: connectionId, connectError: null });
+      try {
+        const session = await api.connect(connectionId);
+        if (current) await get().disconnect();
+        const saved = await api.getUiState<PersistedWorkspace>(`workspace:${connectionId}`).catch(() => null);
+        const tabs = restoreTabs(saved);
+        const initial = tabs.length ? tabs : [newQueryTab([])];
+        set({
+          session,
+          connectingId: null,
+          tabs: initial,
+          activeTabId: initial.some((t) => t.id === saved?.activeTabId) ? (saved?.activeTabId ?? null) : (initial[0]?.id ?? null),
+        });
+        useExplorer.getState().reset(session);
+        useUi.getState().navigate({ name: 'workspace' });
+        return true;
+      } catch (e) {
+        set({ connectingId: null, connectError: toAppError(e).info });
+        return false;
+      }
+    },
+
+    disconnect: async () => {
+      const session = get().session;
+      if (!session) return;
+      await persistNow();
+      set({ session: null, tabs: [], activeTabId: null });
+      useExplorer.getState().reset(null);
+      await api.disconnect({ sessionId: session.session_id }).catch(() => undefined);
+    },
+
+    openQueryTab: (options) => {
+      const tab = newQueryTab(get().tabs, options);
+      set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
+      return tab.id;
+    },
+
+    openTableTab: (object, view = 'data') => {
+      const existing = get().tabs.find((t): t is TableTab => t.kind === 'table' && sameObject(t.object, object));
+      if (existing) {
+        set({ activeTabId: existing.id });
+        if (existing.view !== view) get().setTableView(existing.id, view);
+        return;
+      }
+      const tab: TableTab = { id: uid('tab'), kind: 'table', title: object.name, object, view };
+      set({ tabs: [...get().tabs, tab], activeTabId: tab.id });
+    },
+
+    closeTab: async (id) => {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (!tab) return;
+      if (isDirty(tab)) {
+        const ok = await useUi.getState().ask({
+          title: `Close ${tab.title}?`,
+          body: 'The SQL in this tab has not been saved to a script or file and will be lost.',
+          confirmLabel: 'Close tab',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      const tabs = get().tabs;
+      const index = tabs.findIndex((t) => t.id === id);
+      const remaining = tabs.filter((t) => t.id !== id);
+      const activeTabId = get().activeTabId === id ? (remaining[Math.min(index, remaining.length - 1)]?.id ?? null) : get().activeTabId;
+      set({ tabs: remaining, activeTabId });
+    },
+
+    activate: (activeTabId) => set({ activeTabId }),
+
+    cycleTab: (step) => {
+      const { tabs, activeTabId } = get();
+      if (!tabs.length) return;
+      const i = tabs.findIndex((t) => t.id === activeTabId);
+      set({ activeTabId: tabs[(i + step + tabs.length) % tabs.length]?.id ?? null });
+    },
+
+    updateSql: (id, sql) => patchTab(id, (t) => (t.kind === 'query' ? { ...t, sql, run: t.run.errorAt === null ? t.run : { ...t.run, errorAt: null } } : t)),
+
+    markSaved: (id, patch) =>
+      patchTab(id, (t) => (t.kind === 'query' ? { ...t, savedSql: t.sql, title: patch.title ?? t.title, scriptId: patch.scriptId === undefined ? t.scriptId : patch.scriptId, filePath: patch.filePath === undefined ? t.filePath : patch.filePath } : t)),
+
+    setTableView: (id, view) => patchTab(id, (t) => (t.kind === 'table' ? { ...t, view } : t)),
+
+    run: async (tabId, sql, base) => {
+      const session = get().session;
+      if (!session || !sql.trim()) return;
+      const before = (get().tabs.find((t) => t.id === tabId) as QueryTab | undefined)?.run ?? EMPTY_RUN;
+      patchRun(tabId, { status: 'running', startedAt: Date.now(), errorAt: null });
+      try {
+        const report = await guarded((c) => api.runSql({ sessionId: session.session_id }, sql, c), {
+          // Nothing runs while the confirmation dialog is open.
+          onAsk: () => patchRun(tabId, { status: before.status === 'running' ? 'idle' : before.status }),
+          onConfirmed: () => patchRun(tabId, { status: 'running', startedAt: Date.now() }),
+        });
+        if (!report) {
+          patchRun(tabId, { ...before, status: before.status === 'running' ? 'idle' : before.status });
+          return;
+        }
+        patchRun(tabId, (run) => ({ status: 'done', ...digest(report, sql, base, run) }));
+      } catch (e) {
+        const error = toAppError(e).info;
+        patchRun(tabId, { status: 'done', active: 'messages', messages: [{ id: uid('msg'), kind: 'error', statement: null, text: error.message, error }] });
+      }
+    },
+
+    fetchMore: async (tabId) => {
+      const session = get().session;
+      const tab = get().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
+      const last = tab?.run.results[tab.run.results.length - 1];
+      if (!session || !tab || !last?.canFetchMore) return;
+      patchRun(tabId, { fetching: true });
+      try {
+        const page = await api.fetchMore({ sessionId: session.session_id }, useSettings.getState().settings.row_limit);
+        patchRun(tabId, (run) => ({
+          fetching: false,
+          results: run.results.map((r) => (r.id === last.id ? { ...r, rows: [...r.rows, ...page.rows], hasMore: page.has_more, canFetchMore: page.has_more } : r)),
+        }));
+      } catch (e) {
+        patchRun(tabId, (run) => ({ fetching: false, results: run.results.map((r) => (r.id === last.id ? { ...r, canFetchMore: false } : r)) }));
+        useUi.getState().toastError(e);
+      }
+    },
+
+    cancel: async () => {
+      const session = get().session;
+      if (!session) return;
+      try {
+        await api.cancelQuery({ sessionId: session.session_id });
+      } catch (e) {
+        useUi.getState().toastError(e);
+      }
+    },
+
+    setActiveResult: (tabId, active) => patchRun(tabId, { active }),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Persistence: tab SQL and layout only. Results are never stored and restored
+// tabs never run until the user presses Run.
+// ---------------------------------------------------------------------------
+
+type PersistedTab =
+  | { kind: 'query'; id: string; title: string; sql: string; savedSql: string; scriptId: string | null; filePath: string | null }
+  | { kind: 'table'; id: string; title: string; object: ObjectRef; view: TableView };
+
+interface PersistedWorkspace {
+  tabs: PersistedTab[];
+  activeTabId: string | null;
+}
+
+function restoreTabs(saved: PersistedWorkspace | null): Tab[] {
+  if (!saved || !Array.isArray(saved.tabs)) return [];
+  return saved.tabs.map((t) => (t.kind === 'query' ? { ...t, run: EMPTY_RUN } : t));
+}
+
+function snapshot(): { key: string; value: PersistedWorkspace } | null {
+  const { session, tabs, activeTabId } = useWorkspace.getState();
+  if (!session) return null;
+  return {
+    key: `workspace:${session.connection.id}`,
+    value: {
+      activeTabId,
+      tabs: tabs.map((t): PersistedTab =>
+        t.kind === 'query'
+          ? { kind: 'query', id: t.id, title: t.title, sql: t.sql, savedSql: t.savedSql, scriptId: t.scriptId, filePath: t.filePath }
+          : { kind: 'table', id: t.id, title: t.title, object: t.object, view: t.view },
+      ),
+    },
+  };
+}
+
+let timer: number | undefined;
+let lastSaved = '';
+
+async function persistNow() {
+  window.clearTimeout(timer);
+  const snap = snapshot();
+  if (!snap) return;
+  const serialized = JSON.stringify(snap);
+  if (serialized === lastSaved) return;
+  lastSaved = serialized;
+  await api.setUiState(snap.key, snap.value).catch((e) => console.warn('could not save workspace', e));
+}
+
+useWorkspace.subscribe((state, prev) => {
+  if (state.tabs === prev.tabs && state.activeTabId === prev.activeTabId) return;
+  window.clearTimeout(timer);
+  timer = window.setTimeout(() => void persistNow(), 600);
+});
+
+window.addEventListener('beforeunload', () => void persistNow());
+
+export function resultSummary(result: ResultSet | undefined): string | null {
+  if (!result) return null;
+  return `${formatCount(result.rows.length)}${result.hasMore ? '+' : ''} rows`;
+}

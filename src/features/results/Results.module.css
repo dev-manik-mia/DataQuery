@@ -1,0 +1,123 @@
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: 36px;
+  padding: 0 var(--space-3);
+  border-top: 1px solid var(--line);
+  background: var(--caution-tint);
+  color: var(--caution);
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.running {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--space-4);
+  border-bottom: 1px solid var(--line-2);
+  font-size: var(--text-ui);
+  font-weight: 600;
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.skeletonRow {
+  display: grid;
+  grid-template-columns: 60px 140px minmax(0, 1fr) 80px;
+  gap: var(--space-3);
+}
+
+.hint {
+  margin-top: auto;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+.messages {
+  flex: 1;
+  overflow: auto;
+  padding: var(--space-2) 0;
+  user-select: text;
+}
+
+.message {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--line-2);
+  font-size: var(--text-ui);
+  line-height: 1.5;
+}
+
+.messageIcon {
+  flex: none;
+  width: 16px;
+  padding-top: 2px;
+}
+
+.messageBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.messageError {
+  font-size: var(--text-heading);
+  font-weight: 600;
+  color: var(--critical);
+}
+
+.messageMeta {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--ink-2);
+}
+
+.messageNote {
+  font-size: var(--text-caption);
+  color: var(--ink-2);
+}
+
+.duration {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  color: var(--ink-3);
+}
+
+.tabActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 10px;
+}
+
+.idle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  font-size: var(--text-ui);
+}
