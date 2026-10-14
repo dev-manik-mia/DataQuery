@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use crate::value::Cell;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ColumnMeta {
     pub name: String,

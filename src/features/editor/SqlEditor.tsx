@@ -1,6 +1,5 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, closeCompletion, completionKeymap } from '@codemirror/autocomplete';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { MySQL, PostgreSQL, sql } from '@codemirror/lang-sql';
 import { bracketMatching, indentOnInput } from '@codemirror/language';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
@@ -12,6 +11,7 @@ import { api } from '@/lib/ipc';
 import { statementAt } from '@/lib/sql';
 
 import { useEditorStatus } from './editorStatus';
+import { sqlLanguage } from './language';
 import { currentStatement, errorField, setErrorAt, setStatements, statementsField } from './statements';
 import { editorTheme, sqlHighlight } from './theme';
 
@@ -82,7 +82,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
         highlightSelectionMatches(),
         search({ top: true }),
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
-        language.current.of(sql({ dialect: flavor === 'mysql' ? MySQL : PostgreSQL })),
+        language.current.of(sqlLanguage(flavor)),
         sqlHighlight,
         editorTheme,
         placeholder('Write SQL here. ⌘↵ runs the statement at the cursor.'),
@@ -123,7 +123,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
   }, [value]);
 
   useEffect(() => {
-    view.current?.dispatch({ effects: language.current.reconfigure(sql({ dialect: flavor === 'mysql' ? MySQL : PostgreSQL })) });
+    view.current?.dispatch({ effects: language.current.reconfigure(sqlLanguage(flavor)) });
   }, [flavor]);
 
   useEffect(() => {

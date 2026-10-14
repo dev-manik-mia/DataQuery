@@ -35,6 +35,10 @@ pub fn map_error(e: &Error, secret: Option<&str>) -> DbError {
                 .with_action(action)
         }
         Error::Io(IoError::Tls(t)) => DbError::new(ErrorKind::Tls, clean(&format!("TLS error: {t}"))),
+        // Certificate failures surface as I/O errors that wrap a rustls error.
+        Error::Io(IoError::Io(io)) if io.get_ref().and_then(|e| e.downcast_ref::<rustls::Error>()).is_some() => {
+            DbError::new(ErrorKind::Tls, clean(&format!("TLS error: {io}")))
+        }
         Error::Io(IoError::Io(io)) => {
             let kind = if io.kind() == std::io::ErrorKind::TimedOut { ErrorKind::Timeout } else { ErrorKind::Network };
             DbError::new(kind, clean(&format!("Network error: {io}")))

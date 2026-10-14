@@ -103,6 +103,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     const c = CONNECTIONS.find((x) => x.id === a.connectionId)!;
     return { session_id: `s-${c.id}`, connection: c, capabilities: caps, flavor: 'postgres', server: { engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: c.config.database, read_only: false } };
   },
+  reconnect: (a) => handlers.connect!({ connectionId: String(a.sessionId).replace(/^s-/, '') }),
   disconnect: () => null,
   list_children: (a) => {
     const p = a.parent as Node | null;
@@ -156,6 +157,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     ],
     indexes: [{ name: 'orders_created_at_idx', definition: 'CREATE INDEX orders_created_at_idx ON public.orders USING btree (created_at DESC)', unique: false, primary: false }],
     row_identity: ['id'],
+    full_row_key: [],
     comment: null,
     row_estimate: 48213,
   }),

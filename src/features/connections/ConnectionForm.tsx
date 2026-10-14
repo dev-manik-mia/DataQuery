@@ -11,6 +11,7 @@ import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { SslMode } from '@/bindings/SslMode';
 import { Alert, Button, EngineMark, ErrorAlert, FieldShell, PageHead, PlannedChip, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
+import { connectionDefaults, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -22,13 +23,7 @@ import styles from './Connections.module.css';
 
 const ENVIRONMENTS: Environment[] = ['Local', 'Development', 'Staging', 'Production'];
 
-const SSL_MODES: { value: SslMode; label: string }[] = [
-  { value: 'verify-full', label: 'verify-full' },
-  { value: 'verify-ca', label: 'verify-ca' },
-  { value: 'require', label: 'require' },
-  { value: 'prefer', label: 'prefer' },
-  { value: 'disable', label: 'disable' },
-];
+const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', 'disable'];
 
 const keychainName = isMac ? 'macOS Keychain' : navigator.userAgent.includes('Windows') ? 'Windows Credential Manager' : 'the system keychain';
 
@@ -48,14 +43,15 @@ interface FormState {
 
 function initialState(engine: Engine, defaultPort: number | null, existing?: { name: string; folder_id: string | null; environment: Environment; config: ConnConfig }, prefill?: ParsedUrl): FormState {
   const config = existing?.config ?? prefill?.config;
+  const defaults = connectionDefaults(engine);
   return {
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
     host: config?.host ?? 'localhost',
     port: String(config?.port ?? defaultPort ?? ''),
-    database: config?.database ?? (engine === 'postgres' ? 'postgres' : ''),
-    username: config?.username ?? (engine === 'postgres' ? 'postgres' : 'root'),
+    database: config?.database ?? defaults.database,
+    username: config?.username ?? defaults.username,
     password: prefill?.password ?? '',
     clearPassword: false,
     sslMode: config?.ssl_mode ?? 'verify-full',
@@ -240,7 +236,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             mono
             value={state.sslMode}
             onChange={(e) => set('sslMode', e.target.value as SslMode)}
-            options={SSL_MODES}
+            options={SSL_MODES.map((value) => ({ value, label: sslModeLabel(engine, value) }))}
             hint={
               state.sslMode === 'verify-full'
                 ? 'Certificates and host name are verified.'

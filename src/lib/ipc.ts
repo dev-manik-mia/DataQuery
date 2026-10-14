@@ -89,6 +89,7 @@ export const api = {
 
   // sessions
   connect: (connectionId: string) => call<SessionInfo>('connect', { connectionId }),
+  reconnect: ({ sessionId }: Sid) => call<SessionInfo>('reconnect', { sessionId }),
   disconnect: ({ sessionId }: Sid) => call<void>('disconnect', { sessionId }),
 
   // explorer
@@ -114,10 +115,11 @@ export const api = {
     call<TablePage>('table_page', { sessionId, request: { ...request, object: objectRef(request.object) } }),
   rowCount: ({ sessionId }: Sid, object: ObjectRef, filter: string | null) =>
     call<RowCount>('row_count', { sessionId, object: objectRef(object), filter }),
-  previewChanges: ({ sessionId }: Sid, object: ObjectRef, changes: RowChange[]) =>
-    call<string>('preview_changes', { sessionId, object: objectRef(object), changes }),
-  applyChanges: ({ sessionId }: Sid, object: ObjectRef, changes: RowChange[], confirmation: Confirmation | null) =>
-    call<Guarded<ApplyReport>>('apply_changes', { sessionId, object: objectRef(object), changes, confirmation }),
+  /** `fullRow` matches rows of a table without a key on every comparable column. */
+  previewChanges: ({ sessionId }: Sid, object: ObjectRef, changes: RowChange[], fullRow: boolean) =>
+    call<string>('preview_changes', { sessionId, object: objectRef(object), changes, fullRow }),
+  applyChanges: ({ sessionId }: Sid, object: ObjectRef, changes: RowChange[], fullRow: boolean, confirmation: Confirmation | null) =>
+    call<Guarded<ApplyReport>>('apply_changes', { sessionId, object: objectRef(object), changes, fullRow, confirmation }),
 
   // import / export
   exportData: ({ sessionId }: Sid, source: ExportSource, format: ExportFormat, path: string) =>

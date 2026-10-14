@@ -139,6 +139,7 @@ pub async fn structure(conn: &mut Conn, object: &ObjectRef) -> DbResult<TableStr
         constraints,
         indexes: indexes(object, &index_columns),
         row_identity,
+        full_row_key: Vec::new(),
         comment: rel.comment,
         row_estimate: rel.estimate,
     })

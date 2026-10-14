@@ -281,9 +281,9 @@ async fn edits_apply_atomically_to_the_right_rows() {
         RowChange::Insert { values: vec![cv("id", Some("3")), cv("amount", None)] },
         RowChange::Delete { key: vec![cv("id", Some("2"))] },
     ];
-    let preview = ops::preview_changes(&*s, &t, &changes).await.unwrap();
+    let preview = ops::preview_changes(&*s, &t, &changes, false).await.unwrap();
     assert!(preview.contains("UPDATE \"public\".\"it_edits\" SET \"amount\" = '84.50'"));
-    let report = ops::apply_changes(&*s, &t, &changes).await.unwrap();
+    let report = ops::apply_changes(&*s, &t, &changes, false).await.unwrap();
     assert_eq!((report.updated, report.inserted, report.deleted), (1, 1, 1));
     let r = s.execute("SELECT id, amount, note FROM public.it_edits ORDER BY id", OPTS).await.unwrap();
     let rows: Vec<Vec<String>> = r.rows.iter().map(|r| r.iter().map(text).collect()).collect();
@@ -294,11 +294,36 @@ async fn edits_apply_atomically_to_the_right_rows() {
         RowChange::Update { key: vec![cv("id", Some("3"))], values: vec![cv("note", Some("x"))] },
         RowChange::Delete { key: vec![cv("id", Some("404"))] },
     ];
-    let err = ops::apply_changes(&*s, &t, &failing).await.unwrap_err();
+    let err = ops::apply_changes(&*s, &t, &failing, false).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Constraint);
     let r = s.execute("SELECT note FROM public.it_edits WHERE id = 3", OPTS).await.unwrap();
     assert_eq!(r.rows[0][0], Cell::Null);
     s.execute("DROP TABLE public.it_edits", OPTS).await.unwrap();
+}
+
+#[tokio::test]
+async fn tables_without_a_key_edit_only_after_opt_in() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let t = scratch(&*s, "it_no_key", "(a int, b text, doc json)").await;
+    s.execute("INSERT INTO public.it_no_key VALUES (1, NULL, '{}'), (2, 'x', '{}'), (2, 'x', '{}')", OPTS)
+        .await
+        .unwrap();
+    let st = ops::structure(&*s, &t).await.unwrap();
+    assert!(st.row_identity.is_empty());
+    assert_eq!(st.full_row_key, ["a", "b"], "json has no equality operator");
+    let cv = |c: &str, v: Option<&str>| ColumnValue { column: c.into(), value: v.map(Into::into) };
+    let fix_null =
+        vec![RowChange::Update { key: vec![cv("a", Some("1")), cv("b", None)], values: vec![cv("b", Some("y"))] }];
+    // Without the opt-in nothing is editable.
+    assert!(ops::apply_changes(&*s, &t, &fix_null, false).await.is_err());
+    assert_eq!(ops::apply_changes(&*s, &t, &fix_null, true).await.unwrap().updated, 1);
+    // Duplicate rows match twice, so the change is refused and rolled back.
+    let dup = vec![RowChange::Delete { key: vec![cv("a", Some("2")), cv("b", Some("x"))] }];
+    assert_eq!(ops::apply_changes(&*s, &t, &dup, true).await.unwrap_err().kind, ErrorKind::Constraint);
+    let r = s.execute("SELECT count(*) FROM public.it_no_key WHERE b IS NOT NULL", OPTS).await.unwrap();
+    assert_eq!(text(&r.rows[0][0]), "3");
+    s.execute("DROP TABLE public.it_no_key", OPTS).await.unwrap();
 }
 
 #[tokio::test]

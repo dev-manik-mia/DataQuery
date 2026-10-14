@@ -54,6 +54,7 @@ pub fn run() {
             commands::connections::delete_folder,
             commands::connections::test_connection,
             commands::session::connect,
+            commands::session::reconnect,
             commands::session::disconnect,
             commands::explorer::list_children,
             commands::explorer::search_objects,

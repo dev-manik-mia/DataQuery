@@ -11,6 +11,7 @@ use crate::error::{DbError, DbResult, ErrorKind};
 use crate::node::ObjectRef;
 use crate::result::{ColumnMeta, Row};
 use crate::table::SortSpec;
+use crate::value::Cell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +34,12 @@ pub enum ExportSource {
         filter: Option<String>,
         sort: Option<SortSpec>,
     },
+    /// Rows already loaded in the grid, e.g. a selection. Rejected when any
+    /// cell was shortened for display, so an export never silently loses data.
+    Rows {
+        columns: Vec<ColumnMeta>,
+        rows: Vec<Row>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -44,6 +51,15 @@ pub struct ExportReport {
     pub bytes: u64,
     #[ts(type = "number")]
     pub duration_ms: u64,
+}
+
+/// True when a grid cell holds its whole value (text not truncated, binary not cut to a head).
+pub fn is_complete(cell: &Cell) -> bool {
+    match cell {
+        Cell::Text { truncated, .. } | Cell::Json { truncated, .. } => truncated.is_none(),
+        Cell::Binary { length, head_hex } => head_hex.len() as u64 >= length * 2,
+        _ => true,
+    }
 }
 
 /// Receives rows as they stream from the server.
@@ -130,7 +146,7 @@ impl RowSink for JsonSink {
     fn write(&mut self, rows: &[Row]) -> DbResult<()> {
         for row in rows {
             let object: serde_json::Map<String, serde_json::Value> =
-                self.columns.iter().cloned().zip(row.iter().map(crate::value::Cell::to_json)).collect();
+                self.columns.iter().cloned().zip(row.iter().map(Cell::to_json)).collect();
             self.out.write_all(if self.first { b"\n  " } else { b",\n  " }).map_err(io_error)?;
             serde_json::to_writer(&mut self.out, &object).map_err(|e| DbError::internal(e.to_string()))?;
             self.first = false;
@@ -233,7 +249,7 @@ fn csv_error(e: csv::Error) -> DbError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::{Cell, CellLimits};
+    use crate::value::CellLimits;
 
     fn cols() -> Vec<ColumnMeta> {
         ["id", "name", "doc"]
@@ -276,6 +292,16 @@ mod tests {
         assert_eq!(v[0]["id"], "9007199254740993");
         assert_eq!(v[0]["doc"]["x"], 1);
         assert!(v[1]["name"].is_null());
+    }
+
+    #[test]
+    fn shortened_cells_are_incomplete() {
+        let limits = CellLimits { max_text_bytes: 2, binary_head_bytes: 2 };
+        assert!(is_complete(&Cell::text("ab", limits)));
+        assert!(!is_complete(&Cell::text("abc", limits)));
+        assert!(is_complete(&Cell::binary(&[1, 2], limits)));
+        assert!(!is_complete(&Cell::binary(&[1, 2, 3], limits)));
+        assert!(is_complete(&Cell::Null));
     }
 
     #[test]

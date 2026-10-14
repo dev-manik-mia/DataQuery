@@ -6,7 +6,8 @@ use std::time::Instant;
 use crate::adapter::Session;
 use crate::edit::{ApplyReport, RowChange};
 use crate::error::{DbError, DbResult};
-use crate::node::ObjectRef;
+use crate::node::{NodeKind, ObjectRef};
+use crate::schema::TableStructure;
 use crate::sql::builder;
 use crate::table::{RowCount, TablePage, TablePageRequest};
 use crate::transfer::{self, CsvOptions, ExportFormat, ExportReport, ExportSource};
@@ -16,6 +17,27 @@ pub const MAX_PAGE_SIZE: u32 = 5_000;
 /// Above this estimate an unfiltered table shows the estimate instead of counting.
 pub const EXACT_COUNT_THRESHOLD: i64 = 500_000;
 const IMPORT_BATCH_ROWS: usize = 250;
+
+/// Table structure with [`TableStructure::full_row_key`] filled in.
+pub async fn structure(session: &dyn Session, object: &ObjectRef) -> DbResult<TableStructure> {
+    let mut s = session.structure(object).await?;
+    if s.row_identity.is_empty() && s.object.kind == NodeKind::Table {
+        let d = session.dialect();
+        s.full_row_key =
+            s.columns.iter().filter(|c| c.editable && d.comparable(&c.data_type)).map(|c| c.name.clone()).collect();
+    }
+    Ok(s)
+}
+
+/// Structure used to build edits. `full_row` (confirmed by the user) lets a
+/// table without a key be matched on every comparable column.
+async fn edit_structure(session: &dyn Session, object: &ObjectRef, full_row: bool) -> DbResult<TableStructure> {
+    let mut s = structure(session, object).await?;
+    if full_row && s.row_identity.is_empty() {
+        s.row_identity = std::mem::take(&mut s.full_row_key);
+    }
+    Ok(s)
+}
 
 pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResult<TablePage> {
     if !req.object.kind.is_relation() {
@@ -57,14 +79,24 @@ pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: Option
     Ok(RowCount { count, exact: true })
 }
 
-pub async fn preview_changes(session: &dyn Session, object: &ObjectRef, changes: &[RowChange]) -> DbResult<String> {
-    let structure = session.structure(object).await?;
+pub async fn preview_changes(
+    session: &dyn Session,
+    object: &ObjectRef,
+    changes: &[RowChange],
+    full_row: bool,
+) -> DbResult<String> {
+    let structure = edit_structure(session, object, full_row).await?;
     builder::preview_changes(session.dialect(), &structure, changes)
 }
 
 /// Applies grid changes in one transaction; any failure saves nothing.
-pub async fn apply_changes(session: &dyn Session, object: &ObjectRef, changes: &[RowChange]) -> DbResult<ApplyReport> {
-    let structure = session.structure(object).await?;
+pub async fn apply_changes(
+    session: &dyn Session,
+    object: &ObjectRef,
+    changes: &[RowChange],
+    full_row: bool,
+) -> DbResult<ApplyReport> {
+    let structure = edit_structure(session, object, full_row).await?;
     let statements = builder::change_statements(session.dialect(), &structure, changes)?;
     let started = Instant::now();
     session.run_in_transaction(&object.database, &mut statements.into_iter().map(Ok)).await?;
@@ -86,6 +118,7 @@ pub async fn export(
     path: &Path,
 ) -> DbResult<ExportReport> {
     let (database, sql) = match source {
+        ExportSource::Rows { columns, rows } => return export_rows(columns, rows, format, path),
         ExportSource::Query { sql } => {
             let statements = crate::sql::split_statements(sql, session.dialect().flavor());
             let [statement] = statements.as_slice() else {
@@ -130,6 +163,26 @@ pub async fn export(
     Ok(ExportReport { rows, bytes, duration_ms: elapsed_ms(started) })
 }
 
+/// Writes rows the UI already holds, through the same sink as streamed exports.
+fn export_rows(
+    columns: &[crate::result::ColumnMeta],
+    rows: &[crate::result::Row],
+    format: ExportFormat,
+    path: &Path,
+) -> DbResult<ExportReport> {
+    if rows.iter().flatten().any(|c| !transfer::is_complete(c)) {
+        return Err(DbError::invalid(
+            "Some selected values were shortened for display. Export the table or query instead to get full values.",
+        ));
+    }
+    let started = Instant::now();
+    let mut sink = transfer::file_sink(path, format)?;
+    sink.begin(columns)?;
+    sink.write(rows)?;
+    let bytes = sink.finish()?;
+    Ok(ExportReport { rows: rows.len() as u64, bytes, duration_ms: elapsed_ms(started) })
+}
+
 /// Imports a CSV file in one transaction. `mapping` pairs table columns with CSV field indexes.
 pub async fn import_csv(
     session: &dyn Session,
@@ -142,7 +195,7 @@ pub async fn import_csv(
         return Err(DbError::invalid("Map at least one column."));
     }
     let structure = session.structure(object).await?;
-    if structure.object.kind != crate::node::NodeKind::Table {
+    if structure.object.kind != NodeKind::Table {
         return Err(DbError::invalid("Rows can only be imported into tables."));
     }
     let columns: Vec<String> = mapping.iter().map(|(c, _)| c.clone()).collect();

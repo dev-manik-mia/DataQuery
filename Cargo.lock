@@ -1119,6 +1119,7 @@ dependencies = [
  "async-trait",
  "dq-core",
  "mysql_async",
+ "rustls",
  "serde_json",
  "tempfile",
  "tokio",

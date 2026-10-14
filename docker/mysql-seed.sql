@@ -1,5 +1,5 @@
 -- Sample schema used by integration tests and for trying the app locally.
-SET SESSION cte_max_recursion_depth = 10000;
+SET NAMES utf8mb4;
 CREATE TABLE customers (
   id         BIGINT AUTO_INCREMENT PRIMARY KEY,
   email      VARCHAR(255) NOT NULL UNIQUE,
@@ -33,17 +33,21 @@ CREATE TABLE no_pk (a INT, b VARCHAR(10));
 
 CREATE VIEW paid_orders AS SELECT * FROM orders WHERE status = 'paid';
 
-INSERT INTO customers (email)
-WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 50)
-SELECT CONCAT('user', n, '@example.com') FROM seq;
+-- Row generator that works on MySQL and MariaDB alike (no deep recursion).
+CREATE TABLE digits (d INT);
+INSERT INTO digits VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9);
+CREATE TABLE seq (n INT PRIMARY KEY);
+INSERT INTO seq SELECT a.d + b.d * 10 + c.d * 100 + e.d * 1000 + 1 FROM digits a, digits b, digits c, digits e;
+
+INSERT INTO customers (email) SELECT CONCAT('user', n, '@example.com') FROM seq WHERE n <= 50 ORDER BY n;
 
 INSERT INTO orders (customer_id, status, total, discount, notes)
-WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1200)
 SELECT (n % 50) + 1, ELT((n % 3) + 1, 'pending', 'paid', 'refunded'),
        ROUND((n * 37 % 400 + 12) + (n % 100) / 100.0, 2),
        IF(n % 3 = 2, NULL, 5.00),
        CASE n % 4 WHEN 0 THEN NULL WHEN 1 THEN '' ELSE 'Gift wrap' END
-FROM seq;
+FROM seq WHERE n <= 1200 ORDER BY n;
+DROP TABLE seq, digits;
 
 INSERT INTO type_samples VALUES
   (1, 18446744073709551615, 1234567890123456789012345678.0123456789, '2026-10-14 09:59:00.123',

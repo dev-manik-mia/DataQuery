@@ -27,3 +27,17 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-pdataquery"]
       interval: 2s
       retries: 60
+
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: dataquery
+      MARIADB_DATABASE: dataquery_test
+      MARIADB_USER: dataquery
+      MARIADB_PASSWORD: dataquery
+    ports: ["53307:3306"]
+    volumes: ["./docker/mysql-seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro"]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      retries: 60

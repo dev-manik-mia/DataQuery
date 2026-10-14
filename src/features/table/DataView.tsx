@@ -14,6 +14,7 @@ import { copyText } from '@/lib/clipboard';
 import { toAppError } from '@/lib/errors';
 import { formatCount, formatDuration, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
+import { objectLabel } from '@/lib/objects';
 import { useSettings } from '@/stores/settings';
 import { guarded, useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
@@ -67,10 +68,16 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
   const [importing, setImporting] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
 
-  const editable = session.capabilities.grid_edit && structure.object.kind === 'table' && structure.row_identity.length > 0;
-  const identity = useMemo(() => structure.row_identity.map((n) => structure.columns.findIndex((c) => c.name === n)), [structure]);
+  // Tables without a key can be edited by matching every comparable column, after the user confirms.
+  const [fullRow, setFullRow] = useState(false);
+  const keyColumns = useMemo(
+    () => (structure.row_identity.length > 0 ? structure.row_identity : fullRow ? structure.full_row_key : []),
+    [structure, fullRow],
+  );
+  const editable = session.capabilities.grid_edit && structure.object.kind === 'table' && keyColumns.length > 0;
+  const identity = useMemo(() => keyColumns.map((n) => structure.columns.findIndex((c) => c.name === n)), [structure, keyColumns]);
   const pending = counts(edits);
-  const name = `${object.schema ? `${object.schema}.` : ''}${object.name}`;
+  const name = objectLabel(object);
 
   useEffect(() => {
     let stale = false;
@@ -171,9 +178,19 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
 
   const changes = () => toChanges(edits, structure.columns, identity, pageRows);
 
+  const confirmFullRow = async () => {
+    const ok = await ask({
+      title: `Edit ${name} without a key?`,
+      body: `Rows will be matched on ${structure.full_row_key.join(', ')}. A change is saved only if it matches exactly one row; identical duplicate rows cannot be edited. Adding a primary key is the safer fix.`,
+      confirmLabel: 'Edit anyway',
+      danger: true,
+    });
+    if (ok) setFullRow(true);
+  };
+
   const showPreview = async () => {
     try {
-      setPreview(await api.previewChanges(sid, object, changes()));
+      setPreview(await api.previewChanges(sid, object, changes(), fullRow));
     } catch (e) {
       toastError(e);
     }
@@ -182,7 +199,7 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
   const save = async () => {
     setSaving(true);
     try {
-      const report = await guarded((c) => api.applyChanges(sid, object, changes(), c));
+      const report = await guarded((c) => api.applyChanges(sid, object, changes(), fullRow, c));
       if (report) {
         toast(`Saved ${plural(report.updated + report.inserted + report.deleted, 'change')} in ${formatDuration(report.duration_ms)}.`, 'positive');
         setEdits(NO_EDITS);
@@ -305,6 +322,16 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
       {!editable && structure.object.kind === 'table' && (
         <div className={styles.notice} role="status">
           This table has no primary key or NOT NULL unique key, so rows are read-only to avoid changing the wrong rows.
+          {session.capabilities.grid_edit && structure.full_row_key.length > 0 && (
+            <Button size="xs" onClick={() => void confirmFullRow()}>
+              Edit anyway…
+            </Button>
+          )}
+        </div>
+      )}
+      {fullRow && structure.row_identity.length === 0 && (
+        <div className={styles.notice} role="status">
+          Editing without a key: each change matches every column of the row, and nothing is saved unless it matches exactly one row.
         </div>
       )}
       {error && (
@@ -336,11 +363,11 @@ export function DataView({ object, structure, onReloadStructure, leading }: Data
               of <span className="mono" style={{ color: 'var(--ink)' }}>{`${count.exact ? '' : '≈'}${formatCount(count.count)}`}</span>
             </>
           )}
-          {structure.row_identity.length > 0 && (
+          {keyColumns.length > 0 && (
             <>
               {' '}
-              · row identity: {structure.columns.find((c) => c.name === structure.row_identity[0])?.primary_key ? 'primary key' : 'unique key'}{' '}
-              <span className="mono" style={{ color: 'var(--ink)' }}>{structure.row_identity.join(', ')}</span>
+              · row identity: {structure.row_identity.length === 0 ? 'all columns' : structure.columns.find((c) => c.name === structure.row_identity[0])?.primary_key ? 'primary key' : 'unique key'}{' '}
+              <span className="mono" style={{ color: 'var(--ink)' }}>{keyColumns.join(', ')}</span>
             </>
           )}
           {page && ` · ${formatDuration(page.duration_ms)}`}

@@ -40,6 +40,9 @@ pub trait Dialect: Send + Sync {
     /// native decoder.
     fn cast_to_text(&self, quoted_column: &str) -> String;
 
+    /// The type supports `=` against a text parameter, so it can help identify a row.
+    fn comparable(&self, data_type: &str) -> bool;
+
     /// The container that qualifies an object name: the schema (`PostgreSQL`)
     /// or the database (`MySQL`).
     fn container<'a>(&self, object: &'a ObjectRef) -> Option<&'a str> {
@@ -93,6 +96,12 @@ impl Dialect for PostgresDialect {
     fn cast_to_text(&self, quoted_column: &str) -> String {
         format!("{quoted_column}::text")
     }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        const NO_EQUALITY: &[&str] = &["json", "xml", "point", "line", "lseg", "box", "path", "polygon", "circle"];
+        let base = data_type.split(['(', '[']).next().unwrap_or(data_type).trim();
+        !NO_EQUALITY.contains(&base)
+    }
 }
 
 impl Dialect for MysqlDialect {
@@ -121,6 +130,11 @@ impl Dialect for MysqlDialect {
 
     fn cast_to_text(&self, quoted_column: &str) -> String {
         format!("CAST({quoted_column} AS CHAR)")
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        // JSON compares as a document, never equal to a text parameter.
+        !data_type.eq_ignore_ascii_case("json")
     }
 }
 

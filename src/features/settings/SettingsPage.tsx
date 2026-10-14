@@ -288,7 +288,7 @@ function About() {
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
         <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
-        <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon) against PostgreSQL 17 and MySQL 8.4. Windows and Linux builds compile from the same code but are not yet tested." />
+        <Row title="Tested platforms" help="Developed on macOS (Apple silicon). Integration tests run against PostgreSQL 17, MySQL 8.4 and MariaDB 11.4. Windows and Linux builds compile from the same code but are not yet tested." />
       </Card>
       <Card title="Updates" flush>
         <Row title="Signed update check, download and install on restart" help="Needs a signing key and a release feed, which are not set up yet. Install new versions manually for now.">
@@ -297,7 +297,7 @@ function About() {
       </Card>
       <Card title={`Release notes · ${info?.version ?? ''}`} flush>
         <ul className={styles.notes}>
-          <li>PostgreSQL and MySQL/MariaDB adapters: explorer, SQL editor, bounded results, cancel.</li>
+          <li>PostgreSQL, MySQL and MariaDB adapters: explorer, SQL editor, bounded results, cancel, reconnect.</li>
           <li>Table data view with filter, sort, paging and safe inline edits applied in one transaction.</li>
           <li>Streamed CSV/JSON export, CSV import, query history and saved scripts.</li>
           <li>Passwords in the system keychain; production safeguards enforced by the backend.</li>

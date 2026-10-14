@@ -2,10 +2,12 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 
 import type { Cell } from '@/bindings/Cell';
+import type { ExportFormat } from '@/bindings/ExportFormat';
 import { Icon, Menu, type MenuEntry } from '@/components/ui';
 import { cellText, isTruncated } from '@/lib/cells';
 import { copyText, serializeRows, type CopyFormat } from '@/lib/clipboard';
 import { isMac, shortcutLabel } from '@/lib/platform';
+import { exportData } from '@/features/transfer/exportData';
 import { useUi } from '@/stores/ui';
 
 import { CellInspector } from './CellInspector';
@@ -119,9 +121,16 @@ export function DataGrid({
     toast(`${what} copied`);
   };
 
+  /** Cells of the given rows, in on-screen column order. */
+  const pickRows = (indexes: number[]) => indexes.map((i) => order.map((c) => rows[i]?.cells[c] ?? ({ kind: 'null' } as Cell)));
+
   const copyRows = (indexes: number[], format: CopyFormat) => {
-    const picked = indexes.map((i) => order.map((c) => rows[i]?.cells[c] ?? ({ kind: 'null' } as Cell)));
-    void copy(serializeRows(order.map((c) => headers[c] ?? ''), picked, format), indexes.length === 1 ? 'Row' : `${indexes.length} rows`);
+    void copy(serializeRows(order.map((c) => headers[c] ?? ''), pickRows(indexes), format), indexes.length === 1 ? 'Row' : `${indexes.length} rows`);
+  };
+
+  const exportRows = (indexes: number[], format: ExportFormat) => {
+    const meta = order.map((c) => ({ name: columns[c]?.name ?? '', type_name: columns[c]?.typeName ?? '', numeric: columns[c]?.numeric ?? false }));
+    void exportData({ type: 'rows', columns: meta, rows: pickRows(indexes) }, format, `${label} selection`);
   };
 
   const copyColumn = (col: number) => {
@@ -267,6 +276,8 @@ export function DataGrid({
             { label: `Copy ${many.length} rows as TSV`, onSelect: () => copyRows(many, 'tsv') },
             { label: `Copy ${many.length} rows as CSV`, onSelect: () => copyRows(many, 'csv') },
             { label: `Copy ${many.length} rows as JSON`, onSelect: () => copyRows(many, 'json') },
+            { label: `Export ${many.length} rows as CSV…`, onSelect: () => exportRows(many, 'csv') },
+            { label: `Export ${many.length} rows as JSON…`, onSelect: () => exportRows(many, 'json') },
           ]
         : []),
       { type: 'separator' },

@@ -167,6 +167,7 @@ pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStr
         constraints,
         indexes,
         row_identity: if rel.kind == NodeKind::Table { identity } else { Vec::new() },
+        full_row_key: Vec::new(),
         comment: rel.comment,
         row_estimate: rel.estimate,
     })

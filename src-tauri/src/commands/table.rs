@@ -15,7 +15,7 @@ pub async fn table_structure(
     session_id: String,
     object: ObjectRef,
 ) -> CmdResult<TableStructure> {
-    state.session(&session_id).await?.session.structure(&object).await
+    ops::structure(&*state.session(&session_id).await?.session, &object).await
 }
 
 #[tauri::command]
@@ -49,17 +49,21 @@ pub async fn preview_changes(
     session_id: String,
     object: ObjectRef,
     changes: Vec<RowChange>,
+    full_row: Option<bool>,
 ) -> CmdResult<String> {
-    ops::preview_changes(&*state.session(&session_id).await?.session, &object, &changes).await
+    ops::preview_changes(&*state.session(&session_id).await?.session, &object, &changes, full_row.unwrap_or(false))
+        .await
 }
 
-/// Saves grid changes in one transaction. Production asks first.
+/// Saves grid changes in one transaction. Production asks first. `full_row`
+/// matches rows of a table without a key on every column (the UI asks first).
 #[tauri::command]
 pub async fn apply_changes(
     state: State<'_, AppState>,
     session_id: String,
     object: ObjectRef,
     changes: Vec<RowChange>,
+    full_row: Option<bool>,
     confirmation: Option<Confirmation>,
 ) -> CmdResult<Guarded<ApplyReport>> {
     let open = state.session(&session_id).await?;
@@ -67,6 +71,6 @@ pub async fn apply_changes(
     if let Some(request) = safety::check(&connection, &settings, &Intent::write(), confirmation.as_ref())? {
         return Ok(Guarded::NeedsConfirmation { request });
     }
-    let value = ops::apply_changes(&*open.session, &object, &changes).await?;
+    let value = ops::apply_changes(&*open.session, &object, &changes, full_row.unwrap_or(false)).await?;
     Ok(Guarded::Done { value })
 }

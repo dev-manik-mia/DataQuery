@@ -1,4 +1,5 @@
 import { Icon } from '@/components/ui';
+import { objectLabel, objectPath } from '@/lib/objects';
 import { shortcutLabel } from '@/lib/platform';
 import { isDirty, useWorkspace } from '@/stores/workspace';
 
@@ -19,13 +20,13 @@ export function TabBar() {
             tabIndex={selected ? 0 : -1}
             aria-selected={selected}
             className={styles.tab}
-            title={tab.kind === 'query' ? (tab.filePath ?? tab.title) : `${tab.object.schema ? `${tab.object.schema}.` : ''}${tab.object.name}`}
+            title={tab.kind === 'query' ? (tab.filePath ?? tab.title) : objectPath(tab.object)}
             onClick={() => activate(tab.id)}
             onAuxClick={(e) => e.button === 1 && void closeTab(tab.id)}
             onKeyDown={(e) => e.key === 'Enter' && activate(tab.id)}
           >
             {tab.kind === 'table' && <span className={styles.tabKind}>{KIND[tab.object.kind as keyof typeof KIND] ?? 'T'}</span>}
-            <span className="ellipsis">{tab.kind === 'table' && tab.object.schema ? `${tab.object.schema}.${tab.title}` : tab.title}</span>
+            <span className="ellipsis">{tab.kind === 'table' ? objectLabel(tab.object) : tab.title}</span>
             {isDirty(tab) && (
               <span className={styles.dirty} aria-label="Unsaved changes">
                 ●

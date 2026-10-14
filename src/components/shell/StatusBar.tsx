@@ -18,13 +18,23 @@ const statusLabel: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 };
 
+/**
+ * Coloured dot plus word, so the state never relies on colour alone. Only one
+ * copy on screen should be `live`, or screen readers announce changes twice.
+ */
+export function StatusIndicator({ status, live = true }: { status: ConnectionStatus; live?: boolean }) {
+  return (
+    <span className={styles.status} style={{ color: statusTone[status] }} role={live ? 'status' : undefined}>
+      <span className={styles.statusDot} aria-hidden />
+      {statusLabel[status]}
+    </span>
+  );
+}
+
 export function StatusBar({ status, left, right }: { status: ConnectionStatus; left?: ReactNode; right?: ReactNode }) {
   return (
     <footer className={styles.statusbar} aria-label="Status">
-      <span className={styles.status} style={{ color: statusTone[status] }} role="status">
-        <span className={styles.statusDot} aria-hidden />
-        {statusLabel[status]}
-      </span>
+      <StatusIndicator status={status} />
       {left}
       <span style={{ flex: 1 }} />
       {right}

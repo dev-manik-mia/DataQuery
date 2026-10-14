@@ -64,6 +64,10 @@ pub struct TableStructure {
     /// Columns that identify a row (primary key, else a NOT NULL unique key).
     /// Empty when rows cannot be identified, which disables editing.
     pub row_identity: Vec<String>,
+    /// For tables without a key: every column that can be compared, used to
+    /// match a row only after the user confirms. Each change must still match
+    /// exactly one row, or nothing is saved. Filled by [`crate::ops::structure`].
+    pub full_row_key: Vec<String>,
     pub comment: Option<String>,
     #[ts(type = "number | null")]
     pub row_estimate: Option<i64>,

@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 
 import { GlobalDialogs } from '@/components/shell/GlobalDialogs';
 import styles from '@/components/shell/Shell.module.css';
-import { StatusBar } from '@/components/shell/StatusBar';
+import { StatusBar, StatusIndicator } from '@/components/shell/StatusBar';
 import { Toasts } from '@/components/shell/Toasts';
 import { Crumbs, TitleBar, TitleDivider } from '@/components/shell/TitleBar';
-import { Button, EnvironmentChip, Icon, Menu } from '@/components/ui';
+import { Button, EngineMark, EnvironmentChip, Icon, Menu } from '@/components/ui';
 import { ConnectionForm } from '@/features/connections/ConnectionForm';
 import { ConnectionsHome } from '@/features/connections/ConnectionsHome';
 import { EnginePicker } from '@/features/connections/EnginePicker';
@@ -17,7 +17,7 @@ import { Workspace } from '@/features/workspace/Workspace';
 import wsStyles from '@/features/workspace/Workspace.module.css';
 import { formatCount, formatDuration } from '@/lib/format';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
-import { useConnections } from '@/stores/connections';
+import { useConnections, useEngine } from '@/stores/connections';
 import { useLayout } from '@/stores/layout';
 import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
@@ -78,7 +78,9 @@ export function App() {
 function AppTitleBar({ view, production }: { view: View; production: boolean }) {
   const { navigate, back, setPaletteOpen } = useUi();
   const session = useWorkspace((s) => s.session);
-  const disconnect = useWorkspace((s) => s.disconnect);
+  const link = useWorkspace((s) => s.link);
+  const { disconnect, reconnect } = useWorkspace.getState();
+  const engine = useEngine(session?.connection.config.engine);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const home = () => navigate({ name: 'home' });
 
@@ -103,6 +105,7 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
           crumbs={
             <>
               <TitleDivider />
+              {engine && <EngineMark engine={engine} size={18} />}
               <button
                 type="button"
                 className={wsStyles.connMenu}
@@ -115,6 +118,7 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
                 {c.name} <Icon name="chevronDown" size={10} />
               </button>
               <EnvironmentChip environment={c.environment} />
+              <StatusIndicator status={link} live={false} />
             </>
           }
           center={
@@ -135,6 +139,7 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
               { label: 'All connections', onSelect: home },
               { label: 'Edit connection', onSelect: () => navigate({ name: 'connection-form', engine: c.config.engine, connectionId: c.id }) },
               { type: 'separator' },
+              { label: 'Reconnect', onSelect: () => void reconnect() },
               {
                 label: 'Disconnect',
                 onSelect: async () => {
@@ -173,15 +178,21 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
 
 function WorkspaceStatus() {
   const session = useWorkspace((s) => s.session)!;
+  const link = useWorkspace((s) => s.link);
   const active = useWorkspace((s) => s.tabs.find((t) => t.id === s.activeTabId));
   const { line, column } = useEditorStatus();
   const run = active?.kind === 'query' ? active.run : null;
   const result = run && typeof run.active === 'number' ? run.results[run.active] : undefined;
   return (
     <StatusBar
-      status="connected"
+      status={link}
       left={
         <>
+          {link === 'failed' && (
+            <Button size="sm" onClick={() => void useWorkspace.getState().reconnect()}>
+              Reconnect
+            </Button>
+          )}
           <span>{session.server.version}</span>
           <span className="mono">
             {session.server.user}@{session.server.database}

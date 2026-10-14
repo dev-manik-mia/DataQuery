@@ -185,8 +185,10 @@ fn check_key(structure: &TableStructure, key: &[ColumnValue]) -> DbResult<()> {
     if !same {
         return Err(DbError::invalid("The row key does not match the table's primary key."));
     }
-    if key.iter().any(|k| k.value.is_none()) {
-        return Err(DbError::invalid("A row key value cannot be NULL."));
+    for k in key.iter().filter(|k| k.value.is_none()) {
+        if !column(structure, &k.column)?.nullable {
+            return Err(DbError::invalid(format!("Key column `{}` cannot be NULL.", k.column)));
+        }
     }
     Ok(())
 }
@@ -195,8 +197,12 @@ fn key_predicate(p: &mut Params<'_>, structure: &TableStructure, key: &[ColumnVa
     let mut parts = Vec::with_capacity(key.len());
     for k in key {
         let col = column(structure, &k.column)?;
-        let value = p.push(col, k.value.as_deref());
-        parts.push(format!("{} = {value}", p.dialect.quote_ident(&col.name)));
+        let name = p.dialect.quote_ident(&col.name);
+        // `IS NULL` rather than a null-safe operator, so indexes stay usable.
+        parts.push(match k.value.as_deref() {
+            None => format!("{name} IS NULL"),
+            Some(v) => format!("{name} = {}", p.push(col, Some(v))),
+        });
     }
     Ok(parts.join(" AND "))
 }
@@ -347,6 +353,7 @@ mod tests {
             constraints: vec![],
             indexes: vec![],
             row_identity: vec!["id".into()],
+            full_row_key: Vec::new(),
             comment: None,
             row_estimate: None,
         }
@@ -444,6 +451,27 @@ mod tests {
         let mut no_pk = orders();
         no_pk.row_identity.clear();
         assert!(change_statements(&PostgresDialect, &no_pk, &[RowChange::Insert { values: vec![] }]).is_err());
+    }
+
+    #[test]
+    fn full_row_keys_match_nulls_with_is_null() {
+        let mut s = orders();
+        s.row_identity = vec!["id".into(), "total".into()];
+        let delete = RowChange::Delete { key: vec![cv("id", Some("1")), cv("total", None)] };
+        let stmts = change_statements(&PostgresDialect, &s, std::slice::from_ref(&delete)).unwrap();
+        assert_eq!(stmts[0].sql, r#"DELETE FROM "public"."orders" WHERE "id" = $1::text::bigint AND "total" IS NULL"#);
+        assert_eq!(stmts[0].params, vec![Some("1".into())]);
+        assert_eq!(stmts[0].expect_rows, Some(1));
+        // A NOT NULL key column never matches NULL.
+        let null_id = RowChange::Delete { key: vec![cv("id", None), cv("total", Some("1"))] };
+        assert!(change_statements(&PostgresDialect, &s, &[null_id]).is_err());
+    }
+
+    #[test]
+    fn comparable_types() {
+        assert!(PostgresDialect.comparable("numeric(12,2)") && PostgresDialect.comparable("text[]"));
+        assert!(!PostgresDialect.comparable("json") && !PostgresDialect.comparable("point"));
+        assert!(MysqlDialect.comparable("varchar(10)") && !MysqlDialect.comparable("json"));
     }
 
     #[test]

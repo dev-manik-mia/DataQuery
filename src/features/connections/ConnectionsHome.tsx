@@ -145,7 +145,7 @@ export function ConnectionsHome() {
 
         {loaded && connections.length === 0 ? (
           <EmptyState title="No connections yet">
-            Add a connection to a PostgreSQL database to start. Passwords are stored in your system keychain.
+            Add a connection to a PostgreSQL, MySQL or MariaDB database to start. Passwords are stored in your system keychain.
             <div style={{ marginTop: 12 }}>
               <Button variant="primary" onClick={() => navigate({ name: 'engines' })}>
                 New connection

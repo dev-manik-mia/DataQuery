@@ -207,8 +207,9 @@ export function Explorer({ width }: { width: number }) {
               <span className={styles.kind}>{KIND_MARK[node.kind] ?? ''}</span>
               <span className={styles.label}>{node.name}</span>
               {count !== null && count > 0 && (
-                <span className={styles.count} title={node.kind === 'schema' ? `${count} tables and views` : `About ${formatCount(count)} rows (estimate)`}>
-                  {node.kind === 'schema' ? formatCount(count) : `≈${compactCount(count)}`}
+                // Containers (schemas, and databases on engines without schemas) count objects; relations estimate rows.
+                <span className={styles.count} title={node.expandable ? `${count} tables and views` : `About ${formatCount(count)} rows (estimate)`}>
+                  {node.expandable ? formatCount(count) : `≈${compactCount(count)}`}
                 </span>
               )}
             </div>

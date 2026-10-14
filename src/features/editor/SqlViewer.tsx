@@ -1,10 +1,10 @@
-import { MySQL, PostgreSQL, sql } from '@codemirror/lang-sql';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
 
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 
+import { sqlLanguage } from './language';
 import { editorTheme, sqlHighlight } from './theme';
 
 const viewerTheme = EditorView.theme({
@@ -26,7 +26,7 @@ export function SqlViewer({ value, flavor, label }: { value: string; flavor: Sql
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
           EditorView.lineWrapping,
-          sql({ dialect: flavor === 'mysql' ? MySQL : PostgreSQL }),
+          sqlLanguage(flavor),
           sqlHighlight,
           editorTheme,
           viewerTheme,

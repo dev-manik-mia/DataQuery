@@ -9,4 +9,10 @@ export type TableStructure = { object: ObjectRef, columns: Array<ColumnInfo>, co
  * Columns that identify a row (primary key, else a NOT NULL unique key).
  * Empty when rows cannot be identified, which disables editing.
  */
-row_identity: Array<string>, comment: string | null, row_estimate: number | null, };
+row_identity: Array<string>, 
+/**
+ * For tables without a key: every column that can be compared, used to
+ * match a row only after the user confirms. Each change must still match
+ * exactly one row, or nothing is saved. Filled by [`crate::ops::structure`].
+ */
+full_row_key: Array<string>, comment: string | null, row_estimate: number | null, };

@@ -96,14 +96,20 @@ interface OpenQueryOptions {
   filePath?: string | null;
 }
 
+/** Health of the open session, shown in the title and status bars. */
+export type LinkStatus = 'connected' | 'connecting' | 'failed';
+
 interface WorkspaceState {
   session: SessionInfo | null;
+  link: LinkStatus;
   connectingId: string | null;
   connectError: DbError | null;
   tabs: Tab[];
   activeTabId: string | null;
 
   connect: (connectionId: string) => Promise<boolean>;
+  /** Reopens the session's connections, keeping tabs and their SQL. */
+  reconnect: () => Promise<void>;
   disconnect: () => Promise<void>;
   openQueryTab: (options?: OpenQueryOptions) => string;
   openTableTab: (object: ObjectRef, view?: TableView) => void;
@@ -199,6 +205,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
   return {
     session: null,
+    link: 'connected',
     connectingId: null,
     connectError: null,
     tabs: [],
@@ -219,6 +226,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         const initial = tabs.length ? tabs : [newQueryTab([])];
         set({
           session,
+          link: 'connected',
           connectingId: null,
           tabs: initial,
           activeTabId: initial.some((t) => t.id === saved?.activeTabId) ? (saved?.activeTabId ?? null) : (initial[0]?.id ?? null),
@@ -229,6 +237,26 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       } catch (e) {
         set({ connectingId: null, connectError: toAppError(e).info });
         return false;
+      }
+    },
+
+    reconnect: async () => {
+      const session = get().session;
+      if (!session || get().link === 'connecting') return;
+      set({ link: 'connecting' });
+      try {
+        const fresh = await api.reconnect({ sessionId: session.session_id });
+        // Results held server-side by the old connections are gone.
+        set((s) => ({
+          session: fresh,
+          link: 'connected',
+          tabs: s.tabs.map((t) => (t.kind === 'query' ? { ...t, run: { ...t.run, results: t.run.results.map((r) => ({ ...r, canFetchMore: false })) } } : t)),
+        }));
+        useExplorer.getState().reset(fresh);
+        useUi.getState().toast(`Reconnected to ${fresh.connection.name}.`, 'positive');
+      } catch (e) {
+        set({ link: 'failed' });
+        useUi.getState().toastError(e);
       }
     },
 
@@ -309,8 +337,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
           return;
         }
         patchRun(tabId, (run) => ({ status: 'done', ...digest(report, sql, base, run) }));
+        noteLinkErrors(report.outcomes.map((o) => o.error));
       } catch (e) {
         const error = toAppError(e).info;
+        noteLinkErrors([error]);
         patchRun(tabId, { status: 'done', active: 'messages', messages: [{ id: uid('msg'), kind: 'error', statement: null, text: error.message, error }] });
       }
     },
@@ -329,6 +359,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
         }));
       } catch (e) {
         patchRun(tabId, (run) => ({ fetching: false, results: run.results.map((r) => (r.id === last.id ? { ...r, canFetchMore: false } : r)) }));
+        noteLinkErrors([toAppError(e).info]);
         useUi.getState().toastError(e);
       }
     },
@@ -346,6 +377,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     setActiveResult: (tabId, active) => patchRun(tabId, { active }),
   };
 });
+
+/** A network error means the session's connection dropped; offer to reconnect. */
+function noteLinkErrors(errors: (DbError | null)[]) {
+  if (errors.some((e) => e?.kind === 'network')) useWorkspace.setState({ link: 'failed' });
+}
 
 // ---------------------------------------------------------------------------
 // Persistence: tab SQL and layout only. Results are never stored and restored
