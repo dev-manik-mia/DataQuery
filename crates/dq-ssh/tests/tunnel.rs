@@ -115,3 +115,26 @@ async fn wrong_password_is_an_auth_error() {
     let missing = dq_ssh::open(&tunnel, &vec![None], ("postgres", 5432), &known, TIMEOUT).await.unwrap_err();
     assert_eq!(missing.kind, ErrorKind::Auth);
 }
+
+/// Cloud `.pem` keys (AWS EC2 RSA, SEC1 EC, an encrypted key) authenticate the tunnel.
+#[tokio::test]
+async fn pem_private_keys_authenticate() {
+    let (host, port) = require_ssh!();
+    let dir = tempfile::tempdir().unwrap();
+    let known = Arc::new(KnownHosts::app_only(dir.path().join("known_hosts")));
+    let key = |name: &str| format!("{}/src/testdata/{name}", env!("CARGO_MANIFEST_DIR"));
+    let password = SshTunnel { host: hop(&host, port), jumps: vec![] };
+    trust(&known, &password, &vec![Some("dataquery".to_owned())]).await;
+    for (file, secret) in [("rsa_pkcs1.pem", None), ("ec_sec1.pem", None), ("rsa_aes128.pem", Some("secret"))] {
+        let auth = SshAuth::PrivateKey { path: key(file) };
+        let tunnel = SshTunnel { host: SshHop { auth, ..hop(&host, port) }, jumps: vec![] };
+        let secrets = vec![secret.map(str::to_owned)];
+        let opened = dq_ssh::open(&tunnel, &secrets, ("postgres", 5432), &known, TIMEOUT).await;
+        assert!(opened.is_ok(), "{file}: {:?}", opened.err());
+    }
+    // An encrypted key without its passphrase asks for it.
+    let auth = SshAuth::PrivateKey { path: key("rsa_aes128.pem") };
+    let tunnel = SshTunnel { host: SshHop { auth, ..hop(&host, port) }, jumps: vec![] };
+    let err = dq_ssh::open(&tunnel, &vec![None], ("postgres", 5432), &known, TIMEOUT).await.unwrap_err();
+    assert!(err.message.contains("passphrase"), "{err:?}");
+}

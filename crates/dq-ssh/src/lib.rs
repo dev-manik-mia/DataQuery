@@ -9,6 +9,8 @@
 //! known-hosts file. Unknown keys fail with their SHA-256 fingerprint so the
 //! user can compare and trust them explicitly; changed keys always fail.
 
+mod key;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -253,11 +255,11 @@ async fn authenticate(handle: &mut Handle<Client>, hop: &SshHop, secret: Option<
             handle.authenticate_password(user, password).await.map_err(|e| ssh_error(hop, &e))?
         }
         SshAuth::PrivateKey { path } => {
-            let key = russh::keys::load_secret_key(path, secret.as_deref()).map_err(|e| match e {
-                russh::keys::Error::KeyIsEncrypted => {
+            let key = key::load_private_key(path, secret.as_deref()).map_err(|e| match e {
+                key::KeyError::Encrypted => {
                     auth_error(hop, "The SSH key is encrypted. Save its passphrase with the connection.")
                 }
-                other => auth_error(hop, &format!("Cannot read SSH key {path}: {other}")),
+                key::KeyError::Unusable(message) => auth_error(hop, &message),
             })?;
             let hash = handle.best_supported_rsa_hash().await.map_err(|e| ssh_error(hop, &e))?.flatten();
             handle

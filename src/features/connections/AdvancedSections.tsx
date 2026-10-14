@@ -9,6 +9,8 @@ import { Button, Checkbox, FileField, SelectField, TextField } from '@/component
 import styles from './Connections.module.css';
 
 const PEM_FILTER = [{ name: 'PEM', extensions: ['pem', 'crt', 'cer', 'key'] }, { name: 'All files', extensions: ['*'] }];
+/** OpenSSH keys usually have no extension (id_ed25519), so every file stays selectable. */
+const SSH_KEY_FILTER = [{ name: 'Private key (.pem, OpenSSH)', extensions: ['pem', 'key'] }, { name: 'All files', extensions: ['*'] }];
 
 /** One section of the connection form: a titled, collapsible group. */
 export function FormSection({ title, summary, open, onToggle, children }: { title: string; summary?: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
@@ -107,8 +109,20 @@ export function TlsFields({ files, onChange }: { files: TlsFiles; onChange: (f: 
         filters={PEM_FILTER}
         onChange={(ca_file) => onChange({ ...files, ca_file })}
       />
-      <FileField label="Client certificate" value={files.client_cert_file} filters={PEM_FILTER} onChange={(client_cert_file) => onChange({ ...files, client_cert_file })} />
-      <FileField label="Client key" value={files.client_key_file} filters={PEM_FILTER} onChange={(client_key_file) => onChange({ ...files, client_key_file })} />
+      <FileField
+        label="Client certificate"
+        hint="A .pem with the certificate, or with the certificate and its key together."
+        value={files.client_cert_file}
+        filters={PEM_FILTER}
+        onChange={(client_cert_file) => onChange({ ...files, client_cert_file })}
+      />
+      <FileField
+        label="Client key"
+        hint="Leave empty when the certificate .pem also holds the key. Keys must not be encrypted."
+        value={files.client_key_file}
+        filters={PEM_FILTER}
+        onChange={(client_key_file) => onChange({ ...files, client_key_file })}
+      />
     </>
   );
 }
@@ -182,6 +196,8 @@ function HopFields({
         <FileField
           className={styles.full}
           label="Private key"
+          hint="OpenSSH or .pem keys (AWS EC2 and other clouds: RSA, EC, Ed25519, PKCS#8). PuTTY .ppk keys: export as OpenSSH in PuTTYgen first."
+          filters={SSH_KEY_FILTER}
           value={hop.auth.path || null}
           onChange={(path) => onChange({ ...hop, auth: { method: 'private_key', path: path ?? '' } })}
         />

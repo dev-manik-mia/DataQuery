@@ -1,0 +1,4 @@
+# Public halves of crates/dq-ssh/src/testdata keys (test-only).
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDejYer6ZHDHY06CYVpm5+u6Uz7I4lpPgxF8Ac+C39GCstTwBYz+9jtT1BGPwLnQuBn/nVOB7fjxsG9hYZCaDkONuE3XBo6djjXA+Ss5U8/imvkSMdECS8VXPAL5b1RlbfhVZbNt5HAgLv4kdB6ZElP0omLoyu9+rotCzEnEnqF/Q==
+ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBI3GqAhkXlu6QLkp7U+mCnX4w4D4v/6ULP0mSaAfS5vBsukju7Bf0yzGu5GCiX1+Gweg3+kTLgx1VyjVI/kbEUo=
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEOxPq3wmn6B8HdpzBbjpdgTurO4YC4pZd9xyG5q8f8J test

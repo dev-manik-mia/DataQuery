@@ -150,4 +150,16 @@ mod tests {
         let files = TlsFiles { client_key_file: Some("/k.pem".into()), ..TlsFiles::default() };
         assert!(files.validate().is_err());
     }
+
+    #[test]
+    fn combined_pem_parses_like_the_drivers() {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let path = format!("{}/src/testdata/client_combined.pem", env!("CARGO_MANIFEST_DIR"));
+        let files = TlsFiles { client_cert_file: Some(path.clone()), ..TlsFiles::default() };
+        check_files(&files).unwrap();
+        let (cert, key) = files.client_pair().unwrap();
+        assert_eq!(CertificateDer::pem_file_iter(cert).unwrap().count(), 1);
+        assert!(PrivateKeyDer::from_pem_file(key).is_ok());
+    }
 }
