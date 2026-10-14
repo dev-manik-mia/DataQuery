@@ -19,7 +19,7 @@ npm run app:release  # release bundle plus signed updater artifacts (needs the s
 
 ### Signed updates
 
-The app checks `https://github.com/dataquery/dataquery/releases/latest/download/latest.json` only when asked
+The app checks `https://github.com/dev-manik-mia/DataQuery/releases/latest/download/latest.json` only when asked
 (Settings → About) or at launch if the user enables it. Updates are verified against the public key in
 `src-tauri/tauri.conf.json` before they install.
 
@@ -28,6 +28,28 @@ repository. To publish a release, build with the key and upload the bundle, its 
 
 ```sh
 TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/dataquery.key)" npm run app:release
+```
+
+### CI and releases (GitHub Actions)
+
+`.github/workflows/build.yml` runs `npm run check` and builds the app for macOS (Apple silicon and Intel), Linux
+(`.deb`, `.rpm`, AppImage) and Windows (`.msi`, `.exe`) on every push and pull request; the installers are kept with
+the run for 14 days.
+
+A push to `main` whose commit message contains **release** also publishes the GitHub release `v<version>` with the
+installers of every platform. The release is published only when all platforms built. Before releasing, bump the
+same version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`; the workflow refuses mismatched
+versions and versions that were already released.
+
+Repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Needed for |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` (+ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one) | Signed updater files (`latest.json`); without it releases still build but installed apps do not see them as updates |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Optional macOS code signing and notarization (unsigned builds otherwise) |
+
+```sh
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/dataquery.key
 ```
 
 Keep the private key safe (e.g. as a CI secret); losing it means installed apps can no longer accept updates.

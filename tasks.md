@@ -230,6 +230,14 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 22. CI and releases
+
+- [x] T22.1 `.github/workflows/build.yml`: `npm run check` on Linux, then builds for macOS (Apple silicon, Intel), Linux and Windows on every push and pull request; installers kept as run artifacts.
+- [x] T22.2 Releases: a push to `main` whose commit message contains "release" checks that `package.json`, `tauri.conf.json` and `Cargo.toml` agree and the tag is new, creates a draft `v<version>`, uploads every platform's installers (and signed updater files when `TAURI_SIGNING_PRIVATE_KEY` is set), and publishes only when all platforms built.
+- [x] T22.3 Updater feed and repository URL point at `github.com/dev-manik-mia/DataQuery`; optional Apple signing/notarization secrets; workflow checked with actionlint.
+
+---
+
 ## Verification
 
 | Area | How it was verified |
@@ -245,7 +253,7 @@ Not exercised against a live external service (code paths are implemented and un
 - **T2.15** CA / client-certificate files: no TLS-enabled test server in Docker.
 - **T2.20** Cloud IAM: needs real AWS/Azure/GCP accounts and their CLIs.
 - **T11** AI assistant: needs the user's Anthropic key or a local model; request shape follows the Messages API.
-- **T12.2** Signed updates: a signing key pair was generated (`~/.tauri/dataquery.key`, public key in `tauri.conf.json`); the release feed `https://github.com/dataquery/dataquery/releases/latest/download/latest.json` must be published by a release built with `npm run app:release` and `TAURI_SIGNING_PRIVATE_KEY` set.
+- **T12.2** Signed updates: a signing key pair was generated (`~/.tauri/dataquery.key`, public key in `tauri.conf.json`); the release feed `https://github.com/dev-manik-mia/DataQuery/releases/latest/download/latest.json` is published by the release workflow (§22) when `TAURI_SIGNING_PRIVATE_KEY` is a repository secret.
 - **T1.9** Multiple windows and the updater plugin run only in the desktop app, not in the browser preview.
 
 ## Verification for every task

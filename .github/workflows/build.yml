@@ -1,0 +1,221 @@
+# Checks and builds DataQuery for macOS, Linux and Windows on every push and
+# pull request. A push to main whose commit message contains "release" also
+# publishes a GitHub release v<version> with the installers of all platforms
+# (and the signed updater files when TAURI_SIGNING_PRIVATE_KEY is set).
+#
+# Before a release: bump the version in package.json, src-tauri/tauri.conf.json
+# and Cargo.toml (they must match, and the tag must not exist yet).
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Smaller debug info keeps the test build within the runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  check:
+    name: Check (types, lint, tests, fmt, clippy)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+      - run: npm ci
+      # Integration tests skip without their DATAQUERY_TEST_* databases.
+      - run: npm run check
+
+  release-plan:
+    name: Plan release
+    runs-on: ubuntu-22.04
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        name: Release when the commit message says so
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release=false
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ] \
+             && printf '%s' "$MESSAGE" | grep -qi 'release'; then
+            release=true
+          fi
+          pkg=$(node -p "require('./package.json').version")
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          if [ "$release" = true ]; then
+            if [ "$pkg" != "$conf" ] || [ "$pkg" != "$cargo" ]; then
+              echo "::error::Versions differ: package.json $pkg, tauri.conf.json $conf, Cargo.toml $cargo. Make them equal before releasing."
+              exit 1
+            fi
+            if gh release view "v$pkg" --repo "${{ github.repository }}" >/dev/null 2>&1 \
+               || git ls-remote --exit-code --tags origin "refs/tags/v$pkg" >/dev/null 2>&1; then
+              echo "::error::v$pkg is already released. Bump the version in package.json, src-tauri/tauri.conf.json and Cargo.toml."
+              exit 1
+            fi
+            echo "Releasing v$pkg"
+          fi
+
+  create-release:
+    name: Create draft release
+    needs: [check, release-plan]
+    if: needs.release-plan.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.draft.outputs.result }}
+    steps:
+      - id: draft
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.release-plan.outputs.version }}
+        with:
+          script: |
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${process.env.VERSION}`,
+              target_commitish: context.sha,
+              name: `DataQuery v${process.env.VERSION}`,
+              body: 'Installers for macOS (Apple silicon and Intel), Windows and Linux are attached below.',
+              draft: true,
+              prerelease: false,
+            });
+            return data.id;
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [check, release-plan, create-release]
+    # Builds always; uploads into the draft release only when one was created.
+    if: ${{ !cancelled() && needs.check.result == 'success' && needs.release-plan.result == 'success' && needs.create-release.result != 'failure' }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - name: Linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_ID: ${{ needs.create-release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.target }}
+      - run: npm ci
+      # Signed updater files (latest.json) need the minisign key from `tauri signer generate`;
+      # without the secret the installers are built without them.
+      - name: Choose the build configuration
+        id: config
+        shell: bash
+        env:
+          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" = true ]; then
+            echo "args=--target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--target ${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: no updater files, so installed apps will not see this build as an update."
+          fi
+      - name: Build
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Optional macOS signing and notarization; unsigned when these are empty.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: ${{ steps.config.outputs.args }}
+          releaseId: ${{ env.RELEASE_ID }}
+          includeUpdaterJson: true
+      - name: Keep the installers with the run
+        if: env.RELEASE_ID == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: DataQuery-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/bundle/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish release
+    needs: [create-release, build]
+    if: needs.create-release.result == 'success' && needs.build.result == 'success'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+            });
