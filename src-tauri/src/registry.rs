@@ -15,6 +15,7 @@ impl Registry {
             (Engine::Postgres, Arc::new(dq_postgres::PostgresAdapter::POSTGRES)),
             (Engine::Cockroachdb, Arc::new(dq_postgres::PostgresAdapter::COCKROACH)),
             (Engine::Sqlserver, Arc::new(dq_sqlserver::SqlServerAdapter)),
+            (Engine::Oracle, Arc::new(dq_oracle::OracleAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];

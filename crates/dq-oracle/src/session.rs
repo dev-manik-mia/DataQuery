@@ -2,7 +2,9 @@
 //!
 //! Oracle calls block, so every call runs on a blocking thread. User
 //! statements run on one query connection that keeps at most one open
-//! result; cancelling sends a break to it from another thread. Catalog
+//! result. Cancelling (and the statement timeout) asks the server to cancel
+//! the session's statement (`ALTER SYSTEM CANCEL SQL`), and falls back to a
+//! client break when the account may not. Catalog
 //! reads, table pages and exports use a small pool; grid edits and imports
 //! use a short-lived connection per transaction.
 //!
@@ -39,10 +41,32 @@ pub struct OraSession {
     /// Session id of the query connection, hidden from the process list.
     pub(crate) sid: i64,
     query: Mutex<QueryState>,
-    /// The query connection, shared so `cancel` can send a break while a call runs.
-    current: std::sync::Mutex<Arc<Connection>>,
+    /// Stops the query connection's running statement from another thread.
+    interrupter: std::sync::Mutex<Arc<Interrupter>>,
     running: AtomicBool,
-    pub(crate) pool: Pool,
+    pub(crate) pool: Arc<Pool>,
+}
+
+/// Cancels whatever the query connection is running.
+struct Interrupter {
+    conn: Arc<Connection>,
+    sid: i64,
+    serial: i64,
+    pool: Arc<Pool>,
+}
+
+impl Interrupter {
+    /// Asks the server to cancel the statement; when the account lacks
+    /// `ALTER SYSTEM`, sends a break on the connection instead (which the
+    /// server sees at once only where the network carries out-of-band data).
+    async fn interrupt(&self) {
+        let sql = format!("ALTER SYSTEM CANCEL SQL '{}, {}'", self.sid, self.serial);
+        let cancelled = self.pool.run(move |conn| conn.execute(&sql, &[]).map(|_| ()).map_err(|e| map_error(&e, None))).await;
+        if cancelled.is_err() {
+            let conn = self.conn.clone();
+            let _ = tokio::task::spawn_blocking(move || conn.break_execution()).await;
+        }
+    }
 }
 
 struct QueryState {
@@ -99,22 +123,22 @@ fn read_rows(cursor: &mut Cursor, limit: u32, secret: Option<&str>) -> DbResult<
 }
 
 /// Runs blocking `work` on the query connection. After `timeout_secs` a
-/// break stops it; unlike Oracle's call timeout, a break keeps the
-/// connection usable.
+/// cancel stops it; unlike Oracle's call timeout, that keeps the connection usable.
 async fn with_deadline<T: Send + 'static>(
-    conn: Arc<Connection>,
+    interrupter: Arc<Interrupter>,
     timeout_secs: u32,
     work: impl FnOnce(&Connection) -> DbResult<T> + Send + 'static,
 ) -> DbResult<T> {
     let done = Arc::new(AtomicBool::new(false));
     let timed_out = Arc::new(AtomicBool::new(false));
+    let conn = interrupter.conn.clone();
     let timer = (timeout_secs > 0).then(|| {
-        let (conn, done, timed_out) = (conn.clone(), done.clone(), timed_out.clone());
+        let (done, timed_out) = (done.clone(), timed_out.clone());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(u64::from(timeout_secs))).await;
             if !done.load(Ordering::SeqCst) {
                 timed_out.store(true, Ordering::SeqCst);
-                let _ = tokio::task::spawn_blocking(move || conn.break_execution()).await;
+                interrupter.interrupt().await;
             }
         })
     });
@@ -143,14 +167,20 @@ impl OraSession {
     pub(crate) async fn open(params: &ConnectParams) -> DbResult<Self> {
         let opened = connect::open_query(params).await?;
         let conn = Arc::new(opened.conn);
+        let pool = Arc::new(Pool::new(params.clone()));
+        let interrupter = Interrupter { conn: conn.clone(), sid: opened.sid, serial: opened.serial, pool: pool.clone() };
         Ok(Self {
-            current: std::sync::Mutex::new(conn.clone()),
+            interrupter: std::sync::Mutex::new(Arc::new(interrupter)),
             query: Mutex::new(QueryState { conn, cursor: None, in_transaction: false }),
             running: AtomicBool::new(false),
-            pool: Pool::new(params.clone()),
+            pool,
             sid: opened.sid,
             info: opened.info,
         })
+    }
+
+    fn interrupter(&self) -> DbResult<Arc<Interrupter>> {
+        self.interrupter.lock().map(|i| i.clone()).map_err(|_| DbError::internal("interrupter lock poisoned"))
     }
 
     fn params(&self) -> &ConnectParams {
@@ -169,11 +199,15 @@ impl OraSession {
             .unwrap_or(false);
         if !healthy {
             let conn = Arc::new(connect::open(self.params()).await?);
+            let probe = conn.clone();
+            let (sid, serial) = tokio::task::spawn_blocking(move || connect::session_id(&probe))
+                .await
+                .map_err(|e| DbError::internal(format!("connect task failed: {e}")))??;
             q.conn = conn.clone();
             q.cursor = None;
             q.in_transaction = false;
-            if let Ok(mut current) = self.current.lock() {
-                *current = conn;
+            if let Ok(mut current) = self.interrupter.lock() {
+                *current = Arc::new(Interrupter { conn, sid, serial, pool: self.pool.clone() });
             }
         }
         Ok(())
@@ -185,11 +219,11 @@ impl OraSession {
         let effect = transaction_effect(&sql, SqlFlavor::Oracle);
         let command = command_tag(&sql, SqlFlavor::Oracle);
         let params = params.to_vec();
-        let conn = q.conn.clone();
+        let interrupter = self.interrupter()?;
         let in_transaction = q.in_transaction || effect == TxEffect::Begin;
         let secret = self.secret();
         type Outcome = (Vec<ColumnMeta>, Option<Cursor>, Vec<CellRow>, bool, Option<u64>);
-        let outcome = with_deadline(conn, options.timeout_secs, move |conn| -> DbResult<Outcome> {
+        let outcome = with_deadline(interrupter, options.timeout_secs, move |conn| -> DbResult<Outcome> {
             let err = |e: oracle::Error| map_error(&e, secret.as_deref());
             let mut statement = prepare(conn, &sql, &params).map_err(err)?;
             if statement.is_query() {
@@ -350,11 +384,7 @@ impl Session for OraSession {
         if !self.running.load(Ordering::SeqCst) {
             return Ok(false);
         }
-        let conn = self.current.lock().map(|c| c.clone()).map_err(|_| DbError::internal("connection lock poisoned"))?;
-        tokio::task::spawn_blocking(move || conn.break_execution())
-            .await
-            .map_err(|e| DbError::internal(format!("cancel task failed: {e}")))?
-            .map_err(|e| map_error(&e, None))?;
+        self.interrupter()?.interrupt().await;
         Ok(true)
     }
 
@@ -434,12 +464,12 @@ impl Session for OraSession {
     }
 
     async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
-        let q = self.query.lock().await;
-        let conn = q.conn.clone();
+        let _q = self.query.lock().await;
+        let interrupter = self.interrupter()?;
         let sql = trim_terminator(sql).to_owned();
         let params = params.to_vec();
         let secret = self.secret();
-        with_deadline(conn, timeout_secs, move |conn| crate::explain::explain(conn, &sql, &params, analyze, secret.as_deref())).await
+        with_deadline(interrupter, timeout_secs, move |conn| crate::explain::explain(conn, &sql, &params, analyze, secret.as_deref())).await
     }
 
     fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {

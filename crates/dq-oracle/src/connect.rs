@@ -119,7 +119,20 @@ pub async fn open(params: &ConnectParams) -> DbResult<Connection> {
 pub struct Opened {
     pub conn: Connection,
     pub info: ServerInfo,
+    /// Session id and serial number, to cancel this session's statement from another session.
     pub sid: i64,
+    pub serial: i64,
+}
+
+/// Session id and serial number of `conn` (blocking).
+pub fn session_id(conn: &Connection) -> DbResult<(i64, i64)> {
+    let row = first_row(
+        conn,
+        "SELECT SYS_CONTEXT('USERENV', 'SID'), DBMS_DEBUG_JDWP.CURRENT_SESSION_SERIAL FROM DUAL",
+        &[],
+    )?
+    .ok_or_else(|| DbError::internal("the server returned no session id"))?;
+    Ok((row.number(0).unwrap_or(0), row.number(1).unwrap_or(0)))
 }
 
 /// Opens the query connection and reads what the UI shows about the server.
@@ -149,7 +162,8 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
             database: row.string(0),
             read_only: config.read_only || row.text(3).is_some_and(|r| r.contains("STANDBY")),
         };
-        Ok(Opened { conn, info, sid: row.number(2).unwrap_or(0) })
+        let (sid, serial) = session_id(&conn)?;
+        Ok(Opened { conn, info, sid, serial })
     })
     .await
     .map_err(|e| DbError::internal(format!("connect task failed: {e}")))?

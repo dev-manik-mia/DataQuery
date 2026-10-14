@@ -184,15 +184,16 @@ async fn results_are_bounded_resumable_and_cancellable() {
 
     let runner = s.clone();
     let handle = tokio::spawn(async move { runner.execute("BEGIN DBMS_SESSION.SLEEP(30); END;", &[], OPTS).await });
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    let cancel_started = Instant::now();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let cancelled_at = Instant::now();
     assert!(s.cancel().await.unwrap());
-    eprintln!("cancel took {:?}", cancel_started.elapsed());
     let err = handle.await.unwrap().unwrap_err();
-    eprintln!("statement ended {:?} after cancel", cancel_started.elapsed());
+    assert!(cancelled_at.elapsed() < Duration::from_secs(5), "{:?}", cancelled_at.elapsed());
     assert_eq!(err.kind, ErrorKind::Cancelled, "{err:?}");
+    let started = Instant::now();
     let err = s.execute("BEGIN DBMS_SESSION.SLEEP(30); END;", &[], ExecOptions { row_limit: 10, timeout_secs: 1 }).await.unwrap_err();
-    assert!(matches!(err.kind, ErrorKind::Timeout | ErrorKind::Cancelled), "{err:?}");
+    assert_eq!(err.kind, ErrorKind::Timeout, "{err:?}");
+    assert!(started.elapsed() < Duration::from_secs(6), "{:?}", started.elapsed());
     assert!(s.execute("SELECT 1 FROM dual", &[], OPTS).await.is_ok(), "the session keeps working");
 }
 
@@ -484,7 +485,7 @@ async fn schema_changes_and_diff() {
         SchemaChange::CreateIndex {
             table: table("IT_DIFF_INVOICES"),
             name: "IT_DIFF_INVOICES_QTY".into(),
-            columns: vec![dq_core::sql::ddl::IndexColumn { name: "QTY".into(), descending: false }],
+            columns: vec![ddl::IndexColumn { name: "QTY".into(), descending: false }],
             unique: false,
         },
         SchemaChange::RenameTable { table: table("IT_DIFF_INVOICES"), new_name: "IT_DIFF_COPY".into() },
