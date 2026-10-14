@@ -32,12 +32,11 @@ TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/dataquery.key)" npm run app:release
 
 ### CI and releases (GitHub Actions)
 
-`.github/workflows/build.yml` runs `npm run check` and builds the app for macOS (Apple silicon and Intel), Linux
-(`.deb`, `.rpm`, AppImage) and Windows (`.msi`, `.exe`) on every push and pull request; the installers are kept with
-the run for 14 days.
-
-A push to `main` whose commit message contains **release** also publishes the GitHub release `v<version>` with the
-installers of every platform. The release is published only when all platforms built. Before releasing, bump the
+`.github/workflows/build.yml` runs only when a push to `main` has **release** in its commit message (any case):
+it runs `npm run check`, builds the app for macOS (Apple silicon and Intel), Linux (`.deb`, `.rpm`, AppImage) and
+Windows (`.msi`, `.exe`), and publishes the GitHub release `v<version>` with every platform's installers — only when
+all platforms built. Other pushes start no jobs. **Actions → Build → Run workflow** builds every platform without
+publishing (installers kept with the run for 14 days). Before releasing, bump the
 same version in `package.json`, `src-tauri/tauri.conf.json` and `Cargo.toml`; the workflow refuses mismatched
 versions and versions that were already released.
 

@@ -1,7 +1,8 @@
-# Checks and builds DataQuery for macOS, Linux and Windows on every push and
-# pull request. A push to main whose commit message contains "release" also
-# publishes a GitHub release v<version> with the installers of all platforms
-# (and the signed updater files when TAURI_SIGNING_PRIVATE_KEY is set).
+# Runs only when a push to main has "release" in its commit message (any case):
+# checks, builds DataQuery for macOS, Linux and Windows, and publishes the
+# GitHub release v<version> with the installers of all platforms (and the signed
+# updater files when TAURI_SIGNING_PRIVATE_KEY is set). Other pushes start no jobs.
+# "Run workflow" (manual) checks and builds every platform without publishing.
 #
 # Before a release: bump the version in package.json, src-tauri/tauri.conf.json
 # and Cargo.toml (they must match, and the tag must not exist yet).
@@ -10,12 +11,12 @@ name: Build
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
+# A release is never cancelled half-way by a later push.
 concurrency:
   group: build-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -29,6 +30,7 @@ env:
 jobs:
   check:
     name: Check (types, lint, tests, fmt, clippy)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'release')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
@@ -54,6 +56,7 @@ jobs:
 
   release-plan:
     name: Plan release
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'release')
     runs-on: ubuntu-22.04
     outputs:
       release: ${{ steps.plan.outputs.release }}
@@ -162,34 +165,49 @@ jobs:
         with:
           shared-key: build-${{ matrix.target }}
       - run: npm ci
-      # Signed updater files (latest.json) need the minisign key from `tauri signer generate`;
-      # without the secret the installers are built without them.
-      - name: Choose the build configuration
+      # Signing is optional. A missing secret arrives as an empty string, and an empty
+      # APPLE_CERTIFICATE or TAURI_SIGNING_PRIVATE_KEY still makes Tauri try to sign
+      # (and fail), so each variable is exported only when its secret is set.
+      - name: Choose the build configuration and signing
         id: config
         shell: bash
         env:
-          HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
-        run: |
-          if [ "$HAS_KEY" = true ]; then
-            echo "args=--target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json" >> "$GITHUB_OUTPUT"
-          else
-            echo "args=--target ${{ matrix.target }}" >> "$GITHUB_OUTPUT"
-            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: no updater files, so installed apps will not see this build as an update."
-          fi
-      - name: Build
-        id: tauri
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Optional macOS signing and notarization; unsigned when these are empty.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Passes a variable on to the next steps only when it has a value (multi-line safe).
+          export_if_set() {
+            local name=$1 value=${!1}
+            [ -n "$value" ] || return 1
+            { echo "$name<<DQ_EOF"; echo "$value"; echo "DQ_EOF"; } >> "$GITHUB_ENV"
+          }
+          if export_if_set TAURI_SIGNING_PRIVATE_KEY; then
+            export_if_set TAURI_SIGNING_PRIVATE_KEY_PASSWORD || true
+            echo "args=--target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--target ${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: no updater files, so installed apps will not see this build as an update."
+          fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            if export_if_set APPLE_CERTIFICATE; then
+              for name in APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+                export_if_set "$name" || true
+              done
+            else
+              echo "::notice::APPLE_CERTIFICATE is not set: the macOS app is not code-signed or notarized."
+            fi
+          fi
+      - name: Build
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: ${{ steps.config.outputs.args }}
           releaseId: ${{ env.RELEASE_ID }}
