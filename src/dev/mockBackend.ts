@@ -30,7 +30,8 @@ const ENGINES: EngineInfo[] = [
   engine('duckdb', 'DuckDB', 'Dk', 85, 'analytical', 'SQL', null, 'local file · SQL', 'P2', true),
   engine('snowflake', 'Snowflake', 'Sf', 210, 'analytical', 'SQL', 443, 'HTTPS · SQL', 'P2', true),
   engine('redis', 'Redis', 'Rd', 25, 'key_value', 'Commands', 6379, '6379 · commands · v6–7', 'P1'),
-  engine('mongodb', 'MongoDB', 'Mg', 145, 'document', 'MQL', 27017, '27017 · MQL · v5–8', 'P2'),
+  engine('mongodb', 'MongoDB', 'Mg', 145, 'document', 'MQL', 27017, '27017 · MQL · v5–8', 'P2', true),
+  engine('dynamodb', 'DynamoDB', 'Dy', 330, 'document', 'PartiQL', 443, 'AWS · PartiQL', 'P2', true),
   engine('cassandra', 'Cassandra', 'Cs', 300, 'wide_column', 'CQL', 9042, '9042 · CQL · v4–5', 'P2'),
   engine('neo4j', 'Neo4j', 'N4', 190, 'search_graph', 'Cypher', 7687, '7687 · Cypher', 'P2'),
 ];
@@ -44,7 +45,41 @@ const CONNECTIONS = [
   conn('c2', 'kestrel-staging', 'Staging', 'db.stg.kestrel.internal', 'app', 'f1', false, now - 86_400_000),
   conn('c3', 'kestrel-prod', 'Production', 'db.kestrel.internal', 'app', 'f1', true, now - 3 * 86_400_000),
   conn('c4', 'local-postgres', 'Local', 'localhost', 'postgres', null, false, null),
+  { ...conn('c5', 'events-mongo', 'Development', 'events.dev.kestrel.internal', 'analytics', 'f1', false, now - 2 * 86_400_000), config: { ...conn('c5', '', 'Development', 'events.dev.kestrel.internal', 'analytics', null, false, null).config, engine: 'mongodb', port: 27017 } } as SavedConnection,
 ];
+
+const MONGO_FEATURES = {
+  language: 'MQL',
+  filter_example: '{ status: "paid", total: { $gte: 100 } }',
+  projection_example: '{ email: 1, total: 1 }',
+  sort: true,
+  aggregation: true,
+  validation: true,
+  text_format: 'shell',
+  new_document: '{\n  \n}',
+  filtered_count: true,
+};
+
+const field = (key: string, type_label: string, value: Cell, children: unknown[] = []) => ({ key, type_label, value, children, more: 0 });
+const mongoDoc = (i: number) => {
+  const id = `66f1c0a2e4b0${String(9 + i).padStart(12, '0')}`;
+  return {
+    key: `ObjectId('${id}')`,
+    label: `_id: ObjectId('${id}')`,
+    size_bytes: 412 + i,
+    text: `{\n  _id: ObjectId('${id}'),\n  status: 'paid',\n  total: Decimal128('${120 + i}.50'),\n  orderNo: Long('9007199254740993'),\n  createdAt: ISODate('2026-10-14T09:12:00.000Z'),\n  coupon: null\n}`,
+    truncated: false,
+    fields: [
+      field('_id', 'ObjectId', text(id)),
+      field('status', 'String', text('paid')),
+      field('total', 'Decimal128', num(`${120 + i}.50`)),
+      field('orderNo', 'Int64', num('9007199254740993')),
+      field('createdAt', 'Date', { kind: 'temporal', value: '2026-10-14T09:12:00.000Z', zoned: true }),
+      field('coupon', 'Null', NULL),
+      field('items', 'Array', { kind: 'json', value: '[{"sku":"A-1","qty":2}]' }, [field('0', 'Object', { kind: 'json', value: '{"sku":"A-1","qty":2}' }, [field('sku', 'String', text('A-1')), field('qty', 'Int32', num('2'))])]),
+    ],
+  };
+};
 
 const obj = (kind: string, database: string, schema: string | null, name: string, extra: Partial<Node> = {}): Node =>
   ({ kind, database, schema, name, expandable: ['database', 'schema', 'table', 'group'].includes(kind), row_estimate: null, comment: null, current: false, ...extra }) as Node;
@@ -132,12 +167,20 @@ const handlers: Record<string, (a: Args) => unknown> = {
   list_connections: () => ({ connections: CONNECTIONS, folders: [{ id: 'f1', name: 'Kestrel' }] }),
   connect: (a) => {
     const c = CONNECTIONS.find((x) => x.id === a.connectionId)!;
+    if (c.config.engine === 'mongodb') {
+      const mongoCaps = { ...caps, ddl: false, schemas: false, materialized_views: false, schema_diff: false };
+      return { session_id: `s-${c.id}`, connection: c, capabilities: mongoCaps, flavor: 'mongodb', documents: MONGO_FEATURES, tunneled: false, insecure: null, server: { engine: 'mongodb', version: 'MongoDB 7.0.14', latency_ms: 18, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'analyst', database: 'analytics', read_only: false } };
+    }
     return { session_id: `s-${c.id}`, connection: c, capabilities: caps, flavor: 'postgres', tunneled: false, insecure: null, server: { engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: c.config.database, read_only: false } };
   },
   reconnect: (a) => handlers.connect!({ connectionId: String(a.sessionId).replace(/^s-/, '') }),
   disconnect: () => null,
   list_children: (a) => {
     const p = a.parent as Node | null;
+    if (String(a.sessionId) === 's-c5') {
+      if (!p) return ['analytics', 'events', 'admin', 'config', 'local'].map((d, i) => obj('database', d, null, d, { current: i === 0 }));
+      return [obj('table', p.name, null, 'orders', { row_estimate: 3118, expandable: false }), obj('table', p.name, null, 'customers', { row_estimate: 1204, expandable: false }), obj('view', p.name, null, 'paid_orders', { expandable: false })];
+    }
     if (!p) return [obj('database', 'app_dev', null, 'app_dev', { current: true }), obj('database', 'analytics', null, 'analytics'), obj('database', 'postgres', null, 'postgres')];
     if (p.kind === 'database') return ['public', 'billing', 'audit'].map((s, i) => obj('schema', p.name, s, s, { row_estimate: [8, 3, 2][i]! }));
     if (p.kind === 'table') return [obj('index', p.database, p.schema, `${p.name}_pkey`, { parent: p.name }), obj('trigger', p.database, p.schema, `${p.name}_touch`, { parent: p.name })];
@@ -253,6 +296,26 @@ const handlers: Record<string, (a: Args) => unknown> = {
   }),
   list_scripts: () => [{ id: 'sc1', name: 'paid-orders', sql: "SELECT * FROM public.orders WHERE status = 'paid';", connection_id: 'c1', created_at: now, updated_at: now, folder: 'Reports', tags: ['billing'], pinned: true }],
   test_connection: () => ({ engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: 'app_dev', read_only: false }),
+  documents_find: (a) => {
+    const r = a.request as { cursor: string | null; limit: number };
+    const skip = Number(r.cursor ?? 0);
+    return { documents: Array.from({ length: Math.min(r.limit, 3118 - skip) }, (_, i) => mongoDoc(skip + i)), next: skip + r.limit < 3118 ? String(skip + r.limit) : null, duration_ms: 18 };
+  },
+  documents_count: () => ({ count: 3118, exact: true }),
+  documents_aggregate: () => ({ documents: [mongoDoc(0), mongoDoc(1)], next: null, duration_ms: 9 }),
+  documents_indexes: () => [
+    { name: '_id_', keys: '{ _id: 1 }', unique: true, props: [], size_bytes: 135168 },
+    { name: 'status_created', keys: '{ status: 1, createdAt: -1 }', unique: false, props: [['partialFilterExpression', '{ status: { $exists: true } }']], size_bytes: 98304 },
+  ],
+  documents_validation: () => "{\n  validator: { $jsonSchema: { bsonType: 'object', required: ['status'] } },\n  validationLevel: 'strict',\n  validationAction: 'error'\n}",
+  documents_statement: () => 'db.orders.find({ status: "paid" }).sort({ createdAt: -1 })',
+  documents_write: (a) => {
+    const change = a.change as { op: string };
+    if (change.op === 'delete' && !a.confirmation) {
+      return { status: 'needs_confirmation', request: { title: 'Run a destructive statement?', reasons: ['Deletes the document from orders.'], require_typed_name: null, destructive: true, connection_name: 'events-mongo', environment: 'Development' } };
+    }
+    return { status: 'done', value: "ObjectId('66f1c0a2e4b0000000000009')" };
+  },
   parse_url: () => {
     throw { kind: 'invalid_input', code: null, message: 'This is not a valid connection URL.', detail: null, hint: null, action: null, position: null };
   },

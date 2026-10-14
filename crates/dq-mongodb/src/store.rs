@@ -1,6 +1,7 @@
 //! The Documents view: find, count, aggregate, indexes, validation and
 //! single-document edits in shell syntax.
 
+use std::fmt::Write;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -66,7 +67,11 @@ pub fn convert(value: Option<&str>, label: &str) -> DbResult<Bson> {
     let t = text.trim();
     let bad = |what: &str| DbError::invalid(format!("`{text}` is not {what}."));
     Ok(match label {
-        "Int32" => Bson::Int32(t.parse().map_err(|_| bad("a 32-bit whole number"))?),
+        // A value too large for Int32 is widened rather than refused.
+        "Int32" => {
+            let v: i64 = t.parse().map_err(|_| bad("a whole number"))?;
+            i32::try_from(v).map_or(Bson::Int64(v), Bson::Int32)
+        }
         "Int64" => Bson::Int64(t.parse().map_err(|_| bad("a whole number"))?),
         "Double" => Bson::Double(t.parse().map_err(|_| bad("a number"))?),
         "Decimal128" => Bson::Decimal128(t.parse::<Decimal128>().map_err(|_| bad("a decimal number"))?),
@@ -78,7 +83,6 @@ pub fn convert(value: Option<&str>, label: &str) -> DbResult<Bson> {
         "Date" => Bson::DateTime(literal::parse_date(t).ok_or_else(|| bad("an ISO 8601 date"))?),
         "ObjectId" => Bson::ObjectId(ObjectId::parse_str(t).map_err(|_| bad("an ObjectId (24 hex digits)"))?),
         "Object" | "Array" => literal::parse(t)?,
-        "String" | "Symbol" => Bson::String(text.to_owned()),
         "Null" | "" => infer(text),
         _ => Bson::String(text.to_owned()),
     })
@@ -109,7 +113,7 @@ fn infer(text: &str) -> Bson {
 }
 
 impl MongoSession {
-    fn find_command(&self, request: &FindRequest, skip: u64, limit: u32) -> DbResult<Document> {
+    fn find_command(request: &FindRequest, skip: u64, limit: u32) -> DbResult<Document> {
         let o = &request.object;
         let mut c = doc! { "find": &o.name, "skip": skip as i64, "limit": i64::from(limit) + 1, "maxTimeMS": READ_MS };
         let filter = parse_document(&request.filter, "filter")?;
@@ -162,7 +166,7 @@ impl DocumentStore for MongoSession {
             None => 0,
             Some(c) => c.parse::<u64>().map_err(|_| DbError::invalid("Invalid page cursor."))?,
         };
-        let cmd = self.find_command(request, skip, limit)?;
+        let cmd = Self::find_command(request, skip, limit)?;
         let docs = documents(&self.client, &request.object.database, cmd, limit as usize + 1).await?;
         Ok(Self::page(docs, limit, || (skip + u64::from(limit)).to_string(), started))
     }
@@ -190,7 +194,8 @@ impl DocumentStore for MongoSession {
         let started = Instant::now();
         let limit = limit.clamp(1, dq_core::document::MAX_PAGE);
         let stages = pipeline(pipeline_text)?;
-        let writes = stages.iter().any(|s| s.as_document().is_some_and(|d| d.contains_key("$out") || d.contains_key("$merge")));
+        let writes =
+            stages.iter().any(|s| s.as_document().is_some_and(|d| d.contains_key("$out") || d.contains_key("$merge")));
         if writes {
             self.refuse_if_read_only()?;
             return Err(DbError::invalid("$out and $merge write data; run them from the query editor."));
@@ -220,10 +225,13 @@ impl DocumentStore for MongoSession {
                     .filter(|(k, _)| !matches!(k.as_str(), "name" | "key" | "v" | "ns" | "unique"))
                     .map(|(k, v)| {
                         let label = if k == "expireAfterSeconds" { "ttl" } else { k.as_str() };
-                        (label.to_owned(), match v {
-                            Bson::String(s) => s.clone(),
-                            other => compact(other),
-                        })
+                        (
+                            label.to_owned(),
+                            match v {
+                                Bson::String(s) => s.clone(),
+                                other => compact(other),
+                            },
+                        )
                     })
                     .collect();
                 DocIndex {
@@ -272,7 +280,10 @@ impl DocumentStore for MongoSession {
         }
         doc.remove("_id");
         let reply = self
-            .write(object, doc! { "update": &object.name, "updates": [{ "q": { "_id": id }, "u": doc, "multi": false }] })
+            .write(
+                object,
+                doc! { "update": &object.name, "updates": [{ "q": { "_id": id }, "u": doc, "multi": false }] },
+            )
             .await?;
         if int_field(&reply, "n") != Some(1) {
             return Err(changed());
@@ -283,7 +294,9 @@ impl DocumentStore for MongoSession {
     async fn delete(&self, object: &ObjectRef, key: &str) -> DbResult<()> {
         self.writable(object)?;
         let id = parse_key(key)?;
-        let reply = self.write(object, doc! { "delete": &object.name, "deletes": [{ "q": { "_id": id }, "limit": 1 }] }).await?;
+        let reply = self
+            .write(object, doc! { "delete": &object.name, "deletes": [{ "q": { "_id": id }, "limit": 1 }] })
+            .await?;
         if int_field(&reply, "n") != Some(1) {
             return Err(changed());
         }
@@ -300,18 +313,25 @@ impl DocumentStore for MongoSession {
         let sort = part(&request.sort, "sort")?;
         let mut out = format!("db.getCollection({}).find(", literal::quote(&request.object.name));
         match (&filter, &projection) {
-            (_, Some(p)) => out.push_str(&format!("{}, {p}", filter.as_deref().unwrap_or("{}"))),
+            (_, Some(p)) => {
+                let _ = write!(out, "{}, {p}", filter.as_deref().unwrap_or("{}"));
+            }
             (Some(f), None) => out.push_str(f),
             (None, None) => {}
         }
         out.push(')');
         if let Some(s) = sort {
-            out.push_str(&format!(".sort({s})"));
+            let _ = write!(out, ".sort({s})");
         }
         Ok(out)
     }
 
-    async fn insert_rows(&self, object: &ObjectRef, columns: &[ColumnInfo], rows: Vec<Vec<Option<String>>>) -> DbResult<u64> {
+    async fn insert_rows(
+        &self,
+        object: &ObjectRef,
+        columns: &[ColumnInfo],
+        rows: Vec<Vec<Option<String>>>,
+    ) -> DbResult<u64> {
         self.writable(object)?;
         if rows.is_empty() {
             return Ok(0);
@@ -338,7 +358,10 @@ mod tests {
     #[test]
     fn imports_convert_by_type() {
         assert_eq!(convert(Some("9007199254740993"), "Int64").unwrap(), Bson::Int64(9_007_199_254_740_993));
-        assert_eq!(convert(Some("12.50"), "Decimal128").unwrap().to_string(), Bson::Decimal128("12.50".parse().unwrap()).to_string());
+        assert_eq!(
+            convert(Some("12.50"), "Decimal128").unwrap().to_string(),
+            Bson::Decimal128("12.50".parse().unwrap()).to_string()
+        );
         assert_eq!(convert(None, "String").unwrap(), Bson::Null);
         assert!(convert(Some("x"), "Int32").is_err());
         assert_eq!(convert(Some("5"), "").unwrap(), Bson::Int32(5));

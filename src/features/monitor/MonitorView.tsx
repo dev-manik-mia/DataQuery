@@ -69,6 +69,7 @@ const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   sqlserver: 'Sessions from sys.dm_exec_sessions',
   oracle: 'Sessions from V$SESSION',
   clickhouse: 'Running queries from system.processes',
+  mongodb: 'Operations from currentOp',
 };
 
 export function MonitorView({ active }: { active: boolean }) {

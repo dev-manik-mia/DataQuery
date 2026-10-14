@@ -53,7 +53,7 @@ impl Rows {
 
 /// What a command produced.
 pub enum Output {
-    Rows(Rows),
+    Rows(Box<Rows>),
     Docs(Vec<Document>),
     Done { affected: Option<u64>, notices: Vec<String> },
 }
@@ -104,7 +104,16 @@ pub async fn documents(client: &Client, database: &str, command: Document, limit
 
 /// The reply without driver bookkeeping fields.
 fn reply_row(mut reply: Document) -> Document {
-    for key in ["ok", "$clusterTime", "operationTime", "$gleStats", "lastCommittedOpTime", "electionId", "$configTime", "$topologyTime"] {
+    for key in [
+        "ok",
+        "$clusterTime",
+        "operationTime",
+        "$gleStats",
+        "lastCommittedOpTime",
+        "electionId",
+        "$configTime",
+        "$topologyTime",
+    ] {
         reply.remove(key);
     }
     reply
@@ -121,7 +130,7 @@ fn first_batch(reply: &Document) -> Vec<Document> {
 /// Runs a plan and reads its reply.
 pub async fn run_plan(client: &Client, plan: Plan, txn: Option<&mut ClientSession>) -> DbResult<Output> {
     if plan.shape == Shape::Cursor {
-        return cursor(client, &plan.database, plan.command, txn).await.map(Output::Rows);
+        return cursor(client, &plan.database, plan.command, txn).await.map(|r| Output::Rows(Box::new(r)));
     }
     let reply = command(client, &plan.database, plan.command, txn).await?;
     let n = || int_field(&reply, "n").unwrap_or(0).max(0) as u64;
@@ -136,7 +145,10 @@ pub async fn run_plan(client: &Client, plan: Plan, txn: Option<&mut ClientSessio
             Output::Docs(vec![doc! { "count": n }])
         }
         Shape::Distinct => Output::Docs(
-            reply.get_array("values").map(|v| v.iter().map(|v| doc! { "value": v.clone() }).collect()).unwrap_or_default(),
+            reply
+                .get_array("values")
+                .map(|v| v.iter().map(|v| doc! { "value": v.clone() }).collect())
+                .unwrap_or_default(),
         ),
         Shape::Databases => Output::Docs(
             reply
@@ -144,9 +156,7 @@ pub async fn run_plan(client: &Client, plan: Plan, txn: Option<&mut ClientSessio
                 .map(|d| d.iter().filter_map(|v| v.as_document().cloned()).collect())
                 .unwrap_or_default(),
         ),
-        Shape::FindAndModify => {
-            Output::Docs(reply.get_document("value").map(|d| vec![d.clone()]).unwrap_or_default())
-        }
+        Shape::FindAndModify => Output::Docs(reply.get_document("value").map(|d| vec![d.clone()]).unwrap_or_default()),
         Shape::Insert { ids } => {
             let shown: Vec<String> = ids.iter().take(20).map(literal::compact).collect();
             let more = if ids.len() > 20 { format!(" and {} more", ids.len() - 20) } else { String::new() };
@@ -157,8 +167,11 @@ pub async fn run_plan(client: &Client, plan: Plan, txn: Option<&mut ClientSessio
                 .get_array("upserted")
                 .map(|u| u.iter().filter_map(|v| v.as_document()?.get("_id")).map(literal::compact).collect())
                 .unwrap_or_default();
-            let mut notices =
-                vec![format!("Matched {} · modified {}", n() - upserted.len() as u64, int_field(&reply, "nModified").unwrap_or(0))];
+            let mut notices = vec![format!(
+                "Matched {} · modified {}",
+                n() - upserted.len() as u64,
+                int_field(&reply, "nModified").unwrap_or(0)
+            )];
             if !upserted.is_empty() {
                 notices.push(format!("Upserted ids: {}", upserted.join(", ")));
             }
@@ -241,7 +254,11 @@ impl MongoSession {
             engine: config.engine,
             version: format!("MongoDB {}", build.get_str("version").unwrap_or("")),
             latency_ms: started.elapsed().as_millis() as u64,
-            tls: tls.then(|| TlsInfo { version: None, verified: config.ssl_mode.verifies_chain(), mode: config.ssl_mode }),
+            tls: tls.then(|| TlsInfo {
+                version: None,
+                verified: config.ssl_mode.verifies_chain(),
+                mode: config.ssl_mode,
+            }),
             user,
             database: database.clone(),
             read_only: config.read_only,
@@ -325,7 +342,7 @@ impl MongoSession {
         };
         let (command_tag, plan) = match statement {
             Statement::Use(database) => {
-                state.database = database.clone();
+                state.database.clone_from(&database);
                 return Ok(done("USE", None, vec![format!("Switched to database {database}.")]));
             }
             Statement::Begin => {
@@ -359,8 +376,9 @@ impl MongoSession {
             Output::Docs(docs) => (docs, None),
             Output::Rows(mut rows) => {
                 let mut pending = None;
-                let (docs, has_more) = read_page(&mut rows, &mut pending, state.txn.as_mut(), options.row_limit).await?;
-                (docs, has_more.then_some((rows, pending)))
+                let (docs, has_more) =
+                    read_page(&mut rows, &mut pending, state.txn.as_mut(), options.row_limit).await?;
+                (docs, has_more.then_some((*rows, pending)))
             }
         };
         let mut docs = docs;
@@ -408,7 +426,12 @@ impl MongoSession {
     }
 
     /// Runs a read-only statement and hands its documents over in batches.
-    async fn read_batches(&self, database: &str, sql: &str, mut on_docs: impl FnMut(Vec<Document>) -> DbResult<()>) -> DbResult<()> {
+    async fn read_batches(
+        &self,
+        database: &str,
+        sql: &str,
+        mut on_docs: impl FnMut(Vec<Document>) -> DbResult<()>,
+    ) -> DbResult<()> {
         let plan = self.detached_plan(database, sql)?;
         match run_plan(&self.client, plan, None).await? {
             Output::Docs(docs) => on_docs(docs),
@@ -441,11 +464,7 @@ impl MongoSession {
 }
 
 /// Runs `work`, stopping it on cancel or after `timeout_secs` (0 = no limit).
-async fn guarded<T>(
-    work: impl Future<Output = DbResult<T>>,
-    timeout_secs: u32,
-    cancelled: &Notify,
-) -> DbResult<T> {
+async fn guarded<T>(work: impl Future<Output = DbResult<T>>, timeout_secs: u32, cancelled: &Notify) -> DbResult<T> {
     let limit = async {
         if timeout_secs == 0 {
             std::future::pending::<()>().await;
@@ -484,7 +503,9 @@ impl Session for MongoSession {
 
     async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
         if !params.is_empty() {
-            return Err(DbError::invalid("MongoDB statements take no parameters; write the values into the statement."));
+            return Err(DbError::invalid(
+                "MongoDB statements take no parameters; write the values into the statement.",
+            ));
         }
         let options = options.clamped();
         if self.read_only && split_statements(sql, SqlFlavor::Mongodb).iter().any(|s| s.writes) {
@@ -495,7 +516,12 @@ impl Session for MongoSession {
         state.open = None;
         let comment = format!("dataquery-{}", uuid::Uuid::new_v4());
         self.set_running(Some(comment.clone()));
-        let result = guarded(self.run_statement(&mut state, statement, options, &comment), options.timeout_secs, &self.cancelled).await;
+        let result = guarded(
+            self.run_statement(&mut state, statement, options, &comment),
+            options.timeout_secs,
+            &self.cancelled,
+        )
+        .await;
         self.set_running(None);
         if let Err(e) = &result
             && matches!(e.kind, ErrorKind::Timeout | ErrorKind::Cancelled)
@@ -512,7 +538,8 @@ impl Session for MongoSession {
         let mut cursor =
             open.take().ok_or_else(|| DbError::invalid("No more rows: the result was closed by a newer query."))?;
         let (docs, has_more) =
-            read_page(&mut cursor.rows, &mut cursor.pending, txn.as_mut(), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT)).await?;
+            read_page(&mut cursor.rows, &mut cursor.pending, txn.as_mut(), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT))
+                .await?;
         let rows = docs.iter().map(|d| cursor.columns.row(&fields(d, CellLimits::GRID))).collect();
         if has_more {
             *open = Some(cursor);
@@ -616,7 +643,13 @@ impl Session for MongoSession {
         }
     }
 
-    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+    async fn explain(
+        &self,
+        sql: &str,
+        params: Params<'_>,
+        analyze: bool,
+        timeout_secs: u32,
+    ) -> DbResult<ExplainResult> {
         if !params.is_empty() {
             return Err(DbError::invalid("MongoDB statements take no parameters."));
         }
@@ -649,7 +682,10 @@ impl Session for MongoSession {
 fn call_plan(call: &Call, database: &str) -> DbResult<Plan> {
     let plan = commands::plan(call, database, "dataquery-explain", None)?;
     if !plan.explainable() {
-        return Err(DbError::unsupported(format!("{}() has no query plan. Explain find, aggregate, count or distinct.", call.method)));
+        return Err(DbError::unsupported(format!(
+            "{}() has no query plan. Explain find, aggregate, count or distinct.",
+            call.method
+        )));
     }
     Ok(plan)
 }

@@ -79,6 +79,32 @@ export function databaseLabel(engine: Engine): string {
   return 'Database';
 }
 
+/** Label and hint of the host field. */
+export function hostField(engine: Engine): { label: string; hint?: string } {
+  switch (engine) {
+    case 'snowflake':
+      return { label: 'Account', hint: 'Account identifier (myorg-myaccount or xy12345.eu-west-1) or the full host name.' };
+    case 'mongodb':
+      return { label: 'Host', hint: 'One host, or host1:27017,host2:27017 for a replica set. With DNS seed list, the cluster host name.' };
+    case 'dynamodb':
+      return { label: 'Endpoint', hint: 'Leave empty for AWS in the region below, or e.g. localhost for DynamoDB Local.' };
+    default:
+      return { label: 'Host' };
+  }
+}
+
+/** What the username and password fields hold. DynamoDB signs requests with an access key pair. */
+export function credentialLabels(engine: Engine): { username: string; password: string; usernameRequired: boolean } {
+  switch (engine) {
+    case 'dynamodb':
+      return { username: 'Access key ID', password: 'Secret access key', usernameRequired: true };
+    case 'mongodb':
+      return { username: 'Username', password: 'Password', usernameRequired: false };
+    default:
+      return { username: 'Username', password: 'Password', usernameRequired: true };
+  }
+}
+
 /** Database and user a new connection form starts with. */
 export function connectionDefaults(engine: Engine): { database: string; username: string } {
   switch (engine) {

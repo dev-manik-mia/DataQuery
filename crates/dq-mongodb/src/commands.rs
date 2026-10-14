@@ -16,7 +16,10 @@ pub enum Shape {
     /// The reply itself as one row (without `ok` and cluster fields).
     Reply,
     /// One field of the reply as a one-row result named `name`.
-    Field { field: &'static str, name: &'static str },
+    Field {
+        field: &'static str,
+        name: &'static str,
+    },
     /// The `cursor.firstBatch` of a single-batch command.
     FirstBatch,
     /// `countDocuments`: the first batch's `n`, or 0.
@@ -27,7 +30,9 @@ pub enum Shape {
     Databases,
     /// `findAndModify`: the returned document, if any.
     FindAndModify,
-    Insert { ids: Vec<Bson> },
+    Insert {
+        ids: Vec<Bson>,
+    },
     Update,
     Delete,
     /// A command whose success is the whole result.
@@ -45,10 +50,9 @@ pub struct Plan {
 impl Plan {
     /// Read commands that `explain` accepts.
     pub fn explainable(&self) -> bool {
-        self.command
-            .keys()
-            .next()
-            .is_some_and(|k| matches!(k.as_str(), "find" | "aggregate" | "count" | "distinct" | "findAndModify" | "update" | "delete"))
+        self.command.keys().next().is_some_and(|k| {
+            matches!(k.as_str(), "find" | "aggregate" | "count" | "distinct" | "findAndModify" | "update" | "delete")
+        })
     }
 }
 
@@ -148,7 +152,15 @@ pub fn plan(call: &Call, database: &str, comment: &str, max_time_ms: Option<u64>
     let first = plan.command.keys().next().cloned().unwrap_or_default();
     let commented = matches!(
         first.as_str(),
-        "find" | "aggregate" | "count" | "distinct" | "insert" | "update" | "delete" | "findAndModify" | "createIndexes"
+        "find"
+            | "aggregate"
+            | "count"
+            | "distinct"
+            | "insert"
+            | "update"
+            | "delete"
+            | "findAndModify"
+            | "createIndexes"
             | "explain"
     );
     if commented && !plan.command.contains_key("comment") {
@@ -215,17 +227,25 @@ fn collection_plan(call: &Call, coll: &str, database: &str) -> DbResult<Plan> {
         "aggregate" => {
             let pipeline = match args.first() {
                 Some(Bson::Array(stages)) => stages.clone(),
-                Some(Bson::Document(_)) => args.iter().take_while(|a| matches!(a, Bson::Document(_))).cloned().collect(),
+                Some(Bson::Document(_)) => {
+                    args.iter().take_while(|a| matches!(a, Bson::Document(_))).cloned().collect()
+                }
                 None => Vec::new(),
                 Some(_) => return Err(err("aggregate() needs a pipeline: an array of stages.")),
             };
             let mut c = doc! { "aggregate": coll, "pipeline": pipeline, "cursor": {} };
-            let options = if matches!(args.first(), Some(Bson::Array(_))) { doc_arg(args, 1, m, "options")? } else { None };
-            copy_options(&mut c, options, &["allowDiskUse", "collation", "hint", "let", "maxTimeMS", "comment", "bypassDocumentValidation"])?;
+            let options =
+                if matches!(args.first(), Some(Bson::Array(_))) { doc_arg(args, 1, m, "options")? } else { None };
+            copy_options(
+                &mut c,
+                options,
+                &["allowDiskUse", "collation", "hint", "let", "maxTimeMS", "comment", "bypassDocumentValidation"],
+            )?;
             at(c, Shape::Cursor)
         }
         "countDocuments" => {
-            let mut pipeline = vec![Bson::Document(doc! { "$match": doc_arg(args, 0, m, "filter")?.unwrap_or_default() })];
+            let mut pipeline =
+                vec![Bson::Document(doc! { "$match": doc_arg(args, 0, m, "filter")?.unwrap_or_default() })];
             let options = doc_arg(args, 1, m, "options")?.unwrap_or_default();
             for key in ["skip", "limit"] {
                 if let Some(v) = options.get(key) {
@@ -260,7 +280,12 @@ fn collection_plan(call: &Call, coll: &str, database: &str) -> DbResult<Plan> {
                     .iter()
                     .map(|i| i.as_document().cloned().ok_or_else(|| err("Every inserted document must be an object.")))
                     .collect::<DbResult<_>>()?,
-                _ => return Err(err(format!("{m}() needs {}.", if m == "insertMany" { "an array of documents" } else { "a document" }))),
+                _ => {
+                    return Err(err(format!(
+                        "{m}() needs {}.",
+                        if m == "insertMany" { "an array of documents" } else { "a document" }
+                    )));
+                }
             };
             if docs.is_empty() {
                 return Err(err("There is nothing to insert."));
@@ -280,7 +305,11 @@ fn collection_plan(call: &Call, coll: &str, database: &str) -> DbResult<Plan> {
                 })
                 .collect();
             let mut c = doc! { "insert": coll, "documents": docs };
-            copy_options(&mut c, doc_arg(args, 1, m, "options")?, &["ordered", "bypassDocumentValidation", "writeConcern"])?;
+            copy_options(
+                &mut c,
+                doc_arg(args, 1, m, "options")?,
+                &["ordered", "bypassDocumentValidation", "writeConcern"],
+            )?;
             at(c, Shape::Insert { ids })
         }
         "updateOne" | "updateMany" | "update" | "replaceOne" => {
@@ -289,10 +318,14 @@ fn collection_plan(call: &Call, coll: &str, database: &str) -> DbResult<Plan> {
                 Some(Bson::Document(d)) => {
                     let operators = is_update_document(d);
                     if m == "replaceOne" && operators {
-                        return Err(err("replaceOne() takes a whole document without update operators; use updateOne() for $set."));
+                        return Err(err(
+                            "replaceOne() takes a whole document without update operators; use updateOne() for $set.",
+                        ));
                     }
                     if m != "replaceOne" && !operators {
-                        return Err(err(format!("{m}() needs update operators such as {{ $set: {{ … }} }}; use replaceOne() to replace a document.")));
+                        return Err(err(format!(
+                            "{m}() needs update operators such as {{ $set: {{ … }} }}; use replaceOne() to replace a document."
+                        )));
                     }
                     Bson::Document(d.clone())
                 }
@@ -351,7 +384,10 @@ fn collection_plan(call: &Call, coll: &str, database: &str) -> DbResult<Plan> {
         }
         "createIndex" => {
             let keys = required_doc(args, 0, m, "index keys")?;
-            at(doc! { "createIndexes": coll, "indexes": [index_spec(keys, doc_arg(args, 1, m, "options")?)] }, Shape::Done)
+            at(
+                doc! { "createIndexes": coll, "indexes": [index_spec(keys, doc_arg(args, 1, m, "options")?)] },
+                Shape::Done,
+            )
         }
         "createIndexes" => {
             let Some(Bson::Array(list)) = args.first() else {
@@ -401,10 +437,7 @@ fn collection_plan(call: &Call, coll: &str, database: &str) -> DbResult<Plan> {
         "hideIndex" | "unhideIndex" => {
             let index = args.first().cloned().ok_or_else(|| err(format!("{m}() needs an index name.")))?;
             let key = if matches!(index, Bson::String(_)) { "name" } else { "keyPattern" };
-            at(
-                doc! { "collMod": coll, "index": { key: index, "hidden": m == "hideIndex" } },
-                Shape::Reply,
-            )
+            at(doc! { "collMod": coll, "index": { key: index, "hidden": m == "hideIndex" } }, Shape::Reply)
         }
         other => return Err(err(format!("`{other}()` is not supported on a collection."))),
     })
@@ -424,7 +457,9 @@ fn database_plan(call: &Call, database: &str) -> DbResult<Plan> {
             let shape = if command.contains_key("cursor") { Shape::FirstBatch } else { Shape::Reply };
             Plan { database: if m == "adminCommand" { "admin".into() } else { database.to_owned() }, command, shape }
         }
-        "getCollectionNames" => at(doc! { "listCollections": 1, "nameOnly": true, "authorizedCollections": true }, Shape::Cursor),
+        "getCollectionNames" => {
+            at(doc! { "listCollections": 1, "nameOnly": true, "authorizedCollections": true }, Shape::Cursor)
+        }
         "getCollectionInfos" | "listCollections" => {
             let mut c = doc! { "listCollections": 1, "authorizedCollections": true };
             if let Some(filter) = doc_arg(args, 0, m, "filter")? {
@@ -464,14 +499,20 @@ fn database_plan(call: &Call, database: &str) -> DbResult<Plan> {
             at(c, Shape::Done)
         }
         "dropDatabase" => at(doc! { "dropDatabase": 1 }, Shape::Done),
-        other => return Err(err(format!("`db.{other}()` is not supported. Name a collection, e.g. db.orders.find()."))),
+        other => {
+            return Err(err(format!("`db.{other}()` is not supported. Name a collection, e.g. db.orders.find().")));
+        }
     })
 }
 
 /// `show dbs` / `show collections`.
 pub fn show(what: &str, database: &str) -> Plan {
     if what == "dbs" {
-        Plan { database: "admin".into(), command: doc! { "listDatabases": 1, "nameOnly": false }, shape: Shape::Databases }
+        Plan {
+            database: "admin".into(),
+            command: doc! { "listDatabases": 1, "nameOnly": false },
+            shape: Shape::Databases,
+        }
     } else {
         Plan {
             database: database.to_owned(),
@@ -498,7 +539,7 @@ mod tests {
         assert_eq!(
             p.command,
             doc! { "find": "orders", "filter": { "status": "paid" }, "sort": { "total": -1 }, "skip": 2_i64, "limit": 5_i64,
-                   "comment": "c1", "maxTimeMS": 5000_i64 }
+            "comment": "c1", "maxTimeMS": 5000_i64 }
         );
         let p = plan_of("db.orders.find({ a: 1 }).count()");
         assert_eq!(p.command.get_str("count").unwrap(), "orders");

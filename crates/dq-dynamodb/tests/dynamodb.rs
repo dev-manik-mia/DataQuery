@@ -150,7 +150,7 @@ async fn connects_and_reports_the_server() {
     let missing = DynamodbAdapter.test(&ConnectParams::new(cfg.clone(), None)).await.unwrap_err();
     assert_eq!(missing.kind, ErrorKind::Auth);
     let creds = r#"{"Version":1,"AccessKeyId":"profilekey","SecretAccessKey":"s","SessionToken":"t"}"#;
-    let cfg = ConnConfig { username: String::new(), ..cfg };
+    // AWS CLI profiles pass `aws configure export-credentials` JSON as the password.
     let info = DynamodbAdapter.test(&ConnectParams::new(cfg, Some(creds.into()))).await.unwrap();
     assert_eq!(info.user, "profilekey");
 }

@@ -152,6 +152,19 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 15. Engines: MongoDB, DynamoDB
+
+- [x] T15.1 Core document layer `dq-core/document.rs`: `DocumentStore` trait (find with cursor paging, count, aggregate, indexes, validation, insert/replace/delete one document, find statement, imports), `Document`/`DocField` trees with the engine's type labels and exact numbers, grid conversion and streaming exports that refuse to drop fields; `Session::documents()`.
+- [x] T15.2 Flavors `mongodb` (mongosh statements split on lines and `;`, method-based read/write/destructive classification incl. `deleteMany({})`, `drop`, `$out`/`$merge`) and `partiql` (`"name"`, `?`); `BEGIN`/`COMMIT`/`ROLLBACK` transaction effects; shell and PartiQL templates for Generate find/insert/update/delete.
+- [x] T15.3 Shared ops route document engines: table exports and Documents-view exports run the engine's find statement; imports validate every row first, then insert documents in batches (new fields get inferred types); SQL-only paths (grid page, edits, schema changes) are refused.
+- [x] T15.4 Config: `mongodb://` and `mongodb+srv://` URLs (several hosts, `replicaSet`, `authSource`, `tls`), optional MongoDB user; DynamoDB region/endpoint/access key rules, AWS CLI profiles via `aws configure export-credentials`.
+- [x] T15.5 MongoDB adapter `dq-mongodb` (official driver, rustls): mongosh-style statements turned into server commands (no JavaScript is run), exact BSON values, `use`, transactions on a driver session, cancel by `killOp` on a tagged operation, timeouts, read-only guard, explorer with document counts, sampled structure, `createCollection`/`createIndex` definitions, explain trees (IXSCAN/COLLSCAN…), `currentOp` monitoring and `killOp`, Documents view, aggregation, indexes, validation rules.
+- [x] T15.6 DynamoDB adapter `dq-dynamodb` (own SigV4 client over reqwest): PartiQL with typed parameters and `NextToken` paging, buffered transactions sent as one `ExecuteTransaction` at `COMMIT`, conditional writes for document edits, `BatchWriteItem` imports, primary key/GSI/LSI listing, `DescribeTable` definitions, throttling retries.
+- [x] T15.7 UI: Documents view (screen 13) with Filter/Project/Sort, Tree/Table/Shell(JSON) layouts, cursor paging, insert/edit in the engine's text form, delete with backend confirmation, Aggregation pipeline builder, Indexes and Validation tabs; MongoDB editor mode (JavaScript highlighting, `db.` completion); connection form fields (hosts, replica set, auth database, SRV; endpoint, region, access keys or AWS profile); Import dialog maps new fields for documents.
+- [x] T15.8 Test databases: `mongodb` (8.0 single-node replica set with auth, :57017, seed `docker/mongodb-seed.js`) and `dynamodb` (DynamoDB Local, :58002); integration tests in `crates/dq-mongodb/tests` and `crates/dq-dynamodb/tests`.
+
+---
+
 ## Verification
 
 | Area | How it was verified |

@@ -9,8 +9,7 @@ use dq_core::{DbError, DbResult, ErrorKind};
 use mongodb::Client;
 use mongodb::bson::{Bson, Document};
 use mongodb::options::{
-    ClientOptions, Credential, ReadPreference, ReadPreferenceOptions, SelectionCriteria, ServerAddress, Tls,
-    TlsOptions,
+    ClientOptions, Credential, ReadPreference, ReadPreferenceOptions, SelectionCriteria, ServerAddress, Tls, TlsOptions,
 };
 
 /// A connected client plus a temporary combined certificate file, kept while the client lives.
@@ -97,11 +96,8 @@ pub async fn connect(params: &ConnectParams) -> DbResult<Connected> {
         options.selection_criteria = Some(SelectionCriteria::ReadPreference(read_preference(rp)?));
     }
     // A tunnel reaches exactly one member, so discovery is turned off.
-    options.direct_connection = if params.endpoint.is_some() {
-        Some(true)
-    } else {
-        config.property("direct_connection").map(|v| v == "true")
-    };
+    options.direct_connection =
+        if params.endpoint.is_some() { Some(true) } else { config.property("direct_connection").map(|v| v == "true") };
     if !config.username.trim().is_empty() {
         let mechanism = config
             .property("auth_mechanism")
@@ -146,14 +142,13 @@ pub async fn connect(params: &ConnectParams) -> DbResult<Connected> {
 
 /// The driver wants certificate and key in one PEM file.
 fn combined_pem(cert: &str, key: &str) -> DbResult<tempfile_guard::TempPem> {
-    let read = |p: &str| {
-        std::fs::read(p).map_err(|e| DbError::new(ErrorKind::Tls, format!("Cannot read {p}: {e}")))
-    };
+    let read = |p: &str| std::fs::read(p).map_err(|e| DbError::new(ErrorKind::Tls, format!("Cannot read {p}: {e}")));
     let mut pem = read(cert)?;
     pem.push(b'\n');
     pem.extend(read(key)?);
     let path = std::env::temp_dir().join(format!("dataquery-mongo-{}.pem", uuid::Uuid::new_v4()));
-    write_private(&path, &pem).map_err(|e| DbError::new(ErrorKind::Tls, format!("Cannot prepare the client certificate: {e}")))?;
+    write_private(&path, &pem)
+        .map_err(|e| DbError::new(ErrorKind::Tls, format!("Cannot prepare the client certificate: {e}")))?;
     Ok(tempfile_guard::TempPem(path))
 }
 
@@ -214,7 +209,9 @@ pub fn map_error(e: mongodb::error::Error) -> DbError {
         }
         K::Io(io) => DbError::new(ErrorKind::Network, format!("Network error: {io}")),
         K::InvalidTlsConfig { message, .. } => DbError::new(ErrorKind::Tls, message),
-        K::DnsResolve { message, .. } => DbError::new(ErrorKind::Network, format!("Cannot resolve the host: {message}")),
+        K::DnsResolve { message, .. } => {
+            DbError::new(ErrorKind::Network, format!("Cannot resolve the host: {message}"))
+        }
         K::ServerSelection { message, .. } => {
             let kind = if message.to_lowercase().contains("certificate") || message.contains("TLS") {
                 ErrorKind::Tls
@@ -225,8 +222,7 @@ pub fn map_error(e: mongodb::error::Error) -> DbError {
             };
             DbError::new(kind, format!("Cannot reach a server: {message}"))
         }
-        K::InvalidArgument { message, .. } => DbError::invalid(message),
-        K::Transaction { message, .. } => DbError::invalid(message),
+        K::InvalidArgument { message, .. } | K::Transaction { message, .. } => DbError::invalid(message),
         K::SessionsNotSupported => DbError::unsupported("This server does not support sessions or transactions."),
         _ => DbError::new(ErrorKind::Server, message),
     }

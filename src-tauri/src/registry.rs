@@ -19,6 +19,7 @@ impl Registry {
             (Engine::Clickhouse, Arc::new(dq_clickhouse::ClickhouseAdapter)),
             (Engine::Duckdb, Arc::new(dq_duckdb::DuckdbAdapter)),
             (Engine::Snowflake, Arc::new(dq_snowflake::SnowflakeAdapter)),
+            (Engine::Mongodb, Arc::new(dq_mongodb::MongodbAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];

@@ -9,7 +9,9 @@ use std::fmt::Write;
 use base64::Engine as _;
 use dq_core::{DbError, DbResult, ErrorKind};
 use mongodb::bson::spec::BinarySubtype;
-use mongodb::bson::{Binary, Bson, DateTime, Decimal128, Document, JavaScriptCodeWithScope, Regex, Timestamp, oid::ObjectId};
+use mongodb::bson::{
+    Binary, Bson, DateTime, Decimal128, Document, JavaScriptCodeWithScope, Regex, Timestamp, oid::ObjectId,
+};
 
 /// Deepest nesting of objects and arrays accepted.
 const MAX_DEPTH: usize = 100;
@@ -112,7 +114,8 @@ impl<'a> Scanner<'a> {
     pub fn string(&mut self) -> DbResult<String> {
         self.skip_ws();
         let start = self.pos;
-        let quote = self.bump().filter(|c| matches!(c, '\'' | '"' | '`')).ok_or_else(|| self.error("Expected a string."))?;
+        let quote =
+            self.bump().filter(|c| matches!(c, '\'' | '"' | '`')).ok_or_else(|| self.error("Expected a string."))?;
         let mut out = String::new();
         loop {
             match self.bump() {
@@ -346,7 +349,7 @@ impl<'a> Scanner<'a> {
             "undefined" => return Ok(Bson::Undefined),
             "NaN" => return Ok(Bson::Double(f64::NAN)),
             "Infinity" => return Ok(Bson::Double(f64::INFINITY)),
-            "new" => name = self.ident().ok_or_else(|| self.error("Expected a type after `new`."))?.to_owned(),
+            "new" => self.ident().ok_or_else(|| self.error("Expected a type after `new`."))?.clone_into(&mut name),
             _ => {}
         }
         // `Binary.createFromBase64(…)`, `Binary.createFromHexString(…)`.
@@ -418,7 +421,8 @@ fn construct(name: &str, args: Vec<Bson>) -> Result<Bson, String> {
             Bson::Binary(Binary { subtype: BinarySubtype::Uuid, bytes: uuid.as_bytes().to_vec() })
         }
         "BinData" => {
-            let subtype = arg_text(args.first()).and_then(|s| s.parse::<u8>().ok()).ok_or("BinData(subtype, base64).")?;
+            let subtype =
+                arg_text(args.first()).and_then(|s| s.parse::<u8>().ok()).ok_or("BinData(subtype, base64).")?;
             let data = arg_text(args.get(1)).ok_or("BinData(subtype, base64).")?;
             binary(subtype, &data)?
         }
@@ -475,7 +479,8 @@ fn u32_field(d: &Document, key: &str) -> Option<u32> {
 }
 
 fn binary(subtype: u8, base64: &str) -> Result<Bson, String> {
-    let bytes = base64::engine::general_purpose::STANDARD.decode(base64.trim()).map_err(|_| "The base64 data is not valid.")?;
+    let bytes =
+        base64::engine::general_purpose::STANDARD.decode(base64.trim()).map_err(|_| "The base64 data is not valid.")?;
     Ok(Bson::Binary(Binary { subtype: BinarySubtype::from(subtype), bytes }))
 }
 
@@ -508,7 +513,9 @@ pub fn parse_document(text: &str, what: &str) -> DbResult<Document> {
     }
     match parse(text)? {
         Bson::Document(d) => Ok(d),
-        _ => Err(DbError::new(ErrorKind::Syntax, format!("The {what} must be an object such as {{ status: 'paid' }}."))),
+        _ => {
+            Err(DbError::new(ErrorKind::Syntax, format!("The {what} must be an object such as {{ status: 'paid' }}.")))
+        }
     }
 }
 
@@ -729,32 +736,29 @@ fn write_document(out: &mut String, doc: &Document, indent: Option<usize>) {
         out.push_str("{}");
         return;
     }
-    match indent {
-        Some(level) => {
-            out.push_str("{\n");
-            for (i, (k, v)) in doc.iter().enumerate() {
-                push_indent(out, level + 1);
-                out.push_str(&key(k));
-                out.push_str(": ");
-                write_value(out, v, Some(level + 1));
-                out.push_str(if i + 1 < doc.len() { ",\n" } else { "\n" });
+    let Some(level) = indent else {
+        out.push_str("{ ");
+        for (i, (k, v)) in doc.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
             }
-            push_indent(out, level);
-            out.push('}');
+            out.push_str(&key(k));
+            out.push_str(": ");
+            write_value(out, v, None);
         }
-        None => {
-            out.push_str("{ ");
-            for (i, (k, v)) in doc.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                out.push_str(&key(k));
-                out.push_str(": ");
-                write_value(out, v, None);
-            }
-            out.push_str(" }");
-        }
+        out.push_str(" }");
+        return;
+    };
+    out.push_str("{\n");
+    for (i, (k, v)) in doc.iter().enumerate() {
+        push_indent(out, level + 1);
+        out.push_str(&key(k));
+        out.push_str(": ");
+        write_value(out, v, Some(level + 1));
+        out.push_str(if i + 1 < doc.len() { ",\n" } else { "\n" });
     }
+    push_indent(out, level);
+    out.push('}');
 }
 
 fn push_indent(out: &mut String, level: usize) {

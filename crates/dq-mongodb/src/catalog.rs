@@ -2,6 +2,7 @@
 //! `listCollections` and `listIndexes`. Fields are sampled from documents.
 
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::schema::{
@@ -28,7 +29,11 @@ pub struct CollectionSpec {
     pub options: Document,
 }
 
-pub async fn list_collections(session: &MongoSession, database: &str, filter: Document) -> DbResult<Vec<CollectionSpec>> {
+pub async fn list_collections(
+    session: &MongoSession,
+    database: &str,
+    filter: Document,
+) -> DbResult<Vec<CollectionSpec>> {
     let found = documents(
         &session.client,
         database,
@@ -44,7 +49,11 @@ pub async fn list_collections(session: &MongoSession, database: &str, filter: Do
             if name.starts_with("system.") || kind == "timeseries-buckets" {
                 return None;
             }
-            Some(CollectionSpec { name, view: kind == "view", options: d.get_document("options").cloned().unwrap_or_default() })
+            Some(CollectionSpec {
+                name,
+                view: kind == "view",
+                options: d.get_document("options").cloned().unwrap_or_default(),
+            })
         })
         .collect())
 }
@@ -146,11 +155,7 @@ fn escape_regex(text: &str) -> String {
 pub async fn sample(session: &MongoSession, object: &ObjectRef) -> DbResult<Vec<Document>> {
     let large = object.kind == NodeKind::Table
         && estimate(session, &object.database, &object.name).await.unwrap_or(0) > SAMPLE * 10;
-    let pipeline = if large {
-        vec![doc! { "$sample": { "size": SAMPLE } }]
-    } else {
-        vec![doc! { "$limit": SAMPLE }]
-    };
+    let pipeline = if large { vec![doc! { "$sample": { "size": SAMPLE } }] } else { vec![doc! { "$limit": SAMPLE }] };
     documents(
         &session.client,
         &object.database,
@@ -296,12 +301,13 @@ pub async fn ddl(session: &MongoSession, object: &ObjectRef) -> DbResult<String>
         for k in ["key", "v", "ns"] {
             options.remove(k);
         }
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\ndb.getCollection({}).createIndex({}, {})",
             quoted(&spec.name),
             compact(&keys),
             compact(&Bson::Document(options))
-        ));
+        );
     }
     Ok(out)
 }
@@ -330,7 +336,12 @@ pub async fn schema_model(session: &MongoSession, database: &str) -> DbResult<Sc
             let docs = sample(session, &object).await.unwrap_or_default();
             let columns = sampled_columns(&docs)
                 .into_iter()
-                .map(|c| ModelColumn { name: c.name, data_type: c.data_type, nullable: c.nullable, primary_key: c.primary_key })
+                .map(|c| ModelColumn {
+                    name: c.name,
+                    data_type: c.data_type,
+                    nullable: c.nullable,
+                    primary_key: c.primary_key,
+                })
                 .collect();
             ModelTable { object, columns }
         })

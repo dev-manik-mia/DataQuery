@@ -1513,6 +1513,8 @@ dependencies = [
  "dq-clickhouse",
  "dq-core",
  "dq-duckdb",
+ "dq-dynamodb",
+ "dq-mongodb",
  "dq-mysql",
  "dq-oracle",
  "dq-postgres",

@@ -180,7 +180,12 @@ export function DocumentsView({ object }: { object: ObjectRef }) {
       <div className={styles.tabs}>
         <Tabs label="Collection" items={tabs} value={tab} onChange={setTab} />
       </div>
-      {tab === 'aggregation' && <AggregationPanel object={object} />}
+      {/* Kept mounted so the pipeline survives switching tabs. */}
+      {features.aggregation && (
+        <div className={styles.view} style={tab === 'aggregation' ? undefined : { display: 'none' }}>
+          <AggregationPanel object={object} />
+        </div>
+      )}
       {tab === 'indexes' && <IndexesPanel object={object} />}
       {tab === 'validation' && <ValidationPanel object={object} />}
       {tab === 'documents' && (

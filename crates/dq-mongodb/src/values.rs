@@ -67,9 +67,12 @@ pub fn field(key: &str, value: &Bson, deep: bool, limits: CellLimits) -> DocFiel
     let label = type_label(value);
     let summary = cell(value, limits);
     match value {
-        Bson::Document(d) if deep => {
-            DocField::container(key, label, summary, d.iter().map(|(k, v)| field(k, v, true, limits)).collect::<Vec<_>>().into_iter())
-        }
+        Bson::Document(d) if deep => DocField::container(
+            key,
+            label,
+            summary,
+            d.iter().map(|(k, v)| field(k, v, true, limits)).collect::<Vec<_>>().into_iter(),
+        ),
         Bson::Array(items) if deep => DocField::container(
             key,
             label,

@@ -1,5 +1,6 @@
 import type { AuthMethod } from '@/bindings/AuthMethod';
 import type { ConnOptions } from '@/bindings/ConnOptions';
+import type { Engine } from '@/bindings/Engine';
 import type { SshHop } from '@/bindings/SshHop';
 import type { SshTunnel } from '@/bindings/SshTunnel';
 import type { TlsFiles } from '@/bindings/TlsFiles';
@@ -36,11 +37,22 @@ const AUTH_OPTIONS: { value: AuthKind; label: string }[] = [
   { value: 'gcp_iam', label: 'Google Cloud SQL IAM token (gcloud CLI)' },
 ];
 
-export function authSummary(auth: AuthMethod): string {
-  return AUTH_OPTIONS.find((o) => o.value === auth.method)?.label.split(' (')[0] ?? 'Password';
+/** DynamoDB signs requests itself: access keys, or the credentials of an AWS CLI profile. */
+const DYNAMODB_AUTH_OPTIONS: { value: AuthKind; label: string }[] = [
+  { value: 'password', label: 'Access keys (secret saved in the keychain)' },
+  { value: 'aws_iam', label: 'AWS CLI profile (SSO, assumed roles)' },
+];
+
+function authOptions(engine: Engine) {
+  return engine === 'dynamodb' ? DYNAMODB_AUTH_OPTIONS : AUTH_OPTIONS;
 }
 
-export function AuthFields({ auth, onChange }: { auth: AuthMethod; onChange: (a: AuthMethod) => void }) {
+export function authSummary(auth: AuthMethod, engine: Engine): string {
+  return authOptions(engine).find((o) => o.value === auth.method)?.label.split(' (')[0] ?? 'Password';
+}
+
+export function AuthFields({ auth, engine, onChange }: { auth: AuthMethod; engine: Engine; onChange: (a: AuthMethod) => void }) {
+  const dynamodb = engine === 'dynamodb';
   const select = (method: AuthKind) => {
     if (method === 'aws_iam') onChange({ method, region: '', profile: null });
     else onChange({ method } as AuthMethod);
@@ -52,16 +64,18 @@ export function AuthFields({ auth, onChange }: { auth: AuthMethod; onChange: (a:
         className={styles.full}
         value={auth.method}
         onChange={(e) => select(e.target.value as AuthKind)}
-        options={AUTH_OPTIONS}
+        options={authOptions(engine)}
         hint={
           auth.method === 'password'
             ? undefined
-            : 'A short-lived token is requested from the provider CLI on every connect and used as the password. It is never stored. TLS is required.'
+            : dynamodb
+              ? 'Credentials come from `aws configure export-credentials` on every connect. They are never stored.'
+              : 'A short-lived token is requested from the provider CLI on every connect and used as the password. It is never stored. TLS is required.'
         }
       />
       {auth.method === 'aws_iam' && (
         <>
-          <TextField label="AWS region" mono placeholder="eu-west-1" value={auth.region} onChange={(e) => onChange({ ...auth, region: e.target.value.trim() })} />
+          {!dynamodb && <TextField label="AWS region" mono placeholder="eu-west-1" value={auth.region} onChange={(e) => onChange({ ...auth, region: e.target.value.trim() })} />}
           <TextField
             label="AWS profile"
             mono

@@ -6,7 +6,9 @@ use std::hash::{Hash, Hasher};
 
 use async_trait::async_trait;
 use dq_core::adapter::Session;
-use dq_core::monitor::{Gauge, Monitor, MonitorSnapshot, ObjectSize, Replication, ServerProcess, ServerSetting, short_query};
+use dq_core::monitor::{
+    Gauge, Monitor, MonitorSnapshot, ObjectSize, Replication, ServerProcess, ServerSetting, short_query,
+};
 use dq_core::node::NodeKind;
 use dq_core::{DbError, DbResult};
 use futures_util::{StreamExt, stream};
@@ -46,13 +48,11 @@ impl MongoSession {
                 "comment": COMMENT,
             }
         };
-        match documents(&self.client, "admin", pipeline(true), 500).await {
-            Ok(ops) => Ok((ops, None)),
-            Err(_) => {
-                let ops = documents(&self.client, "admin", pipeline(false), 500).await?;
-                Ok((ops, Some("Only this user's operations are shown (the account lacks the inprog privilege).".into())))
-            }
+        if let Ok(ops) = documents(&self.client, "admin", pipeline(true), 500).await {
+            return Ok((ops, None));
         }
+        let ops = documents(&self.client, "admin", pipeline(false), 500).await?;
+        Ok((ops, Some("Only this user's operations are shown (the account lacks the inprog privilege).".into())))
     }
 
     async fn replication(&self) -> Option<Replication> {
@@ -199,7 +199,7 @@ impl Monitor for MongoSession {
             .filter_map(|s| async move { s })
             .collect()
             .await;
-        sizes.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
+        sizes.sort_by_key(|s| std::cmp::Reverse(s.total_bytes));
         sizes.truncate(limit.clamp(1, 1000) as usize);
         Ok(sizes)
     }

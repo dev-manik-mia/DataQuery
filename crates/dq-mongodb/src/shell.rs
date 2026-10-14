@@ -68,7 +68,9 @@ pub fn parse(text: &str) -> DbResult<Statement> {
         w if w.eq_ignore_ascii_case("rollback") => Statement::Rollback,
         "db" => Statement::Call(call(&mut s)?),
         other => {
-            return Err(s.error_at(start, format!("`{other}` is not supported here. Start with `db.`, `show` or `use`.")));
+            return Err(
+                s.error_at(start, format!("`{other}` is not supported here. Start with `db.`, `show` or `use`."))
+            );
         }
     };
     if !s.at_end() {

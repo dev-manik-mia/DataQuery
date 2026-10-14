@@ -13,9 +13,9 @@ import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { SshTunnel } from '@/bindings/SshTunnel';
 import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
-import { Alert, Button, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
+import { Alert, Button, Checkbox, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, databaseLabel, insecureReason, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, credentialLabels, databaseLabel, hostField, insecureReason, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -50,13 +50,23 @@ const DATABASE_FILTERS: Partial<Record<Engine, { name: string; extensions: strin
 };
 
 /** Engine settings kept in `properties`. */
-const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string }[]>> = {
+const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string; check?: boolean }[]>> = {
   snowflake: [
     { key: 'warehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
     { key: 'role', label: 'Role', placeholder: 'default role' },
     { key: 'schema', label: 'Schema', placeholder: 'PUBLIC' },
   ],
+  mongodb: [
+    { key: 'auth_source', label: 'Auth database', placeholder: 'admin' },
+    { key: 'replica_set', label: 'Replica set', placeholder: 'discovered' },
+    { key: 'read_preference', label: 'Read preference', placeholder: 'primary' },
+    { key: 'srv', label: 'DNS seed list (mongodb+srv)', check: true },
+  ],
+  dynamodb: [{ key: 'region', label: 'Region', placeholder: 'us-east-1' }],
 };
+
+/** Engines whose server has no single database to pick in the form. */
+const NO_DATABASE_FIELD: Engine[] = ['dynamodb'];
 
 const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', 'disable'];
 
@@ -98,7 +108,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
-    host: config?.host ?? 'localhost',
+    host: config?.host ?? (engine === 'dynamodb' ? '' : 'localhost'),
     port: String(config?.port ?? defaultPort ?? ''),
     database: config?.database ?? defaults.database,
     username: config?.username ?? defaults.username,
@@ -116,7 +126,7 @@ type SectionId = 'auth' | 'tls' | 'ssh' | 'options';
 
 const DEFAULT_OPTIONS: ConnOptions = { keepalive_secs: 60, connect_retries: 0, idle_timeout_mins: 0, pool_size: 4 };
 
-function validate(s: FormState, fileBased: boolean): Errors {
+function validate(s: FormState, fileBased: boolean, engine: Engine): Errors {
   const errors: Errors = {};
   if (fileBased) {
     if (!s.name.trim()) errors.name = 'Give the connection a name.';
@@ -127,15 +137,16 @@ function validate(s: FormState, fileBased: boolean): Errors {
   if (s.ssh && [s.ssh.host, ...s.ssh.jumps].some((h) => !h.host || !h.username || h.port < 1 || h.port > 65535 || (h.auth.method === 'private_key' && !h.auth.path))) {
     errors.ssh = 'Every SSH host needs a host, port, user and (for key auth) a key file.';
   }
-  if (s.auth.method === 'aws_iam' && !s.auth.region) errors.auth = 'Enter the AWS region.';
+  if (s.auth.method === 'aws_iam' && !s.auth.region && engine !== 'dynamodb') errors.auth = 'Enter the AWS region.';
   if (s.auth.method !== 'password' && s.sslMode === 'disable') errors.auth = 'Cloud IAM authentication requires TLS.';
   if (s.tlsFiles.client_cert_file !== null && s.tlsFiles.client_key_file === null) errors.tlsFiles = 'Choose the client key too.';
   if (s.tlsFiles.client_key_file !== null && s.tlsFiles.client_cert_file === null) errors.tlsFiles = 'Choose the client certificate too.';
   if (!s.name.trim()) errors.name = 'Give the connection a name.';
-  if (!s.host.trim()) errors.host = 'Host is required.';
+  if (!s.host.trim() && engine !== 'dynamodb') errors.host = 'Host is required.';
+  if (engine === 'dynamodb' && !/^[a-z0-9-]+$/.test(s.properties.region?.trim() ?? '')) errors.properties = 'Enter the AWS region, e.g. eu-west-1.';
   const port = Number(s.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) errors.port = '1–65535';
-  if (!s.username.trim()) errors.username = 'Username is required.';
+  if (!s.username.trim() && credentialLabels(engine).usernameRequired && s.auth.method === 'password') errors.username = `${credentialLabels(engine).username} is required.`;
   const timeout = Number(s.timeout);
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 300) errors.timeout = '1–300 seconds';
   return errors;
@@ -162,7 +173,9 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   }));
   const toggle = (k: SectionId) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
 
-  const errors = useMemo(() => validate(state, fileBased), [state, fileBased]);
+  const errors = useMemo(() => validate(state, fileBased, engine), [state, fileBased, engine]);
+  const credentials = credentialLabels(engine);
+  const host = hostField(engine);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setState((s) => ({ ...s, [key]: value }));
     setResult(null);
@@ -208,7 +221,8 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
         idle_timeout_mins: Number(state.options.idle_timeout_mins),
         pool_size: Number(state.options.pool_size),
       },
-      auth: state.auth,
+      // DynamoDB keeps its region in the properties; a profile uses the same one.
+      auth: engine === 'dynamodb' && state.auth.method === 'aws_iam' ? { ...state.auth, region: state.properties.region?.trim() ?? '' } : state.auth,
       properties: Object.fromEntries(Object.entries(state.properties).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v)),
     },
     password: fileBased ? { action: 'clear' } : state.auth.method === 'password' ? passwordChange() : { action: 'clear' },
@@ -323,31 +337,49 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           ) : (
             <>
           <div className={styles.hostRow}>
-            <TextField label={engine === 'snowflake' ? 'Account' : 'Host'} mono value={state.host} error={err('host')} hint={engine === 'snowflake' ? 'Account identifier (myorg-myaccount or xy12345.eu-west-1) or the full host name.' : undefined} onChange={(e) => set('host', e.target.value)} />
+            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} onChange={(e) => set('host', e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
-          <TextField
-            label={databaseLabel(engine)}
-            mono
-            value={state.database}
-            hint={engine === 'oracle' ? 'The service of the pluggable database, e.g. FREEPDB1 or ORCLPDB1. Needs Oracle Instant Client.' : undefined}
-            onChange={(e) => set('database', e.target.value)}
-          />
-          <TextField label="Username" mono value={state.username} error={err('username')} onChange={(e) => set('username', e.target.value)} />
-          {ENGINE_PROPERTIES[engine]?.map((p) => (
+          {!NO_DATABASE_FIELD.includes(engine) && (
             <TextField
-              key={p.key}
-              label={p.label}
+              label={databaseLabel(engine)}
               mono
-              placeholder={p.placeholder}
-              value={state.properties[p.key] ?? ''}
-              onChange={(e) => set('properties', { ...state.properties, [p.key]: e.target.value })}
+              value={state.database}
+              hint={engine === 'oracle' ? 'The service of the pluggable database, e.g. FREEPDB1 or ORCLPDB1. Needs Oracle Instant Client.' : undefined}
+              onChange={(e) => set('database', e.target.value)}
             />
-          ))}
+          )}
+          {state.auth.method === 'password' || engine !== 'dynamodb' ? (
+            <TextField
+              label={credentials.username}
+              mono
+              value={state.username}
+              error={err('username')}
+              placeholder={credentials.usernameRequired ? undefined : 'none (no authentication)'}
+              onChange={(e) => set('username', e.target.value)}
+            />
+          ) : null}
+          {ENGINE_PROPERTIES[engine]?.map((p) =>
+            p.check ? (
+              <div key={p.key} style={{ paddingTop: 18 }}>
+                <Checkbox label={p.label} checked={state.properties[p.key] === 'true'} onChange={(v) => set('properties', { ...state.properties, [p.key]: v ? 'true' : '' })} />
+              </div>
+            ) : (
+              <TextField
+                key={p.key}
+                label={p.label}
+                mono
+                placeholder={p.placeholder}
+                value={state.properties[p.key] ?? ''}
+                error={p.key === 'region' ? err('properties') : undefined}
+                onChange={(e) => set('properties', { ...state.properties, [p.key]: e.target.value })}
+              />
+            ),
+          )}
           {state.auth.method === 'password' && (
           <div className={styles.full} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <TextField
-              label="Password"
+              label={credentials.password}
               type="password"
               mono
               autoComplete="off"
@@ -384,10 +416,12 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           )}
           {!fileBased && (
             <>
-          <FormSection title="Authentication" summary={authSummary(state.auth)} open={openSections.auth} onToggle={() => toggle('auth')}>
-            <AuthFields auth={state.auth} onChange={(a) => set('auth', a)} />
+          {engine !== 'mongodb' && (
+          <FormSection title="Authentication" summary={authSummary(state.auth, engine)} open={openSections.auth} onToggle={() => toggle('auth')}>
+            <AuthFields auth={state.auth} engine={engine} onChange={(a) => set('auth', a)} />
             {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}
           </FormSection>
+          )}
           <FormSection title="Advanced TLS" summary={tlsSummary(state.tlsFiles)} open={openSections.tls} onToggle={() => toggle('tls')}>
             <TlsFields files={state.tlsFiles} onChange={(f) => set('tlsFiles', f)} />
             {err('tlsFiles') && <span className={`dq-field__error ${styles.full}`}>{err('tlsFiles')}</span>}
