@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use dq_core::adapter::ConnectParams;
 use dq_core::sql::{Dialect, SqlServerDialect};
-use dq_core::{DbError, DbResult};
+use dq_core::{DbError, DbResult, ErrorKind};
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::connect::{self, Conn};
@@ -36,9 +36,13 @@ impl Pooled<'_> {
         &mut self.conn.as_mut().expect("checked out").conn
     }
 
-    /// Closes the connection instead of reusing it (after a network error).
-    pub fn discard(mut self) {
-        self.conn = None;
+    /// Passes `result` through; a network failure closes the connection
+    /// instead of returning it to the pool.
+    pub fn check<T>(mut self, result: DbResult<T>) -> DbResult<T> {
+        if result.as_ref().is_err_and(|e| matches!(e.kind, ErrorKind::Network | ErrorKind::Tls | ErrorKind::Timeout)) {
+            self.conn = None;
+        }
+        result
     }
 }
 

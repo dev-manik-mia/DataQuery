@@ -123,15 +123,12 @@ impl Worker {
         tx
     }
 
-    fn err(&self, e: &tiberius::error::Error) -> DbError {
-        map_error(e, self.params.password())
-    }
-
-    async fn conn(&mut self) -> DbResult<&mut Conn> {
-        if self.conn.is_none() {
-            self.conn = Some(connect::open(&self.params, None).await?);
+    /// The connection, opened again if the last one broke. The caller puts it back.
+    async fn take_conn(&mut self) -> DbResult<Conn> {
+        match self.conn.take() {
+            Some(conn) => Ok(conn),
+            None => connect::open(&self.params, None).await,
         }
-        Ok(self.conn.as_mut().expect("connection was just opened"))
     }
 
     async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
@@ -162,15 +159,6 @@ impl Worker {
         }
     }
 
-    /// Stops whatever the server is still sending; drops the connection if that fails.
-    async fn interrupt(&mut self) {
-        if let Some(conn) = self.conn.as_mut() {
-            if conn.cancel_query().await.is_err() {
-                self.conn = None;
-            }
-        }
-    }
-
     /// Runs one statement. Returns the command that arrived while its result
     /// was still open, so the caller handles it next.
     async fn execute(
@@ -186,12 +174,19 @@ impl Worker {
         let signal = self.signal.clone();
         let secret = self.params.password().map(str::to_owned);
         let err = |e: &tiberius::error::Error| map_error(e, secret.as_deref());
+        let mut conn = match self.take_conn().await {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return None;
+            }
+        };
         signal.start();
         if !returns_rows(sql) {
-            let outcome = match self.conn().await {
-                Err(e) => Ok(Err(e)),
-                Ok(conn) => guarded(&signal, options.timeout_secs, conn.execute(sql, &binds(params))).await,
-            };
+            let outcome = guarded(&signal, options.timeout_secs, async {
+                conn.execute(sql, &binds(params)).await.map_err(|e| err(&e))
+            })
+            .await;
             signal.stop();
             let result = match outcome {
                 Ok(Ok(done)) => Ok(StatementResult {
@@ -206,102 +201,28 @@ impl Worker {
                 }),
                 Ok(Err(e)) => Err(e),
                 Err(stop) => {
-                    self.interrupt().await;
-                    Err(stop.error(options.timeout_secs))
+                    self.conn = interrupt(conn).await;
+                    let _ = reply.send(Err(stop.error(options.timeout_secs)));
+                    return None;
                 }
             };
+            self.conn = Some(conn);
             let _ = reply.send(result);
             return None;
         }
 
-        let conn = match self.conn().await {
-            Ok(c) => c,
-            Err(e) => {
-                signal.stop();
-                let _ = reply.send(Err(e));
+        let unfinished =
+            stream_rows(&mut conn, &signal, sql, params, options, started, command, reply, rx, &err).await;
+        let next = match unfinished {
+            Unfinished::No => {
+                self.conn = Some(conn);
                 return None;
             }
+            Unfinished::Yes(next) => next,
         };
-        let opened = guarded(&signal, options.timeout_secs, async {
-            let bound = binds(params);
-            let mut stream = if params.is_empty() {
-                conn.simple_query(sql).await
-            } else {
-                conn.query(sql, &bound).await
-            }
-            .map_err(|e| err(&e))?;
-            let mut pending = None;
-            let first = read_page(&mut stream, &mut pending, None, options.row_limit, &err).await?;
-            Ok::<_, DbError>((stream, pending, first))
-        })
-        .await;
-        signal.stop();
-        let (mut stream, mut pending, page) = match opened {
-            Ok(Ok(opened)) => opened,
-            Ok(Err(e)) => {
-                let _ = reply.send(Err(e));
-                return None;
-            }
-            Err(stop) => {
-                self.interrupt().await;
-                let _ = reply.send(Err(stop.error(options.timeout_secs)));
-                return None;
-            }
-        };
-        let mut columns = page.columns.clone();
-        let has_more = page.more;
-        let notices = page.notices();
-        let _ = reply.send(Ok(StatementResult {
-            columns: page.columns,
-            rows: page.rows,
-            has_more,
-            command,
-            affected: None,
-            duration_ms: started.elapsed().as_millis() as u64,
-            notices,
-        }));
-        if !has_more {
-            drop(stream);
-            return None;
-        }
-        // Keep the result open for "fetch more" until another request arrives.
-        let next = loop {
-            match rx.recv().await {
-                Some(Command::FetchMore { limit, reply }) => {
-                    let started = Instant::now();
-                    signal.start();
-                    let read = guarded(&signal, options.timeout_secs, read_page(&mut stream, &mut pending, Some(&columns), limit.clamp(1, ExecOptions::MAX_ROW_LIMIT), &err)).await;
-                    signal.stop();
-                    match read {
-                        Ok(Ok(page)) => {
-                            let more = page.more;
-                            columns = page.columns;
-                            let _ = reply.send(Ok(RowsPage { rows: page.rows, has_more: more, duration_ms: started.elapsed().as_millis() as u64 }));
-                            if !more {
-                                break None;
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            let _ = reply.send(Err(e));
-                            break None;
-                        }
-                        Err(stop) => {
-                            let _ = reply.send(Err(stop.error(options.timeout_secs)));
-                            break None;
-                        }
-                    }
-                }
-                other => break Some(other),
-            }
-        };
-        drop(stream);
-        // The rest of the result is not needed: tell the server to stop sending it.
-        self.interrupt().await;
-        match next {
-            Some(Some(command)) => Some(command),
-            // The session closed its sender.
-            Some(None) | None => None,
-        }
+        // Whatever the server still sends is not needed: tell it to stop.
+        self.conn = interrupt(conn).await;
+        next
     }
 
     /// Plan requests: `SET SHOWPLAN_XML ON` must be alone in its batch.
@@ -316,13 +237,16 @@ impl Worker {
         let signal = self.signal.clone();
         let secret = self.params.password().map(str::to_owned);
         let err = |e: tiberius::error::Error| map_error(&e, secret.as_deref());
-        let conn = self.conn().await?;
-        conn.simple_query(setup).await.map_err(err)?.into_results().await.map_err(err)?;
+        let mut conn = self.take_conn().await?;
+        if let Err(e) = async { conn.simple_query(setup).await?.into_results().await }.await {
+            self.conn = Some(conn);
+            return Err(err(e));
+        }
         signal.start();
         let run = guarded(&signal, timeout_secs, async {
             let bound = binds(params);
-            let stream = if params.is_empty() { conn.simple_query(sql).await } else { conn.query(sql, &bound).await }
-                .map_err(err)?;
+            let stream =
+                if params.is_empty() { conn.simple_query(sql).await } else { conn.query(sql, &bound).await }.map_err(err)?;
             stream.into_results().await.map_err(err)
         })
         .await;
@@ -330,7 +254,8 @@ impl Worker {
         let results = match run {
             Ok(r) => r,
             Err(stop) => {
-                self.interrupt().await;
+                let Some(conn) = interrupt(conn).await else { return Err(stop.error(timeout_secs)) };
+                self.conn = Some(conn);
                 Err(stop.error(timeout_secs))
             }
         };
@@ -345,6 +270,105 @@ impl Worker {
             .map(|row| row.cells().filter_map(|(_, d)| crate::values::cell_text(d, CellLimits::FULL)).collect())
             .collect())
     }
+}
+
+/// Whether a result was left unread on the connection, and the command that
+/// arrived while it was open.
+enum Unfinished {
+    No,
+    Yes(Option<Command>),
+}
+
+/// Starts a row-returning statement, replies with its first page, then serves
+/// "fetch more" requests until the result ends or another request arrives.
+#[allow(clippy::too_many_arguments)]
+async fn stream_rows(
+    conn: &mut Conn,
+    signal: &CancelSignal,
+    sql: &str,
+    params: &[Option<String>],
+    options: ExecOptions,
+    started: Instant,
+    command: String,
+    reply: oneshot::Sender<DbResult<StatementResult>>,
+    rx: &mut mpsc::Receiver<Command>,
+    err: &impl Fn(&tiberius::error::Error) -> DbError,
+) -> Unfinished {
+    let opened = guarded(signal, options.timeout_secs, async {
+        let bound = binds(params);
+        let mut stream = if params.is_empty() { conn.simple_query(sql).await } else { conn.query(sql, &bound).await }
+            .map_err(|e| err(&e))?;
+        let mut pending = None;
+        let first = read_page(&mut stream, &mut pending, None, options.row_limit, err).await?;
+        Ok::<_, DbError>((stream, pending, first))
+    })
+    .await;
+    signal.stop();
+    let (mut stream, mut pending, page) = match opened {
+        Ok(Ok(opened)) => opened,
+        Ok(Err(e)) => {
+            let _ = reply.send(Err(e));
+            return Unfinished::Yes(None);
+        }
+        Err(stop) => {
+            let _ = reply.send(Err(stop.error(options.timeout_secs)));
+            return Unfinished::Yes(None);
+        }
+    };
+    let mut columns = page.columns.clone();
+    let has_more = page.more;
+    let notices = page.notices();
+    let unread = page.later_results;
+    let _ = reply.send(Ok(StatementResult {
+        columns: page.columns,
+        rows: page.rows,
+        has_more,
+        command,
+        affected: None,
+        duration_ms: started.elapsed().as_millis() as u64,
+        notices,
+    }));
+    if !has_more {
+        return if unread { Unfinished::Yes(None) } else { Unfinished::No };
+    }
+    // Keep the result open for "fetch more" until another request arrives.
+    while let Some(command) = rx.recv().await {
+        let Command::FetchMore { limit, reply } = command else {
+            return Unfinished::Yes(Some(command));
+        };
+        let started = Instant::now();
+        signal.start();
+        let limit = limit.clamp(1, ExecOptions::MAX_ROW_LIMIT);
+        let read = guarded(signal, options.timeout_secs, read_page(&mut stream, &mut pending, Some(&columns), limit, err)).await;
+        signal.stop();
+        match read {
+            Ok(Ok(page)) => {
+                let more = page.more;
+                let unread = page.later_results;
+                columns = page.columns;
+                let duration_ms = started.elapsed().as_millis() as u64;
+                let _ = reply.send(Ok(RowsPage { rows: page.rows, has_more: more, duration_ms }));
+                if !more {
+                    return if unread { Unfinished::Yes(None) } else { Unfinished::No };
+                }
+            }
+            Ok(Err(e)) => {
+                let _ = reply.send(Err(e));
+                return Unfinished::Yes(None);
+            }
+            Err(stop) => {
+                let _ = reply.send(Err(stop.error(options.timeout_secs)));
+                return Unfinished::Yes(None);
+            }
+        }
+    }
+    Unfinished::Yes(None)
+}
+
+/// Stops whatever the server is still sending. Returns the connection, or
+/// `None` when it broke (the next request opens a new one).
+async fn interrupt(mut conn: Conn) -> Option<Conn> {
+    conn.cancel_query().await.ok().map(|()| conn)
 }
 
 /// Rows read from an open result.

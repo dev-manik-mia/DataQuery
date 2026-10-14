@@ -12,4 +12,4 @@ pub use analyze::{
     DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, redact_literals, split_statements,
     transaction_effect,
 };
-pub use dialect::{Dialect, MysqlDialect, PostgresDialect, SqlFlavor};
+pub use dialect::{Dialect, MysqlDialect, OracleDialect, PostgresDialect, SqlFlavor, SqlServerDialect};
