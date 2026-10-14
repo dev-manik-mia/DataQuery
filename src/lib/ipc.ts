@@ -38,7 +38,9 @@ import type { ImportOptions } from '@/bindings/ImportOptions';
 import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { ImportReport } from '@/bindings/ImportReport';
 import type { ImportSource } from '@/bindings/ImportSource';
+import type { ConsoleReply } from '@/bindings/ConsoleReply';
 import type { KeychainStatus } from '@/bindings/KeychainStatus';
+import type { KeyWrite } from '@/bindings/KeyWrite';
 import type { MonitorSnapshot } from '@/bindings/MonitorSnapshot';
 import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
@@ -50,6 +52,8 @@ import type { RowFilter } from '@/bindings/RowFilter';
 import type { RowsPage } from '@/bindings/RowsPage';
 import type { RunReport } from '@/bindings/RunReport';
 import type { SavedConnection } from '@/bindings/SavedConnection';
+import type { ScanPage } from '@/bindings/ScanPage';
+import type { ScanRequest } from '@/bindings/ScanRequest';
 import type { SavedScript } from '@/bindings/SavedScript';
 import type { SchemaApplyReport } from '@/bindings/SchemaApplyReport';
 import type { SchemaChange } from '@/bindings/SchemaChange';
@@ -70,6 +74,8 @@ import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
 import type { TxAction } from '@/bindings/TxAction';
 import type { TxStatus } from '@/bindings/TxStatus';
+import type { ValuePage } from '@/bindings/ValuePage';
+import type { ValueRequest } from '@/bindings/ValueRequest';
 
 import { toAppError } from './errors';
 
@@ -178,6 +184,15 @@ export const api = {
     call<string>('documents_statement', { sessionId, request: { ...request, object: objectRef(request.object) } }),
   documentsWrite: ({ sessionId }: Sid, object: ObjectRef, change: DocumentChange, confirmation: Confirmation | null) =>
     call<Guarded<string>>('documents_write', { sessionId, object: objectRef(object), change, confirmation }),
+
+  // keys (Redis, Valkey)
+  keysScan: ({ sessionId }: Sid, request: ScanRequest) => call<ScanPage>('keys_scan', { sessionId, request }),
+  keysCount: ({ sessionId }: Sid, database: number) => call<number>('keys_count', { sessionId, database }),
+  keysValue: ({ sessionId }: Sid, request: ValueRequest) => call<ValuePage>('keys_value', { sessionId, request }),
+  keysWrite: ({ sessionId }: Sid, write: KeyWrite, confirmation: Confirmation | null) =>
+    call<Guarded<null>>('keys_write', { sessionId, write, confirmation }),
+  keysConsole: ({ sessionId }: Sid, line: string, confirmation: Confirmation | null) =>
+    call<Guarded<ConsoleReply>>('keys_console', { sessionId, line, confirmation }),
 
   // schema
   schemaChangePreview: ({ sessionId }: Sid, changes: SchemaChange[]) => call<string>('schema_change_preview', { sessionId, changes }),

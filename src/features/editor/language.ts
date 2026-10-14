@@ -1,6 +1,7 @@
 import { snippetCompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
 import { javascript } from '@codemirror/lang-javascript';
 import { MSSQL, MySQL, PLSQL, PostgreSQL, StandardSQL, sql, type SQLDialect, type SQLNamespace } from '@codemirror/lang-sql';
+import { StreamLanguage } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 
 import type { SchemaModel } from '@/bindings/SchemaModel';
@@ -20,6 +21,48 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   // Not SQL: MongoDB uses the JavaScript mode below.
   mongodb: StandardSQL,
   partiql: StandardSQL,
+  redis: StandardSQL,
+};
+
+/** Common commands offered at the start of a Redis line. */
+export const REDIS_COMMANDS = [
+  'GET', 'SET', 'MGET', 'MSET', 'DEL', 'UNLINK', 'EXISTS', 'TYPE', 'TTL', 'PTTL', 'EXPIRE', 'PEXPIRE', 'PERSIST', 'RENAME',
+  'SCAN', 'HGET', 'HSET', 'HGETALL', 'HDEL', 'HSCAN', 'LRANGE', 'LPUSH', 'RPUSH', 'LPOP', 'RPOP', 'LLEN', 'SMEMBERS',
+  'SADD', 'SREM', 'SSCAN', 'ZRANGE', 'ZADD', 'ZREM', 'ZSCORE', 'ZSCAN', 'XADD', 'XRANGE', 'XLEN', 'XDEL', 'INCR', 'DECR',
+  'INFO', 'DBSIZE', 'SELECT', 'MEMORY', 'OBJECT', 'CLIENT', 'CONFIG', 'SLOWLOG', 'MULTI', 'EXEC', 'DISCARD', 'PING',
+];
+
+/** `redis-cli` lines: the first word is the command; quoted arguments are strings. */
+const redisMode = StreamLanguage.define<{ first: boolean }>({
+  startState: () => ({ first: true }),
+  token(stream, state) {
+    if (stream.sol()) state.first = true;
+    if (stream.eatSpace()) return null;
+    const quote = stream.peek();
+    if (quote === '"' || quote === "'") {
+      stream.next();
+      let escaped = false;
+      for (let c = stream.next(); c !== undefined; c = stream.next()) {
+        if (c === quote && !escaped) break;
+        escaped = !escaped && c === '\\';
+      }
+      state.first = false;
+      return 'string';
+    }
+    stream.eatWhile(/\S/);
+    if (state.first) {
+      state.first = false;
+      return 'keyword';
+    }
+    return /^-?\d+(\.\d+)?$/.test(stream.current()) ? 'number' : null;
+  },
+});
+
+const redisSource: CompletionSource = (context) => {
+  const word = context.matchBefore(/^\s*[A-Za-z.]*$/);
+  if (!word || (word.from === word.to && !context.explicit)) return null;
+  const from = word.from + (word.text.length - word.text.trimStart().length);
+  return { from, options: REDIS_COMMANDS.map((c) => ({ label: c, type: 'keyword' })), validFor: /^[A-Za-z.]*$/ };
 };
 
 /** Shell methods offered after `db.<collection>.`. */
@@ -82,6 +125,9 @@ export function snippetSource(snippets: Snippet[]): CompletionSource {
 
 /** CodeMirror language for a dialect, with schema-aware and snippet completion. */
 export function sqlLanguage(flavor: SqlFlavor, model: SchemaModel | null = null, snippets: Snippet[] = []) {
+  if (flavor === 'redis') {
+    return [redisMode, EditorState.languageData.of(() => [{ autocomplete: redisSource }, { autocomplete: snippetSource(snippets) }])];
+  }
   if (flavor === 'mongodb') {
     return [javascript(), EditorState.languageData.of(() => [{ autocomplete: mongoSource(model) }, { autocomplete: snippetSource(snippets) }])];
   }

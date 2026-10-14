@@ -9,6 +9,7 @@ import { useWorkspace, type TableTab, type TableView } from '@/stores/workspace'
 
 import { KIND_LABEL, isRelation, objectLabel } from '@/lib/objects';
 import { DocumentsView } from '@/features/documents/DocumentsView';
+import { KeyView } from '@/features/keys/KeyView';
 
 import { DataView } from './DataView';
 import { DependenciesView } from './DependenciesView';
@@ -57,6 +58,14 @@ export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }
       ]}
     />
   );
+
+  if (tab.object.kind === 'key') {
+    return (
+      <div className={styles.tab} style={active ? undefined : { display: 'none' }}>
+        <KeyView object={tab.object} />
+      </div>
+    );
+  }
 
   if (documents) {
     return (

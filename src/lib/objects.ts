@@ -13,6 +13,7 @@ export const KIND_MARK: Record<NodeKind, string> = {
   trigger: 'Tr',
   function: 'F',
   procedure: 'P',
+  key: 'K',
   group: '',
 };
 
@@ -27,6 +28,7 @@ export const KIND_LABEL: Record<NodeKind, string> = {
   trigger: 'Trigger',
   function: 'Function',
   procedure: 'Procedure',
+  key: 'Key',
   group: 'Folder',
 };
 

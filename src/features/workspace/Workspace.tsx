@@ -5,6 +5,8 @@ import { Button, EmptyState, Splitter } from '@/components/ui';
 import { openSqlFiles } from '@/features/editor/fileActions';
 import { QueryTabView } from '@/features/editor/QueryTabView';
 import { Explorer } from '@/features/explorer/Explorer';
+import { Console } from '@/features/keys/Console';
+import { KeyBrowser } from '@/features/keys/KeyBrowser';
 import { MonitorView } from '@/features/monitor/MonitorView';
 import { DiagramView } from '@/features/schema/DiagramView';
 import { MigrationsView } from '@/features/schema/MigrationsView';
@@ -27,6 +29,8 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
       return <DiagramView tab={tab} active={active} />;
     case 'migrations':
       return <MigrationsView tab={tab} active={active} />;
+    case 'console':
+      return <Console full />;
     case 'monitor':
       return <MonitorView active={active} />;
   }
@@ -40,6 +44,8 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
 export function Workspace() {
   const { tabs, activeTabId, split, openQueryTab, focusPane } = useWorkspace();
   const { explorerWidth, set } = useLayout();
+  // Key-value engines browse keys with SCAN instead of an object tree (screen 12).
+  const keyValue = useWorkspace((s) => s.session?.keys != null);
 
   // Drop .sql files anywhere on the window to open them.
   useEffect(() => {
@@ -71,7 +77,7 @@ export function Workspace() {
 
   return (
     <div className={styles.workspace}>
-      <Explorer width={explorerWidth} />
+      {keyValue ? <KeyBrowser width={explorerWidth} /> : <Explorer width={explorerWidth} />}
       <Splitter axis="x" label="Resize explorer" size={explorerWidth} min={LAYOUT_LIMITS.explorer.min} max={LAYOUT_LIMITS.explorer.max} onResize={(w) => set({ explorerWidth: w })} />
       <main className={styles.main}>
         <TabBar />

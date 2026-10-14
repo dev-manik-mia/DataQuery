@@ -23,6 +23,7 @@ export const TYPE_SUGGESTIONS: Record<SqlFlavor, string[]> = {
   // Document engines have no schema forms.
   mongodb: [],
   partiql: [],
+  redis: [],
 };
 
 /** What the engine calls a column that numbers itself. */
@@ -35,6 +36,7 @@ const IDENTITY_LABEL: Record<SqlFlavor, string> = {
   duckdb: 'Identity (use a sequence default)',
   mongodb: 'Identity (not supported)',
   partiql: 'Identity (not supported)',
+  redis: 'Identity (not supported)',
   snowflake: 'IDENTITY',
 };
 

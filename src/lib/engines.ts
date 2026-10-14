@@ -23,6 +23,9 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'mongodb';
     case 'dynamodb':
       return 'partiql';
+    case 'redis':
+    case 'valkey':
+      return 'redis';
     default:
       return 'postgres';
   }
@@ -30,7 +33,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
 
 /** Databases contain schemas (all but MySQL / MariaDB, where the database is the schema). */
 export function hasSchemas(flavor: SqlFlavor): boolean {
-  return !['mysql', 'clickhouse', 'mongodb', 'partiql'].includes(flavor);
+  return !['mysql', 'clickhouse', 'mongodb', 'partiql', 'redis'].includes(flavor);
 }
 
 /** The schema new objects land in when none is named; Oracle uses the user's own schema. */
@@ -76,6 +79,7 @@ export function databaseLabel(engine: Engine): string {
   if (engine === 'oracle') return 'Service name';
   if (engine === 'duckdb' || engine === 'sqlite') return 'Database file';
   if (engine === 'mongodb') return 'Default database';
+  if (engine === 'redis' || engine === 'valkey') return 'Database number';
   return 'Database';
 }
 
@@ -100,6 +104,9 @@ export function credentialLabels(engine: Engine): { username: string; password: 
       return { username: 'Access key ID', password: 'Secret access key', usernameRequired: true };
     case 'mongodb':
       return { username: 'Username', password: 'Password', usernameRequired: false };
+    case 'redis':
+    case 'valkey':
+      return { username: 'Username (ACL)', password: 'Password', usernameRequired: false };
     default:
       return { username: 'Username', password: 'Password', usernameRequired: true };
   }
@@ -123,6 +130,9 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: 'default', username: 'default' };
     case 'mongodb':
       return { database: 'test', username: '' };
+    case 'redis':
+    case 'valkey':
+      return { database: '0', username: '' };
     default:
       return { database: '', username: '' };
   }
@@ -160,6 +170,14 @@ const MONGO_SSL_LABELS: Record<SslMode, string> = {
   'verify-full': 'tls=true',
 };
 
+const REDIS_SSL_LABELS: Record<SslMode, string> = {
+  disable: 'redis:// (no TLS)',
+  prefer: 'rediss:// (no verification)',
+  require: 'rediss:// (no verification)',
+  'verify-ca': 'rediss:// (verify certificate)',
+  'verify-full': 'rediss:// (verify certificate and host)',
+};
+
 const HTTPS_SSL_LABELS: Record<SslMode, string> = {
   disable: 'HTTP (no TLS)',
   prefer: 'HTTPS (no verification)',
@@ -183,6 +201,8 @@ export function sslModeLabel(engine: Engine, mode: SslMode): string {
       return HTTPS_SSL_LABELS[mode];
     case 'mongodb':
       return MONGO_SSL_LABELS[mode];
+    case 'redis':
+      return REDIS_SSL_LABELS[mode];
     default:
       return mode;
   }

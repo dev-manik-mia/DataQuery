@@ -90,7 +90,7 @@ export interface TableTab {
 /** A schema (or MySQL database) as a whole: ER diagram or framework migrations. */
 export interface ContainerTab {
   id: string;
-  kind: 'diagram' | 'migrations';
+  kind: 'diagram' | 'migrations' | 'console';
   title: string;
   database: string;
   schema: string | null;
@@ -374,7 +374,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       const existing = get().tabs.find((t): t is ContainerTab => t.kind === kind && t.database === database && t.schema === schema);
       if (existing) return showTab(existing.id);
       const where = schema ?? database;
-      addTab({ id: uid('tab'), kind, database, schema, title: kind === 'diagram' ? `ER · ${where}` : `Migrations · ${where}` });
+      addTab({ id: uid('tab'), kind, database, schema, title: kind === 'diagram' ? `ER · ${where}` : kind === 'console' ? `Console · db ${where}` : `Migrations · ${where}` });
     },
 
     openMonitorTab: () => {

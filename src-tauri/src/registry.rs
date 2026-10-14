@@ -21,6 +21,8 @@ impl Registry {
             (Engine::Snowflake, Arc::new(dq_snowflake::SnowflakeAdapter)),
             (Engine::Mongodb, Arc::new(dq_mongodb::MongodbAdapter)),
             (Engine::Dynamodb, Arc::new(dq_dynamodb::DynamodbAdapter)),
+            (Engine::Redis, Arc::new(dq_redis::RedisAdapter::REDIS)),
+            (Engine::Valkey, Arc::new(dq_redis::RedisAdapter::VALKEY)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
         ];
