@@ -1,6 +1,8 @@
 //! Query plans: the `EXPLAIN` statement for each engine and a common tree the
 //! UI renders. PostgreSQL's JSON plan maps to named fields; MySQL and MariaDB
-//! JSON plans are walked generically (every object is a node).
+//! JSON plans are walked generically (every object is a node); CockroachDB's
+//! text tree is read line by line. SQL Server and Oracle plans are read by
+//! their adapters, which build the same tree.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -45,16 +47,20 @@ pub struct ExplainResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainDialect {
     Postgres,
+    Cockroach,
     Mysql,
     Mariadb,
 }
 
 impl ExplainDialect {
-    pub fn new(flavor: SqlFlavor, version: &str) -> Self {
+    /// The plan statement family, or `None` when the adapter reads plans itself.
+    pub fn new(flavor: SqlFlavor, version: &str) -> Option<Self> {
         match flavor {
-            SqlFlavor::Postgres => Self::Postgres,
-            SqlFlavor::Mysql if version.starts_with("MariaDB") => Self::Mariadb,
-            SqlFlavor::Mysql => Self::Mysql,
+            SqlFlavor::Postgres if version.starts_with("CockroachDB") => Some(Self::Cockroach),
+            SqlFlavor::Postgres => Some(Self::Postgres),
+            SqlFlavor::Mysql if version.starts_with("MariaDB") => Some(Self::Mariadb),
+            SqlFlavor::Mysql => Some(Self::Mysql),
+            SqlFlavor::Sqlserver | SqlFlavor::Oracle => None,
         }
     }
 
@@ -65,6 +71,8 @@ impl ExplainDialect {
         match (self, analyze) {
             (Self::Postgres, false) => format!("EXPLAIN (FORMAT JSON, VERBOSE) {sql}"),
             (Self::Postgres, true) => format!("EXPLAIN (FORMAT JSON, VERBOSE, ANALYZE, BUFFERS) {sql}"),
+            (Self::Cockroach, false) => format!("EXPLAIN (VERBOSE) {sql}"),
+            (Self::Cockroach, true) => format!("EXPLAIN ANALYZE (VERBOSE) {sql}"),
             (Self::Mysql | Self::Mariadb, false) => format!("EXPLAIN FORMAT=JSON {sql}"),
             // MySQL measures only in its TREE format.
             (Self::Mysql, true) => format!("EXPLAIN ANALYZE {sql}"),
@@ -75,6 +83,9 @@ impl ExplainDialect {
     pub fn parse(self, raw: String, analyzed: bool) -> DbResult<ExplainResult> {
         if self == Self::Mysql && analyzed {
             return Ok(ExplainResult { plan: None, raw, analyzed, planning_ms: None, execution_ms: None });
+        }
+        if self == Self::Cockroach {
+            return Ok(cockroach_plan(raw, analyzed));
         }
         let json: Value = serde_json::from_str(&raw).map_err(|e| DbError::internal(format!("unreadable plan: {e}")))?;
         Ok(match self {
@@ -89,7 +100,7 @@ impl ExplainDialect {
                     analyzed,
                 }
             }
-            Self::Mysql | Self::Mariadb => ExplainResult {
+            Self::Cockroach | Self::Mysql | Self::Mariadb => ExplainResult {
                 plan: Some(generic_node("query", &json)),
                 planning_ms: None,
                 execution_ms: None,
@@ -205,6 +216,87 @@ fn generic_node(label: &str, v: &Value) -> PlanNode {
     node
 }
 
+/// Leading number of a CockroachDB value such as `3 (100% of the table; …)` or `1,024`.
+fn leading_number(value: &str) -> Option<f64> {
+    let digits: String = value.chars().take_while(|c| c.is_ascii_digit() || *c == ',' || *c == '.').collect();
+    digits.replace(',', "").parse().ok()
+}
+
+/// A CockroachDB duration such as `250µs`, `1ms` or `2.5s`, in milliseconds.
+pub fn duration_ms(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let split = value.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+    let (number, unit) = value.split_at(split);
+    let n: f64 = number.parse().ok()?;
+    Some(match unit.trim() {
+        "ns" => n / 1_000_000.0,
+        "µs" | "us" => n / 1_000.0,
+        "ms" => n,
+        "s" => n * 1_000.0,
+        "m" => n * 60_000.0,
+        _ => return None,
+    })
+}
+
+/// Reads CockroachDB's `EXPLAIN` text tree: `• op` lines are nodes, indented
+/// `key: value` lines are properties of the node above them.
+fn cockroach_plan(raw: String, analyzed: bool) -> ExplainResult {
+    let mut header = PlanNode { label: "plan".into(), ..PlanNode::default() };
+    let mut planning_ms = None;
+    let mut execution_ms = None;
+    // (bullet column, node) from the root down to the current node.
+    let mut stack: Vec<(usize, PlanNode)> = Vec::new();
+    let mut roots: Vec<PlanNode> = Vec::new();
+    let close = |stack: &mut Vec<(usize, PlanNode)>, roots: &mut Vec<PlanNode>, until: usize| {
+        while stack.last().is_some_and(|(col, _)| *col >= until) {
+            let (_, node) = stack.pop().expect("non-empty stack");
+            match stack.last_mut() {
+                Some((_, parent)) => parent.children.push(node),
+                None => roots.push(node),
+            }
+        }
+    };
+    for line in raw.lines() {
+        let content_start =
+            line.char_indices().find(|(_, c)| !matches!(c, ' ' | '│' | '├' | '└' | '─')).map(|(i, _)| i);
+        let Some(start) = content_start else { continue };
+        let content = &line[start..];
+        let column = line[..start].chars().count();
+        if let Some(label) = content.strip_prefix('•') {
+            close(&mut stack, &mut roots, column);
+            stack.push((column, PlanNode { label: label.trim().to_owned(), ..PlanNode::default() }));
+            continue;
+        }
+        let Some((key, value)) = content.split_once(':') else { continue };
+        let (key, value) = (key.trim(), value.trim());
+        let Some((_, node)) = stack.last_mut() else {
+            match key {
+                "planning time" => planning_ms = duration_ms(value),
+                "execution time" => execution_ms = duration_ms(value),
+                _ => header.props.push((key.to_owned(), value.to_owned())),
+            }
+            continue;
+        };
+        match key {
+            "table" | "index" if node.detail.is_none() => node.detail = Some(value.to_owned()),
+            "estimated row count" => node.rows = leading_number(value),
+            "actual row count" => node.actual_rows = leading_number(value),
+            "execution time" => node.actual_ms = duration_ms(value),
+            _ => node.props.push((key.to_owned(), value.to_owned())),
+        }
+    }
+    close(&mut stack, &mut roots, 0);
+    let plan = match roots.len() {
+        0 => None,
+        1 if header.props.is_empty() => roots.pop(),
+        _ => {
+            header.children = roots;
+            Some(header)
+        }
+    };
+    ExplainResult { plan, raw, analyzed, planning_ms, execution_ms }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +307,24 @@ mod tests {
         assert!(ExplainDialect::Postgres.statement("select 1", true).contains("ANALYZE"));
         assert_eq!(ExplainDialect::Mysql.statement("select 1", true), "EXPLAIN ANALYZE select 1");
         assert_eq!(ExplainDialect::Mariadb.statement("select 1", true), "ANALYZE FORMAT=JSON select 1");
-        assert_eq!(ExplainDialect::new(SqlFlavor::Mysql, "MariaDB 11.4.2"), ExplainDialect::Mariadb);
+        assert_eq!(ExplainDialect::new(SqlFlavor::Mysql, "MariaDB 11.4.2"), Some(ExplainDialect::Mariadb));
+        assert_eq!(ExplainDialect::new(SqlFlavor::Postgres, "CockroachDB 25.2.1"), Some(ExplainDialect::Cockroach));
+        assert_eq!(ExplainDialect::new(SqlFlavor::Sqlserver, "SQL Server 2022"), None);
+    }
+
+    #[test]
+    fn parses_cockroach_text_plans() {
+        let raw = "planning time: 250µs\nexecution time: 2ms\ndistribution: local\nvectorized: true\n\n\
+• filter\n│ columns: (id, name)\n│ estimated row count: 1\n│ filter: id > 1\n│\n\
+└── • scan\n      columns: (id, name)\n      actual row count: 3\n      estimated row count: 3 (100% of the table)\n      table: t@t_pkey\n      spans: FULL SCAN";
+        let r = ExplainDialect::Cockroach.parse(raw.into(), true).unwrap();
+        assert_eq!((r.planning_ms, r.execution_ms), (Some(0.25), Some(2.0)));
+        let root = r.plan.unwrap();
+        assert_eq!(root.label, "plan");
+        let filter = &root.children[0];
+        assert_eq!((filter.label.as_str(), filter.rows), ("filter", Some(1.0)));
+        let scan = &filter.children[0];
+        assert_eq!((scan.label.as_str(), scan.detail.as_deref(), scan.actual_rows), ("scan", Some("t@t_pkey"), Some(3.0)));
     }
 
     #[test]

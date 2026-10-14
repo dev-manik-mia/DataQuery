@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use crate::config::ConnConfig;
 use crate::edit::BoundStatement;
 use crate::engine::{Capabilities, Engine};
-use crate::error::DbResult;
+use crate::error::{DbError, DbResult};
+use crate::explain::{ExplainDialect, ExplainResult};
 use crate::monitor::Monitor;
 use crate::node::{Node, ObjectRef};
 use crate::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult};
@@ -141,6 +142,23 @@ pub trait Session: Send + Sync {
     /// Rolls back on the first error or when a statement's `expect_rows` is not met.
     async fn run_in_transaction(&self, database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>>;
 
+    /// Plans one statement. `analyze` runs it; callers only allow that for
+    /// read-only statements. The default runs the engine's `EXPLAIN` on the
+    /// query connection.
+    async fn explain(&self, sql: &str, params: Params<'_>, analyze: bool, timeout_secs: u32) -> DbResult<ExplainResult> {
+        let dialect = ExplainDialect::new(self.dialect().flavor(), &self.info().version)
+            .ok_or_else(|| DbError::unsupported("Query plans are not available for this engine."))?;
+        let options = ExecOptions { row_limit: 10_000, timeout_secs };
+        let result = self.execute(&dialect.statement(sql, analyze), params, options).await?;
+        let raw = result
+            .rows
+            .iter()
+            .map(|row| row.iter().filter_map(crate::value::Cell::to_text).collect::<Vec<_>>().join("\t"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        dialect.parse(raw, analyze)
+    }
+
     /// Server monitoring, when the engine supports it.
     fn monitor(&self) -> Option<&dyn Monitor> {
         None
@@ -152,7 +170,7 @@ pub trait Session: Send + Sync {
 /// Checks an affected-row count against a statement's expectation.
 pub fn check_affected(statement: &BoundStatement, affected: u64) -> DbResult<()> {
     match statement.expect_rows {
-        Some(expected) if expected != affected => Err(crate::DbError::new(
+        Some(expected) if expected != affected => Err(DbError::new(
             crate::ErrorKind::Constraint,
             format!(
                 "Expected to change {expected} row(s) but {affected} matched. Nothing was saved; the row may have been changed or deleted by someone else."
