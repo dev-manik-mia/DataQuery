@@ -19,9 +19,23 @@ npm run app:release  # release bundle plus signed updater artifacts (needs the s
 
 ### Signed updates
 
-The app checks `https://github.com/dev-manik-mia/DataQuery/releases/latest/download/latest.json` only when asked
-(Settings → About) or at launch if the user enables it. Updates are verified against the public key in
-`src-tauri/tauri.conf.json` before they install.
+The app checks `https://github.com/dev-manik-mia/DataQuery/releases/latest/download/latest.json` at launch and every
+6 hours (Settings → About → "Check for updates automatically", on by default) and shows "Update available" there and in
+a toast. With "Download and install updates automatically" on, the update downloads and installs in the background
+and applies on the next restart (on Windows the installer runs when the user picks Restart). Updates are verified
+against the public key in `src-tauri/tauri.conf.json` before they install.
+
+### Homebrew
+
+```sh
+brew install dev-manik-mia/dataquery/dataquery
+```
+
+The cask lives in [`dev-manik-mia/homebrew-dataquery`](https://github.com/dev-manik-mia/homebrew-dataquery). After each
+release the `homebrew` job in `build.yml` regenerates `Casks/dataquery.rb` with `scripts/homebrew-cask.sh <version>`
+(DMG checksums come from the GitHub release). It needs the `HOMEBREW_TAP_TOKEN` secret: a fine-grained token with
+Contents read/write on the tap repository. The cask sets `auto_updates true`, so `brew upgrade` leaves the app to its
+own updater (`brew upgrade --greedy` still works).
 
 The matching private key was generated locally at `~/.tauri/dataquery.key` (no password) and is **not** in the
 repository. To publish a release, build with the key and upload the bundle, its `.sig` file and `latest.json`:

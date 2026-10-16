@@ -51,6 +51,10 @@ ai_enabled: boolean, ai_provider: AiProvider, ai_model: string,
  */
 ai_endpoint: string, 
 /**
- * Look for a signed update when the app starts. Off by default: no network calls unless asked.
+ * Look for a signed update at launch and every few hours, and say when one is available.
  */
-check_updates_on_launch: boolean, };
+check_updates_on_launch: boolean, 
+/**
+ * Download and install updates in the background; they apply on the next restart.
+ */
+auto_install_updates: boolean, };

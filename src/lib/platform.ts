@@ -1,4 +1,5 @@
 export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+export const isWindows = typeof navigator !== 'undefined' && /Win/.test(navigator.platform || navigator.userAgent);
 
 /** Shortcut label for the current platform: `mod+enter` → `⌘↵` or `Ctrl+↵`. */
 export function shortcutLabel(shortcut: string): string {

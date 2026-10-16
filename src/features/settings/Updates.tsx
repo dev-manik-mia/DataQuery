@@ -1,65 +1,25 @@
-import { relaunch } from '@tauri-apps/plugin-process';
-import { check, type Update } from '@tauri-apps/plugin-updater';
-import { useState } from 'react';
-
 import { Alert, Button, Card, Checkbox } from '@/components/ui';
 import { formatBytes } from '@/lib/format';
 import { useSettings } from '@/stores/settings';
-
-type State =
-  | { step: 'idle' }
-  | { step: 'checking' }
-  | { step: 'none'; checkedAt: number }
-  | { step: 'available'; update: Update }
-  | { step: 'downloading'; update: Update; done: number; total: number | null }
-  | { step: 'ready'; update: Update }
-  | { step: 'error'; message: string };
-
-/** Looks for a signed update; asks before downloading; installs and offers a restart. */
-export async function checkForUpdate(): Promise<Update | null> {
-  return check({ timeout: 30_000 });
-}
+import { useUpdates } from '@/stores/updates';
 
 /**
- * Signed updates: the release feed is checked only when asked (or at launch,
- * if enabled). The download's minisign signature is verified against the
- * public key built into the app before anything is installed.
+ * Signed updates: the release feed is checked on request, or at launch and
+ * every few hours when automatic checks are on. With automatic install the
+ * update downloads in the background and applies on the next restart. The
+ * download's minisign signature is verified against the public key built into
+ * the app before anything is installed.
  */
 export function UpdatesCard() {
   const { settings, update } = useSettings();
-  const [state, setState] = useState<State>({ step: 'idle' });
-
-  const run = async () => {
-    setState({ step: 'checking' });
-    try {
-      const found = await checkForUpdate();
-      setState(found ? { step: 'available', update: found } : { step: 'none', checkedAt: Date.now() });
-    } catch (e) {
-      setState({ step: 'error', message: String((e as Error)?.message ?? e) });
-    }
-  };
-
-  const install = async (u: Update) => {
-    let done = 0;
-    let total: number | null = null;
-    setState({ step: 'downloading', update: u, done, total });
-    try {
-      await u.downloadAndInstall((event) => {
-        if (event.event === 'Started') total = event.data.contentLength ?? null;
-        if (event.event === 'Progress') done += event.data.chunkLength;
-        setState({ step: 'downloading', update: u, done, total });
-      });
-      setState({ step: 'ready', update: u });
-    } catch (e) {
-      setState({ step: 'error', message: `The update was not installed: ${String((e as Error)?.message ?? e)}` });
-    }
-  };
+  const { state, check, install, restart } = useUpdates();
+  const busy = state.step === 'checking' || state.step === 'downloading';
 
   return (
     <Card title="Updates" footer="Updates are signed. The signature is checked against the key built into DataQuery before installing; an unsigned or altered download is refused.">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Button busy={state.step === 'checking'} disabled={state.step === 'downloading'} onClick={() => void run()}>
+          <Button busy={state.step === 'checking'} disabled={busy || state.step === 'ready'} onClick={() => void check()}>
             Check for updates
           </Button>
           <span className="ink-2" style={{ fontSize: 12 }}>
@@ -69,12 +29,12 @@ export function UpdatesCard() {
         {state.step === 'none' && <Alert tone="positive">You have the latest version.</Alert>}
         {state.step === 'error' && <Alert tone="critical">{state.message}</Alert>}
         {(state.step === 'available' || state.step === 'downloading') && (
-          <Alert tone="info" title={`${state.update.version} is available`}>
+          <Alert tone="info" title={`Update available: ${state.update.version}`}>
             {state.update.date && <div className="ink-2">Released {new Date(state.update.date).toLocaleDateString()}</div>}
             {state.update.body && <div style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{state.update.body}</div>}
             <div style={{ marginTop: 8 }}>
               {state.step === 'available' ? (
-                <Button variant="primary" onClick={() => void install(state.update)}>
+                <Button variant="primary" onClick={() => void install()}>
                   Download and install
                 </Button>
               ) : (
@@ -87,20 +47,26 @@ export function UpdatesCard() {
           </Alert>
         )}
         {state.step === 'ready' && (
-          <Alert tone="positive" title={`${state.update.version} is installed`}>
+          <Alert tone="positive" title={`${state.update.version} is ready`}>
             Signature verified. Restart to finish.
             <div style={{ marginTop: 8 }}>
-              <Button variant="primary" onClick={() => void relaunch()}>
+              <Button variant="primary" onClick={() => void restart()}>
                 Restart now
               </Button>
             </div>
           </Alert>
         )}
         <Checkbox
-          label="Check for updates when DataQuery starts"
-          help="Off by default: DataQuery makes no network requests of its own unless you ask."
+          label="Check for updates automatically"
+          help="Looks for a new release at launch and every 6 hours, and tells you when one is available."
           checked={settings.check_updates_on_launch}
-          onChange={(v) => void update({ check_updates_on_launch: v })}
+          onChange={(v) => void update(v ? { check_updates_on_launch: true } : { check_updates_on_launch: false, auto_install_updates: false })}
+        />
+        <Checkbox
+          label="Download and install updates automatically"
+          help="Updates install in the background and apply the next time DataQuery restarts. Nothing restarts without you."
+          checked={settings.auto_install_updates}
+          onChange={(v) => void update(v ? { auto_install_updates: true, check_updates_on_launch: true } : { auto_install_updates: false })}
         />
       </div>
     </Card>

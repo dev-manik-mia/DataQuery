@@ -36,6 +36,15 @@
   color: var(--nav-active-ink);
 }
 
+.navBadge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+}
+
 .content {
   flex: 1;
   overflow: auto;

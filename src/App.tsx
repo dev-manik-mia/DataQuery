@@ -20,7 +20,6 @@ import { formatCount, formatDuration } from '@/lib/format';
 import { CommandPalette } from '@/features/commands/CommandPalette';
 import { appCommands, commandKeys, openNewWindow } from '@/features/commands/commands';
 import { SchemaDiffPage } from '@/features/schema/SchemaDiffPage';
-import { checkForUpdate } from '@/features/settings/Updates';
 import { setLanguage, t } from '@/i18n';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
 import { useConnections, useEngine } from '@/stores/connections';
@@ -28,6 +27,7 @@ import { useCompletion } from '@/stores/completion';
 import { useLayout } from '@/stores/layout';
 import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
+import { startUpdateChecks } from '@/stores/updates';
 import { noteSessionClosed, useWorkspace } from '@/stores/workspace';
 
 export function App() {
@@ -38,20 +38,21 @@ export function App() {
   const theme = useSettings((s) => s.settings.theme);
 
   useEffect(() => {
+    let stopUpdateChecks: (() => void) | undefined;
     void useSettings
       .getState()
       .load()
       .then(() => {
-        if (!useSettings.getState().settings.check_updates_on_launch) return;
-        checkForUpdate()
-          .then((u) => u && useUi.getState().toast(`DataQuery ${u.version} is available. Install it from Settings → About.`))
-          .catch(() => undefined);
+        stopUpdateChecks = startUpdateChecks();
       });
     void useConnections.getState().load();
     void useLayout.getState().load();
     void useCompletion.getState().loadSnippets();
     const unlisten = listen<{ session_id: string; reason: string }>('session-closed', (e) => noteSessionClosed(e.payload.session_id, e.payload.reason));
-    return () => void unlisten.then((fn) => fn());
+    return () => {
+      stopUpdateChecks?.();
+      void unlisten.then((fn) => fn());
+    };
   }, []);
 
   useEffect(() => {

@@ -240,3 +240,30 @@ jobs:
               release_id: Number(process.env.RELEASE_ID),
               draft: false,
             });
+
+  # Points the Homebrew cask (github.com/dev-manik-mia/homebrew-dataquery) at the
+  # new release. Needs HOMEBREW_TAP_TOKEN: a fine-grained token with Contents
+  # read/write on that repository. Skipped with a warning when it is not set.
+  homebrew:
+    name: Update Homebrew cask
+    needs: [release-plan, publish-release]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Commit the new cask to the tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.release-plan.outputs.version }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN is not set: the Homebrew cask still points at the previous release."
+            exit 0
+          fi
+          git clone "https://x-access-token:$TAP_TOKEN@github.com/dev-manik-mia/homebrew-dataquery.git" tap
+          sh scripts/homebrew-cask.sh "$VERSION" > tap/Casks/dataquery.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/dataquery.rb
+          git diff --cached --quiet || { git commit -m "dataquery $VERSION" && git push; }

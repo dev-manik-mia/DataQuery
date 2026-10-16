@@ -30,7 +30,8 @@ export const DEFAULT_SETTINGS: Settings = {
   ai_provider: 'anthropic',
   ai_model: '',
   ai_endpoint: 'http://localhost:11434/v1',
-  check_updates_on_launch: false,
+  check_updates_on_launch: true,
+    auto_install_updates: false,
 };
 
 interface SettingsState {

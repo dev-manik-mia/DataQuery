@@ -15,7 +15,7 @@ import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
 import { Alert, Button, Checkbox, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, credentialLabels, databaseLabel, hostField, insecureReason, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -116,7 +116,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     username: config?.username ?? defaults.username,
     password: prefill?.password ?? '',
     clearPassword: false,
-    sslMode: config?.ssl_mode ?? 'verify-full',
+    sslMode: config?.ssl_mode ?? defaultSslMode(engine),
     timeout: String(config?.connect_timeout_secs ?? 10),
     properties: { ...(config?.properties ?? {}) },
   };

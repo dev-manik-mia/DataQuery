@@ -301,8 +301,10 @@ pub struct Settings {
     pub ai_model: String,
     /// Base URL for the custom provider (OpenAI-compatible), e.g. `http://localhost:11434/v1`.
     pub ai_endpoint: String,
-    /// Look for a signed update when the app starts. Off by default: no network calls unless asked.
+    /// Look for a signed update at launch and every few hours, and say when one is available.
     pub check_updates_on_launch: bool,
+    /// Download and install updates in the background; they apply on the next restart.
+    pub auto_install_updates: bool,
 }
 
 pub const DEFAULT_MASK_PATTERNS: &[&str] =
@@ -335,7 +337,8 @@ impl Default for Settings {
             ai_provider: AiProvider::Anthropic,
             ai_model: String::new(),
             ai_endpoint: "http://localhost:11434/v1".into(),
-            check_updates_on_launch: false,
+            check_updates_on_launch: true,
+            auto_install_updates: false,
         }
     }
 }

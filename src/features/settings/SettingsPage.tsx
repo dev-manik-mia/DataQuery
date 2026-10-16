@@ -14,6 +14,7 @@ import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
 import { useSettings } from '@/stores/settings';
 import { useUi, type SettingsSection } from '@/stores/ui';
+import { useUpdates } from '@/stores/updates';
 
 import { KeyboardSettings } from './KeyboardSettings';
 import styles from './Settings.module.css';
@@ -23,12 +24,15 @@ const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results',
 
 export function SettingsPage({ section }: { section: SettingsSection }) {
   const navigate = useUi((s) => s.navigate);
+  const updateStep = useUpdates((s) => s.state.step);
+  const updateBadge = updateStep === 'available' || updateStep === 'downloading' ? 'Update' : updateStep === 'ready' ? 'Restart' : null;
   return (
     <div className={styles.page}>
       <nav className={styles.nav} aria-label="Settings sections">
         {SECTIONS.map((id) => (
           <button key={id} type="button" className={styles.navItem} aria-current={id === section ? 'page' : undefined} onClick={() => navigate({ name: 'settings', section: id })}>
             {t(`settings.${id}`)}
+            {id === 'about' && updateBadge && <span className={styles.navBadge}>{updateBadge}</span>}
           </button>
         ))}
       </nav>

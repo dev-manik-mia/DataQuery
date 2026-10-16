@@ -131,6 +131,15 @@ export function credentialLabels(engine: Engine): { username: string; password: 
 }
 
 /** Database and user a new connection form starts with. */
+/**
+ * SSL mode for a new connection. TLS is off by default so local and internal
+ * servers without certificates connect first time; Snowflake is only reachable
+ * over HTTPS, so it keeps full verification.
+ */
+export function defaultSslMode(engine: Engine): SslMode {
+  return engine === 'snowflake' ? 'verify-full' : 'disable';
+}
+
 export function connectionDefaults(engine: Engine): { database: string; username: string } {
   switch (engine) {
     case 'postgres':

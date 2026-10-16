@@ -235,6 +235,9 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T22.1 `.github/workflows/build.yml`: `npm run check` on Linux, then builds for macOS (Apple silicon, Intel), Linux and Windows on every push and pull request; installers kept as run artifacts.
 - [x] T22.2 Releases: a push to `main` whose commit message contains "release" checks that `package.json`, `tauri.conf.json` and `Cargo.toml` agree and the tag is new, creates a draft `v<version>`, uploads every platform's installers (and signed updater files when `TAURI_SIGNING_PRIVATE_KEY` is set), and publishes only when all platforms built.
 - [x] T22.3 Updater feed and repository URL point at `github.com/dev-manik-mia/DataQuery`; optional Apple signing/notarization secrets; workflow checked with actionlint.
+- [x] T22.4 Homebrew cask (`brew install dev-manik-mia/dataquery/dataquery`) in the `homebrew-dataquery` tap, regenerated after each release by the `homebrew` job (`scripts/homebrew-cask.sh`); `brew style` and `brew audit --online` pass and the cask installs.
+- [x] T22.5 Updates: automatic checks at launch and every 6 h (on by default) with an "Update" badge on Settings → About; optional automatic download and install that applies on restart (`auto_install_updates`).
+- [x] T22.6 New connections default to SSL mode `disable` (Snowflake keeps `verify-full`); any mode can still be chosen.
 
 ---
 
