@@ -81,9 +81,8 @@ pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResu
 
 pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFilter) -> DbResult<RowCount> {
     sql_only(session)?;
-    let unfiltered = builder::validate_filter(session.dialect(), filter.filter.as_deref())?.is_none()
-        && filter.matches.is_empty()
-        && filter.searches.iter().all(|s| s.contains.is_empty());
+    let unfiltered =
+        builder::validate_filter(session.dialect(), filter.filter.as_deref())?.is_none() && filter.only_typed_filter();
     if unfiltered
         && let Some(estimate) = session.row_estimate(object).await?
         && estimate > EXACT_COUNT_THRESHOLD

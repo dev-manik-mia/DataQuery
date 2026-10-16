@@ -525,6 +525,7 @@ function About() {
       <UpdatesCard />
       <Card title={`Release notes · ${info?.version ?? ''}`} flush>
         <ul className={styles.notes}>
+          <li>Table view: a visual filter builder (column, operator, value; match all or any), automatic update checks with optional background install, and new connections start with SSL off.</li>
           <li>Connections: SSH tunnels with jump hosts and host-key checks, CA and client certificates, read-only profiles, keepalive/retry/idle/pool options, cloud IAM tokens, export/import without secrets.</li>
           <li>Explorer: indexes, sequences, triggers, functions and procedures; sizes; INSERT/UPDATE/DELETE templates; dependencies.</li>
           <li>Editor: schema-aware autocomplete, snippets, bookmarks, parameters, EXPLAIN plans, transaction controls, command palette, custom shortcuts, split panes and multiple windows.</li>

@@ -529,9 +529,9 @@ async fn row_filters_bind_matches_and_searches() {
     let s = session(&cfg).await;
     let object = table("orders");
     let rows = RowFilter {
-        filter: None,
         matches: vec![ColumnValue { column: "status".into(), value: Some("paid".into()) }],
         searches: vec![ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+        ..RowFilter::default()
     };
     assert_eq!(ops::row_count(&*s, &object, &rows).await.unwrap().count, 400);
     let id = RowFilter {

@@ -22,6 +22,44 @@ pub struct ColumnSearch {
     pub contains: String,
 }
 
+/// Comparison of one column in a [`FilterCondition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum FilterOp {
+    Eq,
+    Ne,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Contains,
+    NotContains,
+    StartsWith,
+    EndsWith,
+    /// `value` is a comma-separated list.
+    In,
+    IsNull,
+    IsNotNull,
+}
+
+impl FilterOp {
+    /// The operator takes no value (`IS NULL`, `IS NOT NULL`).
+    pub fn unary(self) -> bool {
+        matches!(self, Self::IsNull | Self::IsNotNull)
+    }
+}
+
+/// One row of the visual filter builder: `column op value`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FilterCondition {
+    pub column: String,
+    pub op: FilterOp,
+    /// Ignored for unary operators.
+    pub value: String,
+}
+
 /// Which rows of a table to read. Everything except `filter` travels as parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(default)]
@@ -33,6 +71,17 @@ pub struct RowFilter {
     pub matches: Vec<ColumnValue>,
     /// Per-column searches from the grid header.
     pub searches: Vec<ColumnSearch>,
+    /// Conditions from the visual filter builder.
+    pub conditions: Vec<FilterCondition>,
+    /// Conditions are joined with `OR` instead of `AND`.
+    pub match_any: bool,
+}
+
+impl RowFilter {
+    /// Nothing narrows the rows apart from (possibly) the typed `filter`.
+    pub fn only_typed_filter(&self) -> bool {
+        self.matches.is_empty() && self.searches.iter().all(|s| s.contains.is_empty()) && self.conditions.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

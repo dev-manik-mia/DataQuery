@@ -238,6 +238,7 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T22.4 Homebrew cask (`brew install dev-manik-mia/dataquery/dataquery`) in the `homebrew-dataquery` tap, regenerated after each release by the `homebrew` job (`scripts/homebrew-cask.sh`); `brew style` and `brew audit --online` pass and the cask installs.
 - [x] T22.5 Updates: automatic checks at launch and every 6 h (on by default) with an "Update" badge on Settings → About; optional automatic download and install that applies on restart (`auto_install_updates`).
 - [x] T22.6 New connections default to SSL mode `disable` (Snowflake keeps `verify-full`); any mode can still be chosen.
+- [x] T22.7 Visual filter builder in the table view: column · operator (=, ≠, >, ≥, <, ≤, contains, does not contain, starts with, ends with, in, is NULL, is not NULL) · value rows joined with AND or OR; values are parameters (`RowFilter.conditions`, `match_any`); applies to paging, row counts and exports. Unit tests (builder SQL, helpers) and integration tests on PostgreSQL and MySQL.
 
 ---
 

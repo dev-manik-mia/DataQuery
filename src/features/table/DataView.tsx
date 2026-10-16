@@ -41,6 +41,7 @@ import {
   type Edits,
   type Value,
 } from './edits';
+import { FilterBuilder, describeConditions, type AppliedFilter } from './FilterBuilder';
 import { ImportDialog } from './ImportDialog';
 import { useTableKeyBadges } from './useKeyBadges';
 import styles from './Table.module.css';
@@ -70,6 +71,8 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
   const [offset, setOffset] = useState(0);
   const [filterInput, setFilterInput] = useState('');
   const [filter, setFilter] = useState<string | null>(null);
+  const [built, setBuilt] = useState<AppliedFilter>({ conditions: [], matchAny: false });
+  const [builderOpen, setBuilderOpen] = useState(false);
   const [sort, setSort] = useState<SortSpec | null>(null);
   const [reload, setReload] = useState(0);
   const [history, setHistory] = useState<{ edits: Edits; past: Edits[]; future: Edits[] }>({ edits: NO_EDITS, past: [], future: [] });
@@ -112,7 +115,7 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
     setLoading(true);
     setError(null);
     api
-      .tablePage(sid, { object, filter, matches, searches, sort, offset, limit: pageSize })
+      .tablePage(sid, { object, filter, matches, searches, conditions: built.conditions, match_any: built.matchAny, sort, offset, limit: pageSize })
       .then((p) => !stale && setPage(p))
       .catch((e) => !stale && setError(toAppError(e).info))
       .finally(() => !stale && setLoading(false));
@@ -120,20 +123,20 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
       stale = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [object, filter, matches, searches, sort, offset, pageSize, reload, session.session_id]);
+  }, [object, filter, matches, searches, built, sort, offset, pageSize, reload, session.session_id]);
 
   useEffect(() => {
     let stale = false;
     setCount(null);
     api
-      .rowCount(sid, object, { filter, matches, searches })
+      .rowCount(sid, object, { filter, matches, searches, conditions: built.conditions, match_any: built.matchAny })
       .then((c) => !stale && setCount(c))
       .catch(() => !stale && setCount(null));
     return () => {
       stale = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [object, filter, matches, searches, reload, session.session_id]);
+  }, [object, filter, matches, searches, built, reload, session.session_id]);
 
   /** Runs a navigation only after pending edits are saved or discarded. */
   const guardEdits = useCallback(
@@ -254,6 +257,13 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
       setFilter(filterInput.trim() || null);
     });
 
+  const applyBuilt = (next: AppliedFilter) =>
+    void guardEdits(() => {
+      setOffset(0);
+      setBuilt(next);
+      if (!next.conditions.length) setBuilderOpen(false);
+    });
+
   const extraMenu = ({ row, col }: { row: number; col: number }): MenuEntry[] =>
     editable && columns[col]?.editable
       ? [
@@ -281,7 +291,8 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
   const first = page && page.rows.length ? page.offset + 1 : 0;
   const last = page ? page.offset + page.rows.length : 0;
   const pages = count ? Math.max(1, Math.ceil(count.count / pageSize)) : null;
-  const exportSource = { type: 'table' as const, object, filter, matches, searches, sort };
+  const exportSource = { type: 'table' as const, object, filter, matches, searches, conditions: built.conditions, match_any: built.matchAny, sort };
+  const filtered = Boolean(filter || matches.length || searches.length || built.conditions.length);
 
   /** Foreign-key columns link to the referenced row. */
   const foreignKeys = useMemo(() => {
@@ -392,6 +403,9 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
             }}
           />
         </form>
+        <Button size="sm" aria-expanded={builderOpen} variant={built.conditions.length ? 'primary' : 'ghost'} onClick={() => setBuilderOpen((o) => !o)}>
+          <Icon name="filter" size={12} /> Filter{built.conditions.length ? ` · ${built.conditions.length}` : ''}
+        </Button>
         <span className={styles.sortInfo}>
           {sort ? (
             <>
@@ -441,6 +455,20 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
           </IconButton>
         </div>
       </div>
+      {builderOpen && (
+        <FilterBuilder columns={structure.columns.map((c) => c.name)} applied={built} onApply={applyBuilt} onClose={() => setBuilderOpen(false)} />
+      )}
+      {!builderOpen && built.conditions.length > 0 && (
+        <div className={styles.filterSummary} role="status">
+          Filtered by <span className="mono">{describeConditions(built.conditions, built.matchAny)}</span>
+          <Button size="xs" onClick={() => setBuilderOpen(true)}>
+            Edit
+          </Button>
+          <Button size="xs" onClick={() => applyBuilt({ conditions: [], matchAny: built.matchAny })}>
+            Clear
+          </Button>
+        </div>
+      )}
       {matches.length > 0 && (
         <div className={styles.notice} role="status">
           Showing rows where{' '}
@@ -467,7 +495,7 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
       )}
       {error && (
         <div className={styles.errorBar}>
-          <ErrorAlert error={error} title={filter ? 'The filter could not be applied' : 'Could not load rows'} />
+          <ErrorAlert error={error} title={filtered ? 'The filter could not be applied' : 'Could not load rows'} />
         </div>
       )}
       <DataGrid
@@ -483,7 +511,7 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
         onSort={onSort}
         extraMenu={extraMenu}
         onDeleteRows={deleteSelected}
-        emptyText={loading ? 'Loading…' : filter || matches.length || searches.length ? 'No rows match the filter.' : 'This table is empty.'}
+        emptyText={loading ? 'Loading…' : filtered ? 'No rows match the filter.' : 'This table is empty.'}
         foreignKeys={foreignKeys}
         onColumnSearch={(s) =>
           void guardEdits(() => {

@@ -3,6 +3,7 @@ import type { Cell } from "./Cell";
 import type { ColumnMeta } from "./ColumnMeta";
 import type { ColumnSearch } from "./ColumnSearch";
 import type { ColumnValue } from "./ColumnValue";
+import type { FilterCondition } from "./FilterCondition";
 import type { FindRequest } from "./FindRequest";
 import type { ObjectRef } from "./ObjectRef";
 import type { ScanRequest } from "./ScanRequest";
@@ -20,4 +21,12 @@ matches: Array<ColumnValue>,
 /**
  * Per-column searches from the grid header.
  */
-searches: Array<ColumnSearch>, } | { "type": "documents", request: FindRequest, } | { "type": "keys", request: ScanRequest, } | { "type": "rows", columns: Array<ColumnMeta>, rows: Array<Array<Cell>>, };
+searches: Array<ColumnSearch>, 
+/**
+ * Conditions from the visual filter builder.
+ */
+conditions: Array<FilterCondition>, 
+/**
+ * Conditions are joined with `OR` instead of `AND`.
+ */
+match_any: boolean, } | { "type": "documents", request: FindRequest, } | { "type": "keys", request: ScanRequest, } | { "type": "rows", columns: Array<ColumnMeta>, rows: Array<Array<Cell>>, };

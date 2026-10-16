@@ -255,4 +255,4 @@ export const api = {
 };
 
 /** An empty row filter. */
-export const NO_FILTER: RowFilter = { filter: null, matches: [], searches: [] };
+export const NO_FILTER: RowFilter = { filter: null, matches: [], searches: [], conditions: [], match_any: false };

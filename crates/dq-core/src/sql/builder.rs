@@ -6,13 +6,17 @@ use crate::edit::{BoundStatement, ColumnValue, RowChange};
 use crate::error::{DbError, DbResult};
 use crate::node::ObjectRef;
 use crate::schema::{ColumnInfo, TableStructure};
-use crate::table::{RowFilter, SortSpec};
+use crate::table::{FilterCondition, FilterOp, RowFilter, SortSpec};
 
 use super::dialect::{Dialect, SqlFlavor};
 use super::lexer::{TokenKind, tokenize};
 
 pub const MAX_FILTER_LEN: usize = 8_000;
 pub const MAX_CHANGES: usize = 10_000;
+/// Longest value of a column search or filter condition.
+const MAX_VALUE_LEN: usize = 1000;
+/// Most conditions in the filter builder, and most values in one `IN` list.
+const MAX_CONDITIONS: usize = 100;
 
 /// Validates a user-typed `WHERE` expression. It must not contain statement
 /// separators and its parentheses must balance, so it cannot escape the
@@ -86,8 +90,63 @@ pub struct BoundQuery {
 }
 
 /// Escapes `%`, `_` and `\` for a `LIKE` pattern that uses `\` as the escape.
+fn like_escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
 pub fn like_contains(text: &str) -> String {
-    format!("%{}%", text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
+    format!("%{}%", like_escape(text))
+}
+
+/// Case-insensitive `LIKE` of a column's text form against `pattern`, sent as a parameter.
+fn like_predicate(p: &mut Params<'_>, col: &ColumnInfo, pattern: &str) -> String {
+    let text = ColumnInfo { data_type: "text".into(), ..col.clone() };
+    let placeholder = p.push(&text, Some(pattern));
+    p.dialect.search_predicate(&p.dialect.quote_ident(&col.name), &placeholder)
+}
+
+/// SQL for one filter-builder condition; every value is a parameter.
+fn condition_predicate(p: &mut Params<'_>, structure: &TableStructure, c: &FilterCondition) -> DbResult<String> {
+    let col = column(structure, &c.column)?;
+    let name = p.dialect.quote_ident(&col.name);
+    if c.value.len() > MAX_VALUE_LEN {
+        return Err(DbError::invalid(format!(
+            "The value for `{}` is longer than {MAX_VALUE_LEN} characters.",
+            c.column
+        )));
+    }
+    let comparison = match c.op {
+        FilterOp::Eq => "=",
+        FilterOp::Ne => "<>",
+        FilterOp::Gt => ">",
+        FilterOp::Gte => ">=",
+        FilterOp::Lt => "<",
+        FilterOp::Lte => "<=",
+        FilterOp::IsNull => return Ok(format!("{name} IS NULL")),
+        FilterOp::IsNotNull => return Ok(format!("{name} IS NOT NULL")),
+        FilterOp::Contains => return Ok(like_predicate(p, col, &like_contains(&c.value))),
+        FilterOp::NotContains => return Ok(format!("NOT ({})", like_predicate(p, col, &like_contains(&c.value)))),
+        FilterOp::StartsWith => return Ok(like_predicate(p, col, &format!("{}%", like_escape(&c.value)))),
+        FilterOp::EndsWith => return Ok(like_predicate(p, col, &format!("%{}", like_escape(&c.value)))),
+        FilterOp::In => {
+            if !p.dialect.comparable(&col.data_type) {
+                return Err(DbError::invalid(format!(
+                    "`{}` ({}) cannot be compared with values.",
+                    col.name, col.data_type
+                )));
+            }
+            let values: Vec<&str> = c.value.split(',').map(str::trim).filter(|v| !v.is_empty()).collect();
+            if values.is_empty() || values.len() > MAX_CONDITIONS {
+                return Err(DbError::invalid(format!("`in` needs 1–{MAX_CONDITIONS} comma-separated values.")));
+            }
+            let placeholders: Vec<String> = values.into_iter().map(|v| p.push(col, Some(v))).collect();
+            return Ok(format!("{name} IN ({})", placeholders.join(", ")));
+        }
+    };
+    if !p.dialect.comparable(&col.data_type) {
+        return Err(DbError::invalid(format!("`{}` ({}) cannot be compared with values.", col.name, col.data_type)));
+    }
+    Ok(format!("{name} {comparison} {}", p.push(col, Some(&c.value))))
 }
 
 /// `WHERE` clause for a [`RowFilter`]: the user's expression plus parameterised
@@ -108,12 +167,20 @@ fn where_clause(p: &mut Params<'_>, structure: &TableStructure, rows: &RowFilter
     }
     for search in rows.searches.iter().filter(|s| !s.contains.is_empty()) {
         let col = column(structure, &search.column)?;
-        if search.contains.len() > 1000 {
-            return Err(DbError::invalid("A column search is limited to 1000 characters."));
+        if search.contains.len() > MAX_VALUE_LEN {
+            return Err(DbError::invalid(format!("A column search is limited to {MAX_VALUE_LEN} characters.")));
         }
-        let text = ColumnInfo { data_type: "text".into(), ..col.clone() };
-        let placeholder = p.push(&text, Some(&like_contains(&search.contains)));
-        parts.push(d.search_predicate(&d.quote_ident(&col.name), &placeholder));
+        parts.push(like_predicate(p, col, &like_contains(&search.contains)));
+    }
+    if rows.conditions.len() > MAX_CONDITIONS {
+        return Err(DbError::invalid(format!("Use at most {MAX_CONDITIONS} filter conditions.")));
+    }
+    let conditions =
+        rows.conditions.iter().map(|c| condition_predicate(p, structure, c)).collect::<DbResult<Vec<_>>>()?;
+    match conditions.len() {
+        0 => {}
+        1 => parts.extend(conditions),
+        _ => parts.push(format!("({})", conditions.join(if rows.match_any { " OR " } else { " AND " }))),
     }
     Ok(if parts.is_empty() { String::new() } else { format!(" WHERE {}", parts.join(" AND ")) })
 }
@@ -606,9 +673,9 @@ mod tests {
     fn matches_and_searches_are_parameters() {
         let s = orders();
         let rows = RowFilter {
-            filter: None,
             matches: vec![cv("id", Some("7")), cv("total", None)],
             searches: vec![crate::table::ColumnSearch { column: "geo".into(), contains: "50%_x".into() }],
+            ..RowFilter::default()
         };
         let q = count_query(&PostgresDialect, &s, &rows).unwrap();
         assert_eq!(
@@ -682,6 +749,42 @@ mod tests {
         // A NOT NULL key column never matches NULL.
         let null_id = RowChange::Delete { key: vec![cv("id", None), cv("total", Some("1"))] };
         assert!(change_statements(&PostgresDialect, &s, &[null_id]).is_err());
+    }
+
+    #[test]
+    fn filter_conditions_are_parameters() {
+        use crate::table::{FilterCondition, FilterOp};
+        let cond = |column: &str, op, value: &str| FilterCondition { column: column.into(), op, value: value.into() };
+        let s = orders();
+        let mut rows = RowFilter {
+            conditions: vec![
+                cond("total", FilterOp::Gte, "10.5"),
+                cond("id", FilterOp::In, "1, 2,,3"),
+                cond("geo", FilterOp::StartsWith, "a_b"),
+                cond("raw", FilterOp::IsNull, "ignored"),
+            ],
+            ..RowFilter::default()
+        };
+        let q = count_query(&PostgresDialect, &s, &rows).unwrap();
+        assert_eq!(
+            q.sql,
+            r#"SELECT count(*) FROM "public"."orders" WHERE ("total" >= $1::text::numeric(12,2) AND "id" IN ($2::text::bigint, $3::text::bigint, $4::text::bigint) AND "geo"::text ILIKE $5::text::text AND "raw" IS NULL)"#
+        );
+        assert_eq!(q.params, ["10.5", "1", "2", "3", r"a\_b%"].map(|v| Some(v.to_owned())).to_vec());
+        rows.match_any = true;
+        rows.conditions.truncate(1);
+        rows.conditions.push(cond("id", FilterOp::NotContains, "7"));
+        rows.filter = Some("id > 0".into());
+        let my = count_query(&MysqlDialect, &s, &rows).unwrap();
+        assert!(my.sql.ends_with("WHERE (id > 0) AND (`total` >= ? OR NOT (CAST(`id` AS CHAR) LIKE ?))"), "{}", my.sql);
+        // Types without equality cannot be compared; unknown columns are rejected.
+        let bad = RowFilter { conditions: vec![cond("total", FilterOp::Eq, "1")], ..RowFilter::default() };
+        assert!(count_query(&PostgresDialect, &s, &bad).is_ok());
+        let json = TableStructure { columns: vec![col("doc", "json", false)], ..orders() };
+        let bad = RowFilter { conditions: vec![cond("doc", FilterOp::Eq, "{}")], ..RowFilter::default() };
+        assert!(count_query(&PostgresDialect, &json, &bad).is_err());
+        let bad = RowFilter { conditions: vec![cond("nope", FilterOp::IsNull, "")], ..RowFilter::default() };
+        assert!(count_query(&PostgresDialect, &s, &bad).is_err());
     }
 
     #[test]

@@ -16,7 +16,7 @@ use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops;
 use dq_core::ops::ImportMapping;
 use dq_core::result::ExecOptions;
-use dq_core::table::{RowFilter, SortSpec, TablePageRequest};
+use dq_core::table::{FilterCondition, FilterOp, RowFilter, SortSpec, TablePageRequest};
 use dq_core::transfer::{
     CsvOptions, ExportFormat, ExportOptions, ExportSource, FieldRef, ImportOptions, ImportSource, TransferControl,
 };
@@ -552,10 +552,29 @@ async fn row_filters_bind_matches_and_searches() {
     let s = session(&cfg).await;
     let object = table("orders");
     let rows = RowFilter {
-        filter: None,
         matches: vec![ColumnValue { column: "status".into(), value: Some("paid".into()) }],
         searches: vec![dq_core::table::ColumnSearch { column: "status".into(), contains: "PAI".into() }],
+        ..RowFilter::default()
     };
+    // The filter builder's conditions select the same rows, and OR joins them.
+    let cond = |op, value: &str| FilterCondition { column: "status".into(), op, value: value.into() };
+    let count = |conditions, match_any| {
+        let filter = RowFilter { conditions, match_any, ..RowFilter::default() };
+        let (s, object) = (&s, &object);
+        async move { ops::row_count(&**s, object, &filter).await.unwrap().count }
+    };
+    assert_eq!(
+        count(vec![cond(FilterOp::Eq, "paid")], false).await,
+        ops::row_count(&*s, &object, &rows).await.unwrap().count
+    );
+    assert_eq!(
+        count(vec![cond(FilterOp::Eq, "paid"), cond(FilterOp::Ne, "paid")], true).await,
+        count(vec![cond(FilterOp::IsNotNull, "")], false).await
+    );
+    assert_eq!(
+        count(vec![cond(FilterOp::In, "paid, nope")], false).await,
+        count(vec![cond(FilterOp::StartsWith, "pai")], false).await
+    );
     let page =
         ops::table_page(&*s, &TablePageRequest { object: object.clone(), rows, sort: None, offset: 0, limit: 5 })
             .await

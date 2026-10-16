@@ -1,7 +1,7 @@
 {
   "name": "dataquery",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "DataQuery — a fast, safe desktop database client.",
   "license": "MIT OR Apache-2.0",
