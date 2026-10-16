@@ -78,6 +78,28 @@ impl Lexer<'_> {
         let (ch, sf, duck) =
             (flavor == SqlFlavor::Clickhouse, flavor == SqlFlavor::Snowflake, flavor == SqlFlavor::Duckdb);
         let (mongo, partiql) = (flavor == SqlFlavor::Mongodb, flavor == SqlFlavor::Partiql);
+        if flavor == SqlFlavor::Sqlite {
+            // `?`, `?NNN`, `:name`, `@name` and `$name` parameters; `` `name` `` and `[name]` identifiers.
+            match c {
+                b'?' => {
+                    self.pos += 1;
+                    while self.peek(0).is_some_and(|c| c.is_ascii_digit()) {
+                        self.pos += 1;
+                    }
+                    return TokenKind::Param;
+                }
+                b':' | b'@' | b'$' if self.peek(1).is_some_and(is_word_continue) => {
+                    self.pos += 1;
+                    while self.peek(0).is_some_and(is_word_continue) {
+                        self.pos += 1;
+                    }
+                    return TokenKind::Param;
+                }
+                b'`' => return self.quoted(b'`', false).ident(),
+                b'[' => return self.quoted_until(b']'),
+                _ => {}
+            }
+        }
         if flavor == SqlFlavor::QueryDsl {
             // JSON strings; `#` and `//` comment lines.
             let line_start = self.src[..self.pos].trim_end_matches([' ', '\t']).ends_with('\n')

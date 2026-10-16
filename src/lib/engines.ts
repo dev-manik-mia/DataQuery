@@ -17,6 +17,8 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'clickhouse';
     case 'duckdb':
       return 'duckdb';
+    case 'sqlite':
+      return 'sqlite';
     case 'snowflake':
       return 'snowflake';
     case 'mongodb':
@@ -39,9 +41,9 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
   }
 }
 
-/** Databases contain schemas (all but MySQL / MariaDB, where the database is the schema). */
+/** Databases contain schemas (not MySQL / MariaDB, where the database is the schema, nor SQLite, whose attached databases are its schemas). */
 export function hasSchemas(flavor: SqlFlavor): boolean {
-  return !['mysql', 'clickhouse', 'mongodb', 'partiql', 'redis', 'cql', 'query_dsl', 'cypher'].includes(flavor);
+  return !['mysql', 'sqlite', 'clickhouse', 'mongodb', 'partiql', 'redis', 'cql', 'query_dsl', 'cypher'].includes(flavor);
 }
 
 /** The schema new objects land in when none is named; Oracle uses the user's own schema. */

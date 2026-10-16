@@ -18,6 +18,7 @@ impl Registry {
             (Engine::Oracle, Arc::new(dq_oracle::OracleAdapter)),
             (Engine::Clickhouse, Arc::new(dq_clickhouse::ClickhouseAdapter)),
             (Engine::Duckdb, Arc::new(dq_duckdb::DuckdbAdapter)),
+            (Engine::Sqlite, Arc::new(dq_sqlite::SqliteAdapter)),
             (Engine::Snowflake, Arc::new(dq_snowflake::SnowflakeAdapter)),
             (Engine::Mongodb, Arc::new(dq_mongodb::MongodbAdapter)),
             (Engine::Dynamodb, Arc::new(dq_dynamodb::DynamodbAdapter)),

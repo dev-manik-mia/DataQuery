@@ -64,6 +64,7 @@ impl ExplainDialect {
             | SqlFlavor::Oracle
             | SqlFlavor::Clickhouse
             | SqlFlavor::Duckdb
+            | SqlFlavor::Sqlite
             | SqlFlavor::Snowflake
             | SqlFlavor::Mongodb
             | SqlFlavor::Partiql

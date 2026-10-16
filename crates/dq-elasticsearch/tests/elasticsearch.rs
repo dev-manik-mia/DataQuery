@@ -257,10 +257,38 @@ async fn documents_view_reads() -> DbResult<()> {
     assert_eq!((count.count, count.exact), (2, true));
     let indexes = store.indexes(&index.object()).await?;
     assert!(indexes[0].keys.contains("shards"), "{:?}", indexes[0]);
-    assert!(store.insert(&index.object(), "{}").await.is_err());
+    assert_eq!(store.insert(&index.object(), "[1]").await.unwrap_err().kind, ErrorKind::InvalidInput);
     let statement = store.find_statement(&req)?;
     assert!(statement.starts_with(&format!("POST /{}/_search", index.name)));
     assert_eq!(s.execute(&statement, &[], OPTS).await?.rows.len(), 1);
+    index.drop().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn documents_view_edits() -> DbResult<()> {
+    let cfg = require_es!();
+    let s = session(&cfg).await;
+    let index = seeded(&s).await?;
+    let store = s.documents().unwrap();
+    let count = |filter: &'static str| {
+        let (store, object) = (s.documents().unwrap(), index.object());
+        async move { store.count(&object, filter).await.unwrap().unwrap().count }
+    };
+    let key = store.insert(&index.object(), r#"{ "n": 40, "s": "new" }"#).await?;
+    assert!(key.starts_with(&format!("{}/", index.name)), "{key}");
+    assert_eq!(count("s:new").await, 1, "the insert is searchable at once");
+    store.replace(&index.object(), &key, r#"{ "n": 41, "s": "changed" }"#).await?;
+    assert_eq!((count("s:new").await, count("s:changed").await), (0, 1));
+    let mut req = FindRequest::new(index.object(), 10);
+    req.filter = "s:changed".into();
+    assert_eq!(store.find(&req).await?.documents[0].key, key, "find returns the same key edits use");
+    store.delete(&index.object(), &key).await?;
+    assert_eq!(count("s:changed").await, 0);
+    assert_eq!(store.replace(&index.object(), &key, "{").await.unwrap_err().kind, ErrorKind::Syntax);
+    let ro = session(&ConnConfig { read_only: true, ..cfg }).await;
+    let err = ro.documents().unwrap().delete(&index.object(), &key).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Permission);
     index.drop().await;
     Ok(())
 }

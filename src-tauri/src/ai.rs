@@ -154,6 +154,7 @@ pub fn prepare(
         SqlFlavor::Oracle => "Oracle SQL",
         SqlFlavor::Clickhouse => "ClickHouse SQL",
         SqlFlavor::Duckdb => "DuckDB SQL",
+        SqlFlavor::Sqlite => "SQLite",
         SqlFlavor::Snowflake => "Snowflake SQL",
         SqlFlavor::Mongodb => "MongoDB shell (mongosh) syntax, e.g. db.orders.find({ … })",
         SqlFlavor::Partiql => "DynamoDB PartiQL",

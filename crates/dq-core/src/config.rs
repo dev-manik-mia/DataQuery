@@ -455,15 +455,45 @@ pub struct ParsedUrl {
     pub name_suggestion: String,
 }
 
+/// `duckdb:///absolute/path.duckdb`, `sqlite:///absolute/path.db` (or `sqlite3://`)
+/// and `…://:memory:`. `None` for other schemes. Read by hand: `:memory:` is no URL authority.
+fn parse_file_url(input: &str) -> DbResult<Option<ParsedUrl>> {
+    let Some((scheme, rest)) = input.split_once("://") else { return Ok(None) };
+    let engine = match scheme.to_ascii_lowercase().as_str() {
+        "duckdb" => Engine::Duckdb,
+        "sqlite" | "sqlite3" => Engine::Sqlite,
+        _ => return Ok(None),
+    };
+    let path = url::form_urlencoded::parse(format!("v={}", rest.replace('+', "%2B")).as_bytes())
+        .next()
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default();
+    let config = ConnConfig {
+        engine,
+        host: String::new(),
+        port: 0,
+        database: path.clone(),
+        username: String::new(),
+        ..ConnConfig::default()
+    };
+    config.validate()?;
+    let name_suggestion =
+        std::path::Path::new(&path).file_stem().map_or_else(|| path.clone(), |s| s.to_string_lossy().into_owned());
+    Ok(Some(ParsedUrl { config, password: None, name_suggestion }))
+}
+
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
-/// `snowflake://`, `duckdb://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
+/// `snowflake://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
 /// `valkeys://`, `dragonfly://` and `dragonflys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
-/// `DuckDB` it is the file; for Redis it is the database number.
+/// `DuckDB` and `SQLite` it is the file; for Redis it is the database number.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     // Several hosts are not a valid URL authority, so MongoDB URLs are read by hand.
     if input.trim().starts_with("mongodb://") || input.trim().starts_with("mongodb+srv://") {
         return parse_mongo_url(input.trim());
+    }
+    if let Some(parsed) = parse_file_url(input.trim())? {
+        return Ok(parsed);
     }
     let url = Url::parse(input.trim()).map_err(|_| DbError::invalid("This is not a valid connection URL."))?;
     let engine = match url.scheme() {
@@ -479,27 +509,6 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "neo4j" | "neo4j+s" | "neo4j+ssc" | "bolt" | "bolt+s" | "bolt+ssc" => Engine::Neo4j,
         "valkey" | "valkeys" => Engine::Valkey,
         "dragonfly" | "dragonflys" => Engine::Dragonfly,
-        "duckdb" => {
-            // `duckdb:///absolute/path.duckdb` or `duckdb://:memory:`
-            let path = input.trim().trim_start_matches("duckdb://");
-            let path = url::form_urlencoded::parse(format!("v={path}").as_bytes())
-                .next()
-                .map(|(_, v)| v.into_owned())
-                .unwrap_or_default();
-            let config = ConnConfig {
-                engine: Engine::Duckdb,
-                host: String::new(),
-                port: 0,
-                database: path.clone(),
-                username: String::new(),
-                ..ConnConfig::default()
-            };
-            config.validate()?;
-            let name_suggestion = std::path::Path::new(&path)
-                .file_stem()
-                .map_or_else(|| path.clone(), |s| s.to_string_lossy().into_owned());
-            return Ok(ParsedUrl { config, password: None, name_suggestion });
-        }
         other => {
             return Err(DbError::unsupported(format!("Unsupported URL scheme `{other}`.")));
         }
@@ -770,6 +779,12 @@ mod tests {
             (p.config.engine, p.config.database.as_str(), p.name_suggestion.as_str()),
             (Engine::Duckdb, "/tmp/sales.duckdb", "sales")
         );
+        let p = parse_connection_url("sqlite:///Users/ana/My%20Data/app.db").unwrap();
+        assert_eq!(
+            (p.config.engine, p.config.database.as_str(), p.name_suggestion.as_str()),
+            (Engine::Sqlite, "/Users/ana/My Data/app.db", "app")
+        );
+        assert_eq!(parse_connection_url("sqlite3://:memory:").unwrap().config.database, ":memory:");
     }
 
     #[test]

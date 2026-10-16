@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::error::{DbError, DbResult};
+use crate::error::{DbError, DbResult, ErrorKind};
 use crate::node::{NodeKind, ObjectRef};
 use crate::schema::{ColumnInfo, ConstraintKind, TableStructure};
 use crate::sql::Dialect;
@@ -324,15 +324,28 @@ pub fn diff(
         plan.drops.push(SchemaChange::DropTable { table: target_container.table(name), cascade: false });
     }
 
+    // A change the engine cannot make (SQLite altering a column, …) becomes a
+    // warning; the rest of the plan still applies.
     let mut statements = Vec::new();
-    for change in plan.drops.iter().chain(&plan.creates) {
-        statements.extend(ddl::statements(d, change, None)?);
-    }
-    for (change, structure) in &plan.alters {
-        statements.extend(ddl::statements(d, change, structure.as_ref())?);
-    }
-    for change in &plan.late {
-        statements.extend(ddl::statements(d, change, None)?);
+    let changes = plan
+        .drops
+        .iter()
+        .chain(&plan.creates)
+        .map(|c| (c, None))
+        .chain(plan.alters.iter().map(|(c, s)| (c, s.as_ref())))
+        .chain(plan.late.iter().map(|c| (c, None)));
+    for (change, structure) in changes {
+        match ddl::statements(d, change, structure) {
+            Ok(sql) => statements.extend(sql),
+            Err(e) if e.kind == ErrorKind::Unsupported => {
+                out.warnings.push(format!(
+                    "{}: {} Change it manually.",
+                    change.table().name,
+                    e.message.trim_end_matches('.')
+                ));
+            }
+            Err(e) => return Err(e),
+        }
     }
     out.sql = if statements.is_empty() { String::new() } else { ddl::preview(&statements) };
     Ok(out)

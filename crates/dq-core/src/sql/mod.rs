@@ -20,4 +20,5 @@ pub use analyze::{
 pub use dialect::{
     ClickhouseDialect, CqlDialect, CypherDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect,
     PartiqlDialect, PostgresDialect, QueryDslDialect, RedisDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
+    SqliteDialect,
 };

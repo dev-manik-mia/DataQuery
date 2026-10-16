@@ -788,6 +788,23 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_table_queries() {
+        use crate::sql::dialect::SqliteDialect;
+        let s = TableStructure { object: ObjectRef::new(NodeKind::Table, "main", None, "orders"), ..orders() };
+        let rows = RowFilter {
+            matches: vec![cv("id", Some("7"))],
+            searches: vec![crate::table::ColumnSearch { column: "geo".into(), contains: "a_b".into() }],
+            ..RowFilter::default()
+        };
+        let q = count_query(&SqliteDialect, &s, &rows).unwrap();
+        assert_eq!(
+            q.sql,
+            r#"SELECT count(*) FROM "main"."orders" WHERE "id" = ?1 AND CAST("geo" AS TEXT) LIKE ?2 ESCAPE '\'"#
+        );
+        assert!(!SqliteDialect.comparable("BLOB") && SqliteDialect.comparable("INTEGER"));
+    }
+
+    #[test]
     fn comparable_types() {
         assert!(PostgresDialect.comparable("numeric(12,2)") && PostgresDialect.comparable("text[]"));
         assert!(!PostgresDialect.comparable("json") && !PostgresDialect.comparable("point"));

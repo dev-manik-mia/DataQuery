@@ -373,7 +373,7 @@ impl EsSession {
         let label = if index == target { format!("_id: {id_text}") } else { format!("_id: {id_text} · {index}") };
         let source = hit["_source"].as_object().cloned().unwrap_or_default();
         Document::new(
-            id.to_owned(),
+            doc_key(index, id),
             label,
             None,
             serde_json::to_string_pretty(&Value::Object(source.clone())).unwrap_or_default(),
@@ -651,8 +651,36 @@ impl Session for EsSession {
     async fn close(&self) {}
 }
 
-fn read_only_documents() -> DbError {
-    DbError::unsupported("Edit documents with requests in the editor (e.g. POST /index/_update/<id>).")
+/// A document's key names its concrete index, so edits through an alias or a
+/// pattern reach the right one. Index names never contain `/`.
+fn doc_key(index: &str, id: &str) -> String {
+    format!("{index}/{id}")
+}
+
+fn parse_key(key: &str) -> DbResult<(&str, &str)> {
+    key.split_once('/')
+        .filter(|(i, d)| !i.is_empty() && !d.is_empty())
+        .ok_or_else(|| DbError::invalid("Unknown document."))
+}
+
+/// The editor text as a JSON object, the only form `_source` takes.
+fn source_body(text: &str) -> DbResult<String> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => Ok(Value::Object(map).to_string()),
+        Ok(_) => Err(DbError::invalid("A document is a JSON object: { \"field\": value }.")),
+        Err(e) => Err(DbError::new(ErrorKind::Syntax, format!("The document is not valid JSON: {e}"))),
+    }
+}
+
+impl EsSession {
+    /// Writes one document and waits until searches see the change.
+    async fn write_document(&self, method: &str, path: &str, body: &str) -> DbResult<Value> {
+        if self.info.read_only {
+            return Err(read_only_error());
+        }
+        let path = format!("{path}?refresh=wait_for");
+        Ok(self.client.call(&Call { method, path: &path, body, ..Call::default() }).await?.json().clone())
+    }
 }
 
 #[async_trait]
@@ -691,16 +719,25 @@ impl DocumentStore for EsSession {
         catalog::index_summaries(&self.client, &object.name).await
     }
 
-    async fn insert(&self, _object: &ObjectRef, _text: &str) -> DbResult<String> {
-        Err(read_only_documents())
+    /// `POST /<index>/_doc`: Elasticsearch picks the `_id`.
+    async fn insert(&self, object: &ObjectRef, text: &str) -> DbResult<String> {
+        let body = source_body(text)?;
+        let response = self.write_document("POST", &format!("/{}/_doc", segment(&object.name)), &body).await?;
+        let (index, id) =
+            (response["_index"].as_str().unwrap_or(&object.name), response["_id"].as_str().unwrap_or_default());
+        Ok(doc_key(index, id))
     }
 
-    async fn replace(&self, _object: &ObjectRef, _key: &str, _text: &str) -> DbResult<()> {
-        Err(read_only_documents())
+    /// `PUT /<index>/_doc/<id>` replaces the whole `_source`.
+    async fn replace(&self, _object: &ObjectRef, key: &str, text: &str) -> DbResult<()> {
+        let (index, id) = parse_key(key)?;
+        let body = source_body(text)?;
+        self.write_document("PUT", &format!("/{}/_doc/{}", segment(index), segment(id)), &body).await.map(|_| ())
     }
 
-    async fn delete(&self, _object: &ObjectRef, _key: &str) -> DbResult<()> {
-        Err(read_only_documents())
+    async fn delete(&self, _object: &ObjectRef, key: &str) -> DbResult<()> {
+        let (index, id) = parse_key(key)?;
+        self.write_document("DELETE", &format!("/{}/_doc/{}", segment(index), segment(id)), "").await.map(|_| ())
     }
 
     fn find_statement(&self, request: &FindRequest) -> DbResult<String> {

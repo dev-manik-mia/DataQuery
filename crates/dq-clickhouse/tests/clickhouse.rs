@@ -381,3 +381,55 @@ async fn explain_monitoring_and_schema_changes() {
     assert_eq!((email.data_type.as_str(), email.default.as_deref()), ("String", Some("'none'")));
     s.execute("DROP TABLE it_accounts", &[], OPTS).await.unwrap();
 }
+
+#[tokio::test]
+async fn schema_diff_round_trip() {
+    use dq_core::diff::{Container, diff};
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let run = |sql: &'static str| {
+        let s = s.clone();
+        async move { s.execute(sql, &[], OPTS).await.unwrap_or_else(|e| panic!("{sql}: {e:?}")) }
+    };
+    for sql in [
+        "DROP DATABASE IF EXISTS it_diff_a",
+        "DROP DATABASE IF EXISTS it_diff_b",
+        "CREATE DATABASE it_diff_a",
+        "CREATE DATABASE it_diff_b",
+        "CREATE TABLE it_diff_a.accounts (id UInt64, email String, note Nullable(String), qty UInt32 DEFAULT 1) ENGINE = MergeTree ORDER BY id",
+        "CREATE TABLE it_diff_a.events (day Date, kind LowCardinality(String)) ENGINE = MergeTree ORDER BY (day, kind)",
+        "CREATE TABLE it_diff_b.accounts (id UInt64, email String, legacy String) ENGINE = MergeTree ORDER BY id",
+        "CREATE TABLE it_diff_b.stale (id UInt64) ENGINE = MergeTree ORDER BY id",
+    ] {
+        run(sql).await;
+    }
+    let snapshot = |db: &'static str| {
+        let s = s.clone();
+        async move {
+            let model = s.schema_model(db, None).await.unwrap();
+            let mut tables = Vec::new();
+            for t in model.tables.into_iter().filter(|t| t.object.kind == NodeKind::Table) {
+                tables.push(ops::structure(&*s, &t.object).await.unwrap());
+            }
+            tables
+        }
+    };
+    let a = Container { database: "it_diff_a".into(), schema: None };
+    let b = Container { database: "it_diff_b".into(), schema: None };
+    let plan = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    assert!(plan.sql.contains("CREATE TABLE") && plan.sql.contains("DROP TABLE"), "{}", plan.sql);
+    for statement in dq_core::sql::split_statements(&plan.sql, dq_core::sql::SqlFlavor::Clickhouse) {
+        let sql = statement.text(&plan.sql);
+        s.execute(sql, &[], OPTS).await.unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+    }
+    let again = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
+    assert!(again.sql.is_empty(), "{:#?}\n{}\n{:?}", again.items, again.sql, again.warnings);
+    let events = ops::structure(&*s, &ObjectRef::new(NodeKind::Table, "it_diff_b", None, "events")).await.unwrap();
+    assert_eq!(
+        events.columns.iter().map(|c| c.data_type.as_str()).collect::<Vec<_>>(),
+        ["Date", "LowCardinality(String)"]
+    );
+    run("DROP DATABASE it_diff_a").await;
+    run("DROP DATABASE it_diff_b").await;
+}

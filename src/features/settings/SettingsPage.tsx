@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import type { AppInfo } from '@/bindings/AppInfo';
 import type { Capabilities } from '@/bindings/Capabilities';
+import type { Engine } from '@/bindings/Engine';
 import type { KeychainStatus } from '@/bindings/KeychainStatus';
 import type { Settings } from '@/bindings/Settings';
 import type { Theme } from '@/bindings/Theme';
@@ -458,13 +459,87 @@ const CAPABILITY_COLUMNS: { key: keyof Capabilities; label: string }[] = [
   { key: 'schema_diff', label: 'Schema diff' },
 ];
 
+type CapabilityKey = keyof Capabilities;
+
+/** Capabilities still to come for an engine that otherwise ships. */
+const PLANNED: Partial<Record<Engine, CapabilityKey[]>> = {
+  snowflake: ['monitoring'],
+  cassandra: ['schema_diff'],
+  scylladb: ['schema_diff'],
+};
+
+const NO_SERVER = 'An embedded database file: there are no other sessions to watch.';
+const NO_PLANNER = 'There is no query planner to explain.';
+const SCHEMALESS = 'There is no fixed schema to compare.';
+
+/** Why a database does not offer a capability. Unlisted gaps fall back to a generic note. */
+const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>>> = {
+  clickhouse: {
+    grid_edit: 'ClickHouse has no row-level updates or unique keys that identify one row.',
+    transactions: 'ClickHouse has no multi-statement transactions.',
+  },
+  duckdb: { monitoring: NO_SERVER },
+  sqlite: { monitoring: NO_SERVER },
+  redis: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
+  valkey: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
+  dragonfly: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
+  mongodb: { schema_diff: SCHEMALESS },
+  dynamodb: {
+    explain: 'DynamoDB does not show query plans.',
+    monitoring: 'DynamoDB exposes no server sessions or running queries.',
+    schema_diff: SCHEMALESS,
+  },
+  cassandra: { transactions: 'Cassandra has no multi-statement transactions, only single-statement lightweight ones.' },
+  scylladb: { transactions: 'ScyllaDB has no multi-statement transactions, only single-statement lightweight ones.' },
+  elasticsearch: { transactions: 'Elasticsearch has no transactions.', schema_diff: 'Index mappings are not a relational schema.' },
+  neo4j: {
+    grid_edit: 'Graph results have no row identity; change data with Cypher in the editor.',
+    schema_diff: 'Graphs have no fixed schema to compare.',
+  },
+};
+
+function CapabilityCell({ engine, name, capability, supported, available, priority }: {
+  engine: Engine;
+  name: string;
+  capability: { key: CapabilityKey; label: string };
+  supported: boolean;
+  available: boolean;
+  priority: string;
+}) {
+  if (available && supported) {
+    return (
+      <span className={styles.yes} aria-label="Supported">
+        ●
+      </span>
+    );
+  }
+  if (!available) return <span className={styles.planned}>{priority === 'MVP' ? 'P0' : priority}</span>;
+  if (PLANNED[engine]?.includes(capability.key)) {
+    return (
+      <span className={styles.planned} title={`${capability.label} for ${name} is on the roadmap.`}>
+        Planned
+      </span>
+    );
+  }
+  const reason = NOT_OFFERED[engine]?.[capability.key] ?? `${name} does not offer this.`;
+  return (
+    <span className={styles.no} title={reason} aria-label={`Not offered: ${reason}`}>
+      —
+    </span>
+  );
+}
+
 /** Capability matrix (screen 15). Built-in engines report their runtime capabilities. */
 function Engines() {
   const engines = useConnections((s) => s.engines);
   return (
     <>
       <PageHead eyebrow="Settings" title="Engines" />
-      <Card title="Capabilities" flush footer="● shipped in this build · P0–P2 planned priority. Controls for unsupported capabilities are hidden for that engine.">
+      <Card
+        title="Capabilities"
+        flush
+        footer="● shipped in this build · — not offered by that database (hover for why) · Planned: on the roadmap. Controls for unsupported capabilities are hidden for that engine."
+      >
         <div className={styles.matrix}>
           <table>
             <thead>
@@ -488,13 +563,7 @@ function Engines() {
                   <td className="ink-2">{e.language}</td>
                   {CAPABILITY_COLUMNS.map((c) => (
                     <td key={c.key}>
-                      {e.available && e.capabilities[c.key] ? (
-                        <span className={styles.yes} aria-label="Supported">
-                          ●
-                        </span>
-                      ) : (
-                        <span className={e.available ? styles.no : styles.planned}>{e.available ? 'Planned' : e.priority === 'MVP' ? 'P0' : e.priority}</span>
-                      )}
+                      <CapabilityCell engine={e.engine} name={e.name} capability={c} supported={Boolean(e.capabilities[c.key])} available={e.available} priority={e.priority} />
                     </td>
                   ))}
                 </tr>
@@ -520,11 +589,12 @@ function About() {
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
         <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
-        <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon). Integration tests run against PostgreSQL 17, CockroachDB 25.2, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle 23ai Free, ClickHouse 25.8, DuckDB 1.5, MongoDB 8.0 (replica set), Redis 8, Valkey 8, Dragonfly 1.34, Cassandra 5.0, ScyllaDB 2025.1 and an OpenSSH bastion; Snowflake against the fakesnow emulator and DynamoDB against DynamoDB Local only. Oracle needs Oracle Instant Client on this computer. Windows and Linux builds compile from the same code but have not been run." />
+        <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon). Integration tests run against PostgreSQL 17, CockroachDB 25.2, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle 23ai Free, ClickHouse 25.8, DuckDB 1.5, SQLite 3, MongoDB 8.0 (replica set), Redis 8, Valkey 8, Dragonfly 1.34, Cassandra 5.0, ScyllaDB 2025.1 and an OpenSSH bastion; Snowflake against the fakesnow emulator and DynamoDB against DynamoDB Local only. Oracle needs Oracle Instant Client on this computer. Windows and Linux builds compile from the same code but have not been run." />
       </Card>
       <UpdatesCard />
       <Card title={`Release notes · ${info?.version ?? ''}`} flush>
         <ul className={styles.notes}>
+          <li>SQLite engine: database files and :memory:, attached databases, triggers, query plans, edits, import/export and schema diff. Schema diff for ClickHouse; document editing for Elasticsearch.</li>
           <li>Table view: a visual filter builder (column, operator, value; match all or any), automatic update checks with optional background install, and new connections start with SSL off.</li>
           <li>Connections: SSH tunnels with jump hosts and host-key checks, CA and client certificates, read-only profiles, keepalive/retry/idle/pool options, cloud IAM tokens, export/import without secrets.</li>
           <li>Explorer: indexes, sequences, triggers, functions and procedures; sizes; INSERT/UPDATE/DELETE templates; dependencies.</li>

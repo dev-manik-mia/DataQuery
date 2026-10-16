@@ -15,14 +15,34 @@ type Args = Record<string, unknown>;
 
 const caps = { explorer: true, query_editor: true, grid_edit: true, import_export: true, cancel: true, ddl: true, schemas: true, materialized_views: true, explain: true, monitoring: true, transactions: true, schema_diff: true };
 const none = { ...caps, explorer: false, query_editor: false, grid_edit: false, import_export: false, cancel: false, ddl: false };
+/** Capabilities each adapter lacks, as the Rust adapters report them. */
+const GAPS: Record<string, (keyof typeof caps)[]> = {
+  clickhouse: ['grid_edit', 'transactions'],
+  duckdb: ['monitoring'],
+  sqlite: ['monitoring'],
+  snowflake: ['monitoring'],
+  redis: ['explain', 'schema_diff'],
+  valkey: ['explain', 'schema_diff'],
+  dragonfly: ['explain', 'schema_diff'],
+  mongodb: ['schema_diff'],
+  dynamodb: ['explain', 'monitoring', 'schema_diff'],
+  cassandra: ['transactions', 'schema_diff'],
+  scylladb: ['transactions', 'schema_diff'],
+  elasticsearch: ['transactions', 'schema_diff'],
+  neo4j: ['grid_edit', 'schema_diff'],
+};
+
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
-  ({ engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, file_based: port === null, capabilities: available ? caps : none }) as EngineInfo;
+  ({
+    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, file_based: port === null,
+    capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])) } : none,
+  }) as EngineInfo;
 
 const ENGINES: EngineInfo[] = [
   engine('postgres', 'PostgreSQL', 'Pg', 250, 'relational', 'SQL', 5432, '5432 · SQL · v12–17', 'MVP', true),
   engine('mysql', 'MySQL', 'My', 220, 'relational', 'SQL', 3306, '3306 · SQL · v5.7–8.4', 'P0', true),
   engine('mariadb', 'MariaDB', 'Ma', 60, 'relational', 'SQL', 3306, '3306 · SQL · v10.6–11', 'P0', true),
-  engine('sqlite', 'SQLite', 'Sl', 200, 'relational', 'SQL', null, 'local file · SQL', 'P0'),
+  engine('sqlite', 'SQLite', 'Sl', 200, 'relational', 'SQL', null, 'local file · SQL', 'P0', true),
   engine('sqlserver', 'SQL Server', 'Ms', 0, 'relational', 'T-SQL', 1433, '1433 · T-SQL · 2017–2022', 'P1', true),
   engine('oracle', 'Oracle', 'Or', 15, 'relational', 'PL/SQL', 1521, '1521 · PL/SQL · 19c–23ai', 'P2', true),
   engine('cockroachdb', 'CockroachDB', 'Cr', 280, 'relational', 'SQL', 26257, '26257 · Postgres wire', 'P2', true),

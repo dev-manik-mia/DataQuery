@@ -154,7 +154,7 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             "COMMIT" | "ROLLBACK" => TxEffect::End,
             _ => TxEffect::None,
         },
-        SqlFlavor::Postgres | SqlFlavor::Mysql | SqlFlavor::Duckdb => match word(0) {
+        SqlFlavor::Postgres | SqlFlavor::Mysql | SqlFlavor::Duckdb | SqlFlavor::Sqlite => match word(0) {
             "BEGIN" | "START" => TxEffect::Begin,
             "COMMIT" | "END" | "ROLLBACK" if word(1) == "AND" && word(2) == "CHAIN" => TxEffect::Begin,
             "ROLLBACK" if word(1) == "TO" || (word(2) == "TO" && matches!(word(1), "WORK" | "TRANSACTION")) => {
@@ -289,6 +289,17 @@ impl Block {
             }
             return;
         }
+        if flavor == SqlFlavor::Sqlite {
+            // `CREATE [TEMP] TRIGGER … BEGIN stmt; …; END`: `CASE … END` nests inside the body.
+            let trigger =
+                self.head.iter().take(3).any(|w| w == "TRIGGER") && self.head.first().is_some_and(|w| w == "CREATE");
+            match word.as_str() {
+                "BEGIN" | "CASE" if trigger => self.depth += 1,
+                "END" if trigger => self.depth = self.depth.saturating_sub(1),
+                _ => {}
+            }
+            return;
+        }
         if flavor != SqlFlavor::Sqlserver {
             return;
         }
@@ -368,6 +379,7 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
         | SqlFlavor::Mysql
         | SqlFlavor::Clickhouse
         | SqlFlavor::Duckdb
+        | SqlFlavor::Sqlite
         | SqlFlavor::Snowflake
         | SqlFlavor::Mongodb
         | SqlFlavor::Partiql
@@ -692,6 +704,22 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0].text(src), "select 1");
         assert_eq!(parts[1].text(src), "select ';'");
+    }
+
+    #[test]
+    fn sqlite_triggers_and_parameters() {
+        let lite = SqlFlavor::Sqlite;
+        let src = "CREATE TRIGGER t AFTER INSERT ON a BEGIN\n  UPDATE b SET n = CASE WHEN n > 0 THEN n + 1 ELSE 1 END;\n  DELETE FROM c;\nEND;\nSELECT * FROM [my table] WHERE id = ?1 AND name = :name;\nBEGIN IMMEDIATE;";
+        let parts = split_statements(src, lite);
+        assert_eq!(parts.len(), 3, "{:?}", parts.iter().map(|p| p.text(src)).collect::<Vec<_>>());
+        assert!(parts[0].text(src).ends_with("END"));
+        assert_eq!(transaction_effect(parts[2].text(src), lite), TxEffect::Begin);
+        let params: Vec<_> = tokenize(parts[1].text(src), lite)
+            .into_iter()
+            .filter(|t| t.kind == TokenKind::Param)
+            .map(|t| t.text(parts[1].text(src)).to_owned())
+            .collect();
+        assert_eq!(params, ["?1", ":name"]);
     }
 
     #[test]

@@ -21,6 +21,8 @@ pub enum SqlFlavor {
     Clickhouse,
     /// `DuckDB`: `PostgreSQL`-style SQL.
     Duckdb,
+    /// `SQLite`.
+    Sqlite,
     /// Snowflake SQL and Snowflake Scripting.
     Snowflake,
     /// `MongoDB` shell statements: `db.orders.find({ … })`, `show collections`, `use app`.
@@ -93,7 +95,8 @@ pub trait Dialect: Send + Sync {
     fn container<'a>(&self, object: &'a ObjectRef) -> Option<&'a str> {
         match self.flavor() {
             // CQL keyspaces are the databases of the explorer.
-            SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb | SqlFlavor::Cql => {
+            // SQLite's schemas are its attached databases (`main`, `temp`, …).
+            SqlFlavor::Mysql | SqlFlavor::Clickhouse | SqlFlavor::Mongodb | SqlFlavor::Cql | SqlFlavor::Sqlite => {
                 Some(object.database.as_str())
             }
             SqlFlavor::Partiql | SqlFlavor::Redis | SqlFlavor::QueryDsl => None,
@@ -212,6 +215,7 @@ pub struct SqlServerDialect;
 pub struct OracleDialect;
 pub struct ClickhouseDialect;
 pub struct DuckdbDialect;
+pub struct SqliteDialect;
 pub struct SnowflakeDialect;
 pub struct MongoDialect;
 pub struct PartiqlDialect;
@@ -649,6 +653,71 @@ impl Dialect for DuckdbDialect {
 
     fn binary_literal(&self, hex: &str) -> String {
         format!("from_hex('{hex}')")
+    }
+}
+
+impl Dialect for SqliteDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Sqlite
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        PostgresDialect.quote_ident(ident)
+    }
+
+    fn needs_quotes(&self, ident: &str) -> bool {
+        PostgresDialect.needs_quotes(ident)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+
+    /// Text parameters take the column's affinity when stored or compared, so
+    /// `"7"` matches an `INTEGER` 7 without a cast.
+    fn placeholder(&self, index: usize, _column_type: &str) -> String {
+        format!("?{index}")
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        format!("CAST({quoted_column} AS TEXT)")
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        // Any stored value compares with `=`; BLOBs never equal a text parameter.
+        !base_type(data_type).contains("blob")
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        // `LIKE` ignores ASCII case in SQLite.
+        format!("CAST({quoted_column} AS TEXT) LIKE {placeholder} ESCAPE '\\'")
+    }
+
+    fn template_placeholder(&self, n: usize) -> String {
+        format!("?{n}")
+    }
+
+    fn begin_transaction(&self) -> &'static str {
+        "BEGIN"
+    }
+
+    /// An `INTEGER PRIMARY KEY` numbers itself, so it needs no clause; the DDL
+    /// builder refuses identity on any other column.
+    fn identity_clause(&self) -> Option<&'static str> {
+        Some("")
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("X'{hex}'")
+    }
+
+    fn bool_literal(&self, value: bool) -> &'static str {
+        if value { "1" } else { "0" }
+    }
+
+    /// `SQLITE_MAX_VARIABLE_NUMBER` since 3.32.
+    fn max_params(&self) -> usize {
+        32_766
     }
 }
 
@@ -1176,6 +1245,7 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Oracle => &OracleDialect,
         SqlFlavor::Clickhouse => &ClickhouseDialect,
         SqlFlavor::Duckdb => &DuckdbDialect,
+        SqlFlavor::Sqlite => &SqliteDialect,
         SqlFlavor::Snowflake => &SnowflakeDialect,
         SqlFlavor::Mongodb => &MongoDialect,
         SqlFlavor::Partiql => &PartiqlDialect,

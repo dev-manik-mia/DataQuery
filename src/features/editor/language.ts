@@ -1,6 +1,6 @@
 import { snippetCompletion, type Completion, type CompletionSource } from '@codemirror/autocomplete';
 import { javascript } from '@codemirror/lang-javascript';
-import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLDialect, StandardSQL, sql, type SQLNamespace } from '@codemirror/lang-sql';
+import { MSSQL, MySQL, PLSQL, PostgreSQL, SQLDialect, SQLite, StandardSQL, sql, type SQLNamespace } from '@codemirror/lang-sql';
 import { StreamLanguage } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 
@@ -36,6 +36,7 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   // Backtick identifiers, like MySQL.
   clickhouse: MySQL,
   duckdb: PostgreSQL,
+  sqlite: SQLite,
   snowflake: StandardSQL,
   // Not SQL: MongoDB uses the JavaScript mode below.
   mongodb: StandardSQL,

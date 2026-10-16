@@ -162,6 +162,7 @@ crates/
   dq-oracle     Oracle adapter (rust-oracle / ODPI-C + Oracle Instant Client).
   dq-clickhouse ClickHouse adapter (HTTP interface via reqwest, server sessions, KILL QUERY cancel).
   dq-duckdb     DuckDB adapter (bundled engine, local files, interrupt-based cancel).
+  dq-sqlite     SQLite adapter (rusqlite, bundled): local files, ATTACH, triggers, interrupt-based cancel.
   dq-snowflake  Snowflake adapter (own REST client, Arrow results, abort-based cancel).
   dq-mongodb    MongoDB adapter (official driver): mongosh-style statements, documents, killOp cancel.
   dq-dynamodb   DynamoDB adapter (own SigV4 client): PartiQL, documents, conditional writes.

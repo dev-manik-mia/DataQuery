@@ -2,8 +2,8 @@
 //!
 //! The explorer shows the cluster as the database, with its indices, data
 //! streams and aliases. The editor runs requests in Kibana Dev Tools form
-//! (`GET /orders/_search` followed by a JSON body). Indices open read-only in
-//! the Documents view; documents change through requests in the editor.
+//! (`GET /orders/_search` followed by a JSON body). Indices open in the
+//! Documents view, where documents can be added, replaced and deleted.
 
 mod catalog;
 pub mod client;
@@ -29,7 +29,7 @@ impl ElasticsearchAdapter {
     pub const CAPABILITIES: Capabilities = Capabilities {
         explorer: true,
         query_editor: true,
-        grid_edit: false,
+        grid_edit: true,
         import_export: true,
         cancel: true,
         ddl: false,

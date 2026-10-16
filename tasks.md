@@ -240,6 +240,15 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T22.6 New connections default to SSL mode `disable` (Snowflake keeps `verify-full`); any mode can still be chosen.
 - [x] T22.7 Visual filter builder in the table view: column · operator (=, ≠, >, ≥, <, ≤, contains, does not contain, starts with, ends with, in, is NULL, is not NULL) · value rows joined with AND or OR; values are parameters (`RowFilter.conditions`, `match_any`); applies to paging, row counts and exports. Unit tests (builder SQL, helpers) and integration tests on PostgreSQL and MySQL.
 
+## 23. Engine: SQLite; remaining capabilities
+
+- [x] T23.1 `SqlFlavor::Sqlite` + `SqliteDialect`: `"…"`/`` `…` ``/`[…]` identifiers, `?`, `?N`, `:name`, `@name`, `$name` parameters, `CREATE TRIGGER … BEGIN … END` kept as one statement, `BEGIN [DEFERRED|IMMEDIATE|EXCLUSIVE]`/`END`/savepoints; text parameters rely on column affinity; `LIKE … ESCAPE '\'` searches.
+- [x] T23.2 SQLite DDL: rename table/column, add/drop column, `CREATE [UNIQUE] INDEX "db"."name" ON "table"`, unique constraints as unique indexes, identity only as a lone `INTEGER PRIMARY KEY`; altering columns, adding foreign keys or checks report that SQLite cannot (also as schema-diff warnings, which no longer abort the whole diff for any engine).
+- [x] T23.3 Adapter `dq-sqlite` (rusqlite, bundled): files and shared-cache `:memory:`, read-only files (`SQLITE_OPEN_READ_ONLY` + `query_only`), foreign keys enforced, busy timeout; query thread with interrupt-based cancel/timeout and resumable results; explorer databases (`main`, attached; `ATTACH`/`DETACH` mirrored to the catalog and edit connections) → tables/views → indexes/triggers; structure from `pragma_table_xinfo`/`index_list`/`foreign_key_list` (generated columns, rowid identity, unique keys); DDL from `sqlite_master`; dependencies; schema model; `EXPLAIN QUERY PLAN` tree; `sqlite:///path` URLs.
+- [x] T23.4 Schema diff for ClickHouse (create/drop tables, add/drop columns; round trip tested on ClickHouse 25.8).
+- [x] T23.5 Elasticsearch Documents view edits: insert (`POST _doc`), replace (`PUT _doc/<id>`), delete, each `refresh=wait_for`; document keys carry the concrete index; read-only profiles refuse.
+- [x] T23.6 Capability matrix: "—" with the reason for what the database itself does not offer; "Planned" only for Snowflake monitoring (needs a real account to verify) and Cassandra/ScyllaDB schema diff (composite partition keys and clustering order need CQL-specific create statements).
+
 ---
 
 ## Verification

@@ -335,6 +335,11 @@ fn alter_column(
         SqlFlavor::Cql => {
             return Err(DbError::unsupported("Cassandra cannot change a column's type, nullability or default."));
         }
+        SqlFlavor::Sqlite => {
+            return Err(DbError::unsupported(
+                "SQLite cannot change a column's type, nullability or default. Create a new table and copy the rows.",
+            ));
+        }
         SqlFlavor::Postgres => {
             let mut parts = Vec::new();
             if let Some(t) = data_type {
@@ -468,6 +473,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
     {
         return Ok(statements);
     }
+    if flavor == SqlFlavor::Sqlite
+        && let Some(statements) = sqlite_statements(d, change)?
+    {
+        return Ok(statements);
+    }
     let table = d.quoted_name(change.table());
     let alter = |body: String| format!("ALTER TABLE {table} {body}");
     // sp_rename takes the current name as a string and the new name unquoted.
@@ -510,7 +520,7 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
         SchemaChange::RenameTable { table: t, new_name } => {
             name(new_name, "The new name")?;
             match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Oracle | SqlFlavor::Duckdb => {
+                SqlFlavor::Postgres | SqlFlavor::Oracle | SqlFlavor::Duckdb | SqlFlavor::Sqlite => {
                     vec![alter(format!("RENAME TO {}", d.quote_ident(new_name)))]
                 }
                 // An unqualified new name would move the table to the current schema.
@@ -542,6 +552,7 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 | SqlFlavor::Mysql
                 | SqlFlavor::Clickhouse
                 | SqlFlavor::Duckdb
+                | SqlFlavor::Sqlite
                 | SqlFlavor::Snowflake
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
@@ -603,7 +614,11 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
         SchemaChange::DropIndex { table: t, name: n } => {
             name(n, "The index name")?;
             match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Oracle | SqlFlavor::Duckdb | SqlFlavor::Snowflake => {
+                SqlFlavor::Postgres
+                | SqlFlavor::Oracle
+                | SqlFlavor::Duckdb
+                | SqlFlavor::Sqlite
+                | SqlFlavor::Snowflake => {
                     let index = ObjectRef { name: n.clone(), ..t.clone() };
                     vec![format!("DROP INDEX {}", d.quoted_name(&index))]
                 }
@@ -661,6 +676,61 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 _ => format!("DROP CONSTRAINT {q}"),
             })]
         }
+    })
+}
+
+/// `SQLite` spellings, or an error for what its `ALTER TABLE` cannot do. `None`
+/// falls through to the shared SQL.
+fn sqlite_statements(d: &dyn Dialect, change: &SchemaChange) -> DbResult<Option<Vec<String>>> {
+    // The index name carries the schema; the table name must not.
+    let index = |n: &str, unique: bool, columns: Vec<String>| {
+        let target = ObjectRef { name: n.to_owned(), ..change.table().clone() };
+        format!(
+            "CREATE {}INDEX {} ON {} ({})",
+            if unique { "UNIQUE " } else { "" },
+            d.quoted_name(&target),
+            d.quote_ident(&change.table().name),
+            columns.join(", ")
+        )
+    };
+    let only_rowid =
+        || DbError::unsupported("In SQLite only a single INTEGER PRIMARY KEY column numbers itself (identity).");
+    Ok(match change {
+        SchemaChange::CreateTable { columns, primary_key, .. } => {
+            for c in columns.iter().filter(|c| c.identity) {
+                if !c.data_type.trim().eq_ignore_ascii_case("integer") || primary_key.as_slice() != [c.name.clone()] {
+                    return Err(only_rowid());
+                }
+            }
+            None
+        }
+        SchemaChange::AddColumn { column, .. } if column.identity => return Err(only_rowid()),
+        SchemaChange::CreateIndex { name: n, columns, unique, .. } => {
+            name(n, "The index name")?;
+            if columns.is_empty() {
+                return Err(DbError::invalid("Choose at least one column."));
+            }
+            let cols = columns
+                .iter()
+                .map(|c| {
+                    name(&c.name, "Column names")?;
+                    Ok(format!("{}{}", d.quote_ident(&c.name), if c.descending { " DESC" } else { "" }))
+                })
+                .collect::<DbResult<Vec<_>>>()?;
+            Some(vec![index(n, *unique, cols)])
+        }
+        // A unique index enforces the same rule as a unique constraint.
+        SchemaChange::AddUnique { name: n, columns, .. } => {
+            name(n, "The constraint name")?;
+            column_list(d, columns)?;
+            Some(vec![index(n, true, columns.iter().map(|c| d.quote_ident(c)).collect())])
+        }
+        SchemaChange::AddForeignKey { .. } | SchemaChange::AddCheck { .. } | SchemaChange::DropConstraint { .. } => {
+            return Err(DbError::unsupported(
+                "SQLite only adds or removes foreign keys and checks when a table is created. Create a new table and copy the rows.",
+            ));
+        }
+        _ => None,
     })
 }
 
@@ -765,6 +835,45 @@ mod tests {
             primary_key: vec!["id".into()],
         };
         assert!(statements(&MysqlDialect, &my, None).unwrap()[0].contains("`id` int unsigned AUTO_INCREMENT"));
+    }
+
+    #[test]
+    fn sqlite_changes() {
+        use crate::sql::dialect::SqliteDialect;
+        let t = ObjectRef::new(NodeKind::Table, "main", None, "orders");
+        let index = SchemaChange::CreateIndex {
+            table: t.clone(),
+            name: "by_status".into(),
+            columns: vec![IndexColumn { name: "status".into(), descending: true }],
+            unique: false,
+        };
+        assert_eq!(
+            statements(&SqliteDialect, &index, None).unwrap(),
+            [r#"CREATE INDEX "main"."by_status" ON "orders" ("status" DESC)"#]
+        );
+        let unique =
+            SchemaChange::AddUnique { table: t.clone(), name: "u".into(), columns: vec!["a".into(), "b".into()] };
+        assert_eq!(
+            statements(&SqliteDialect, &unique, None).unwrap(),
+            [r#"CREATE UNIQUE INDEX "main"."u" ON "orders" ("a", "b")"#]
+        );
+        let drop = SchemaChange::DropIndex { table: t.clone(), name: "u".into() };
+        assert_eq!(statements(&SqliteDialect, &drop, None).unwrap(), [r#"DROP INDEX "main"."u""#]);
+        let rename = SchemaChange::RenameTable { table: t.clone(), new_name: "sales".into() };
+        assert_eq!(
+            statements(&SqliteDialect, &rename, None).unwrap(),
+            [r#"ALTER TABLE "main"."orders" RENAME TO "sales""#]
+        );
+        let alter = SchemaChange::AlterColumn {
+            table: t.clone(),
+            column: "status".into(),
+            data_type: Some("text".into()),
+            nullable: None,
+            default: None,
+        };
+        assert!(statements(&SqliteDialect, &alter, None).is_err());
+        let check = SchemaChange::AddCheck { table: t, name: "c".into(), expression: "total > 0".into() };
+        assert!(statements(&SqliteDialect, &check, None).is_err());
     }
 
     #[test]

@@ -21,6 +21,7 @@ dq-sqlserver.workspace = true
 dq-oracle.workspace = true
 dq-clickhouse.workspace = true
 dq-duckdb.workspace = true
+dq-sqlite.workspace = true
 dq-snowflake.workspace = true
 dq-mongodb.workspace = true
 dq-dynamodb.workspace = true
