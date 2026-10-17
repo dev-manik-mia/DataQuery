@@ -33,8 +33,8 @@ brew install dev-manik-mia/dataquery/dataquery
 
 The cask lives in [`dev-manik-mia/homebrew-dataquery`](https://github.com/dev-manik-mia/homebrew-dataquery). After each
 release the `homebrew` job in `build.yml` regenerates `Casks/dataquery.rb` with `scripts/homebrew-cask.sh <version>`
-(DMG checksums come from the GitHub release). It needs the `HOMEBREW_TAP_TOKEN` secret: a fine-grained token with
-Contents read/write on the tap repository. The cask sets `auto_updates true`, so `brew upgrade` leaves the app to its
+(DMG checksums come from the GitHub release). It needs the `HOMEBREW_TAP_DEPLOY_KEY` secret: the private half of a
+deploy key with write access on the tap repository. The cask sets `auto_updates true`, so `brew upgrade` leaves the app to its
 own updater (`brew upgrade --greedy` still works).
 
 The matching private key was generated locally at `~/.tauri/dataquery.key` (no password) and is **not** in the
