@@ -2,8 +2,8 @@
 //! stream open between "fetch more" requests; a new request drops it.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, StatementResult};
@@ -37,9 +37,17 @@ pub struct Interrupter {
     /// Bumped per statement, so a late timeout never stops the next one.
     generation: std::sync::atomic::AtomicU64,
     timed_out: AtomicBool,
+    /// The running statement and when it started, for the monitor.
+    current: Mutex<Option<(String, Instant)>>,
 }
 
 impl Interrupter {
+    /// The running statement and how long it has run.
+    pub fn current(&self) -> Option<(String, Duration)> {
+        let current = self.current.lock().ok()?;
+        current.as_ref().map(|(sql, since)| (sql.clone(), since.elapsed()))
+    }
+
     pub fn cancel(&self) -> bool {
         if !self.running.load(Ordering::SeqCst) {
             return false;
@@ -48,7 +56,10 @@ impl Interrupter {
         true
     }
 
-    fn start(self: &Arc<Self>, timeout_secs: u32) {
+    fn start(self: &Arc<Self>, sql: &str, timeout_secs: u32) {
+        if let Ok(mut current) = self.current.lock() {
+            *current = Some((sql.to_owned(), Instant::now()));
+        }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.timed_out.store(false, Ordering::SeqCst);
         self.running.store(true, Ordering::SeqCst);
@@ -67,6 +78,9 @@ impl Interrupter {
     /// Ends the running statement; turns an interrupt from the timer into a timeout.
     fn finish<T>(&self, result: DbResult<T>, timeout_secs: u32) -> DbResult<T> {
         self.running.store(false, Ordering::SeqCst);
+        if let Ok(mut current) = self.current.lock() {
+            *current = None;
+        }
         match result {
             Err(e) if e.kind == ErrorKind::Cancelled && self.timed_out.load(Ordering::SeqCst) => Err(DbError::new(
                 ErrorKind::Timeout,
@@ -85,6 +99,7 @@ pub fn spawn(conn: Connection) -> (mpsc::Sender<Command>, Arc<Interrupter>) {
         running: AtomicBool::new(false),
         generation: std::sync::atomic::AtomicU64::new(0),
         timed_out: AtomicBool::new(false),
+        current: Mutex::new(None),
     });
     let (tx, mut rx) = mpsc::channel(8);
     let worker_interrupter = interrupter.clone();
@@ -179,7 +194,7 @@ fn execute(
             return None;
         }
     };
-    interrupter.start(options.timeout_secs);
+    interrupter.start(sql, options.timeout_secs);
     // Execute, then read batches with `step` below.
     let opened = statement
         .query_arrow(params_from_iter(params.iter()))
@@ -236,7 +251,7 @@ fn execute(
     while let Some(command) = rx.blocking_recv() {
         let Command::FetchMore { limit, reply } = command else { return Some(command) };
         let started = Instant::now();
-        interrupter.start(options.timeout_secs);
+        interrupter.start(sql, options.timeout_secs);
         let page = buffer.take(&statement, limit.clamp(1, ExecOptions::MAX_ROW_LIMIT) as usize);
         let page = interrupter.finish(page, options.timeout_secs);
         let more = page.as_ref().is_ok_and(|(_, more)| *more);

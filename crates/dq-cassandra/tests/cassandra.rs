@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dq_cassandra::CassandraAdapter;
 use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
+use dq_core::diff::{Container, DiffTable, diff};
 use dq_core::edit::{ColumnValue, RowChange};
 use dq_core::engine::Engine;
 use dq_core::node::{GROUP_TYPES, NodeKind, ObjectRef};
@@ -507,5 +508,65 @@ async fn monitoring_reads_system_tables() {
         assert_eq!(monitor.kill(1, false).await.unwrap_err().kind, ErrorKind::Unsupported);
         assert!(!f.session.cancel().await?, "nothing is running");
         Ok(())
+    });
+}
+
+/// Tables of a keyspace with their structure and key layout, as the schema diff reads them.
+async fn diff_tables(session: &dyn Session, keyspace: &str) -> DbResult<Vec<DiffTable>> {
+    let mut out = Vec::new();
+    for t in session.schema_model(keyspace, None).await?.tables {
+        out.push(DiffTable {
+            structure: ops::structure(session, &t.object).await?,
+            keys: session.key_roles(&t.object).await?,
+        });
+    }
+    Ok(out)
+}
+
+#[tokio::test]
+async fn schema_diff_recreates_keys_in_another_keyspace() {
+    each_server!(|f| {
+        let copy = format!("{}_copy", f.ks);
+        f.run(&format!(
+            "CREATE KEYSPACE {copy} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}"
+        ))
+        .await?;
+        // User-defined types are not part of the diff.
+        f.run(&format!("CREATE TYPE {copy}.location (lat double, lon double, label text)")).await?;
+        f.run(&format!("CREATE TABLE {copy}.devices (device_id text PRIMARY KEY, name int, legacy text)")).await?;
+        f.run(&format!("CREATE INDEX devices_legacy_idx ON {copy}.devices (legacy)")).await?;
+        let side = |ks: &str| Container { database: ks.into(), schema: None };
+        let outcome = async {
+            let source = diff_tables(&*f.session, &f.ks).await?;
+            let plan = diff(&CqlDialect, &source, &side(&f.ks), &diff_tables(&*f.session, &copy).await?, &side(&copy))?;
+            assert!(
+                plan.sql.contains(
+                    r#"PRIMARY KEY (("device_id", "bucket"), "ts")
+) WITH CLUSTERING ORDER BY ("ts" DESC)"#
+                ),
+                "{}",
+                plan.sql
+            );
+            assert!(
+                plan.warnings.iter().any(|w| w.starts_with("devices:") && w.contains("type")),
+                "{:?}",
+                plan.warnings
+            );
+            for statement in plan.sql.split(";\n\n").map(|s| s.trim().trim_end_matches(';')).filter(|s| !s.is_empty()) {
+                f.run(statement).await?;
+            }
+            let readings = |ks: &str| ObjectRef::new(NodeKind::Table, ks, None, "readings_by_device");
+            assert_eq!(f.session.key_roles(&readings(&copy)).await?, f.session.key_roles(&readings(&f.ks)).await?);
+            let again =
+                diff(&CqlDialect, &source, &side(&f.ks), &diff_tables(&*f.session, &copy).await?, &side(&copy))?;
+            // Only the column type CQL cannot change is left.
+            let left: Vec<_> = again.items.iter().map(|i| (i.table.as_str(), i.name.as_str())).collect();
+            assert_eq!(left, [("devices", "name")], "{}", again.sql);
+            assert!(again.sql.is_empty(), "{}", again.sql);
+            DbResult::Ok(())
+        }
+        .await;
+        let _ = f.run(&format!("DROP KEYSPACE IF EXISTS {copy}")).await;
+        outcome
     });
 }

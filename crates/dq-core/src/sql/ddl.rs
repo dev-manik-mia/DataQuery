@@ -12,7 +12,7 @@ use super::dialect::{Dialect, SqlFlavor};
 use super::lexer::{TokenKind, tokenize};
 use crate::error::{DbError, DbResult};
 use crate::node::ObjectRef;
-use crate::schema::{ColumnInfo, ConstraintKind, TableStructure};
+use crate::schema::{ColumnInfo, ConstraintKind, KeyRole, KeyRoleKind, TableStructure};
 
 /// A column in a create-table or add-column form.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -734,18 +734,71 @@ fn sqlite_statements(d: &dyn Dialect, change: &SchemaChange) -> DbResult<Option<
     })
 }
 
+/// A CQL table with its partition key, clustering columns and clustering
+/// order: `PRIMARY KEY ((a, b), c) WITH CLUSTERING ORDER BY (c DESC)`.
+/// `statics` names the static columns.
+pub fn cql_create_table(
+    d: &dyn Dialect,
+    table: &ObjectRef,
+    columns: &[ColumnDef],
+    statics: &[String],
+    keys: &[KeyRole],
+) -> DbResult<String> {
+    name(&table.name, "The table name")?;
+    if columns.is_empty() {
+        return Err(DbError::invalid("Add at least one column."));
+    }
+    let of = |role: KeyRoleKind| keys.iter().filter(move |k| k.role == role);
+    let partition: Vec<String> = of(KeyRoleKind::Partition).map(|k| k.column.clone()).collect();
+    if partition.is_empty() {
+        return Err(DbError::invalid(
+            "Cassandra tables need a primary key: its first column is the partition key, the rest are clustering columns.",
+        ));
+    }
+    let mut lines = Vec::with_capacity(columns.len() + 1);
+    for c in columns {
+        let line = column_def(d, c)?;
+        lines.push(if statics.contains(&c.name) { format!("{line} STATIC") } else { line });
+    }
+    let mut key = column_list(d, &partition)?;
+    if partition.len() > 1 {
+        key = format!("({key})");
+    }
+    let clustering: Vec<String> = of(KeyRoleKind::Clustering).map(|k| k.column.clone()).collect();
+    if !clustering.is_empty() {
+        let _ = write!(key, ", {}", column_list(d, &clustering)?);
+    }
+    lines.push(format!("PRIMARY KEY ({key})"));
+    let mut sql = format!("CREATE TABLE {} (\n  {}\n)", d.quoted_name(table), lines.join(",\n  "));
+    if of(KeyRoleKind::Clustering).any(|k| k.descending) {
+        let order: Vec<String> = of(KeyRoleKind::Clustering)
+            .map(|k| format!("{} {}", d.quote_ident(&k.column), if k.descending { "DESC" } else { "ASC" }))
+            .collect();
+        let _ = write!(sql, " WITH CLUSTERING ORDER BY ({})", order.join(", "));
+    }
+    Ok(sql)
+}
+
 /// CQL spellings, or an error for what Cassandra cannot do. `None` falls through
 /// to the shared SQL (create and drop table).
 fn cql_statements(d: &dyn Dialect, change: &SchemaChange) -> DbResult<Option<Vec<String>>> {
     let table = d.quoted_name(change.table());
     let alter = |body: String| Some(vec![format!("ALTER TABLE {table} {body}")]);
     Ok(match change {
-        SchemaChange::CreateTable { primary_key, .. } if primary_key.is_empty() => {
-            return Err(DbError::invalid(
-                "Cassandra tables need a primary key: its first column is the partition key, the rest are clustering columns.",
-            ));
+        // The first key column is the partition key, the rest are clustering columns.
+        SchemaChange::CreateTable { table: t, columns, primary_key } => {
+            let keys: Vec<KeyRole> = primary_key
+                .iter()
+                .enumerate()
+                .map(|(i, c)| KeyRole {
+                    column: c.clone(),
+                    role: if i == 0 { KeyRoleKind::Partition } else { KeyRoleKind::Clustering },
+                    descending: false,
+                })
+                .collect();
+            Some(vec![cql_create_table(d, t, columns, &[], &keys)?])
         }
-        SchemaChange::CreateTable { .. } | SchemaChange::DropTable { .. } => None,
+        SchemaChange::DropTable { .. } => None,
         SchemaChange::AddColumn { column, .. } => alter(format!("ADD {}", column_def(d, column)?)),
         SchemaChange::DropColumn { column, .. } => {
             name(column, "The column")?;
@@ -1109,6 +1162,28 @@ mod tests {
         let no_key =
             SchemaChange::CreateTable { table: t.clone(), columns: vec![col("a", "int")], primary_key: vec![] };
         assert!(statements(d, &no_key, None).is_err());
-        assert!(statements(d, &SchemaChange::RenameTable { table: t, new_name: "r2".into() }, None).is_err());
+        assert!(statements(d, &SchemaChange::RenameTable { table: t.clone(), new_name: "r2".into() }, None).is_err());
+        let simple = SchemaChange::CreateTable {
+            table: t.clone(),
+            columns: vec![col("sensor", "uuid"), col("at", "timestamp"), col("value", "double")],
+            primary_key: vec!["sensor".into(), "at".into()],
+        };
+        assert_eq!(
+            statements(d, &simple, None).unwrap(),
+            [
+                "CREATE TABLE \"telemetry\".\"readings\" (\n  \"sensor\" uuid,\n  \"at\" timestamp,\n  \"value\" double,\n  PRIMARY KEY (\"sensor\", \"at\")\n)"
+            ]
+        );
+        let key = |column: &str, role, descending| KeyRole { column: column.into(), role, descending };
+        let keys = [
+            key("sensor", KeyRoleKind::Partition, false),
+            key("day", KeyRoleKind::Partition, false),
+            key("at", KeyRoleKind::Clustering, true),
+        ];
+        let columns = [col("sensor", "uuid"), col("day", "date"), col("at", "timestamp"), col("unit", "text")];
+        assert_eq!(
+            cql_create_table(d, &t, &columns, &["unit".into()], &keys).unwrap(),
+            "CREATE TABLE \"telemetry\".\"readings\" (\n  \"sensor\" uuid,\n  \"day\" date,\n  \"at\" timestamp,\n  \"unit\" text STATIC,\n  PRIMARY KEY ((\"sensor\", \"day\"), \"at\")\n) WITH CLUSTERING ORDER BY (\"at\" DESC)"
+        );
     }
 }

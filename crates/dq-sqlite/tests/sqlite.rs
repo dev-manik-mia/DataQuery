@@ -441,7 +441,7 @@ async fn explain_and_schema_changes() {
             let model = s.schema_model(db, None).await.unwrap();
             let mut tables = Vec::new();
             for table in model.tables.into_iter().filter(|t| t.object.kind == NodeKind::Table) {
-                tables.push(ops::structure(&*s, &table.object).await.unwrap());
+                tables.push(ops::structure(&*s, &table.object).await.unwrap().into());
             }
             tables
         }

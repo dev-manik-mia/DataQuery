@@ -727,7 +727,7 @@ async fn schema_changes_and_diff() {
             let model = s.schema_model(DB, Some(schema)).await.unwrap();
             let mut tables = Vec::new();
             for table in model.tables {
-                tables.push(ops::structure(&*s, &table.object).await.unwrap());
+                tables.push(ops::structure(&*s, &table.object).await.unwrap().into());
             }
             tables
         }

@@ -1,13 +1,17 @@
 //! Schema diff between two schemas (or MySQL databases), possibly on
 //! different connections, and the migration SQL that makes the target match
 //! the source. The SQL is shown for review and only runs when the user runs it.
+//!
+//! Wide-column tables (Cassandra, `ScyllaDB`) carry their partition and
+//! clustering keys: new tables are created with that layout, and a key that
+//! differs is reported, since CQL cannot change a primary key.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::{DbError, DbResult, ErrorKind};
 use crate::node::{NodeKind, ObjectRef};
-use crate::schema::{ColumnInfo, ConstraintKind, TableStructure};
+use crate::schema::{ColumnInfo, ConstraintKind, KeyRole, KeyRoleKind, TableStructure};
 use crate::sql::Dialect;
 use crate::sql::ddl::{self, ColumnDef, DefaultChange, IndexColumn, SchemaChange};
 
@@ -41,6 +45,36 @@ pub struct SchemaDiff {
     pub sql: String,
     /// Differences that need manual SQL (e.g. expression indexes).
     pub warnings: Vec<String>,
+}
+
+/// One compared table, with its wide-column key layout (empty for other engines).
+#[derive(Debug, Clone)]
+pub struct DiffTable {
+    pub structure: TableStructure,
+    pub keys: Vec<KeyRole>,
+}
+
+impl From<TableStructure> for DiffTable {
+    fn from(structure: TableStructure) -> Self {
+        Self { structure, keys: Vec::new() }
+    }
+}
+
+impl DiffTable {
+    /// The primary key as compared between sides, e.g. `(a, b), c desc`.
+    fn key_layout(&self) -> String {
+        if self.keys.is_empty() {
+            return primary_key(&self.structure).join(", ");
+        }
+        let partition: Vec<&str> =
+            self.keys.iter().filter(|k| k.role == KeyRoleKind::Partition).map(|k| k.column.as_str()).collect();
+        let clustering = self
+            .keys
+            .iter()
+            .filter(|k| k.role == KeyRoleKind::Clustering)
+            .map(|k| format!(", {}{}", k.column, if k.descending { " desc" } else { "" }));
+        format!("({}){}", partition.join(", "), clustering.collect::<String>())
+    }
 }
 
 /// Where the compared tables live on the target side.
@@ -145,45 +179,80 @@ struct Plan {
     alters: Vec<(SchemaChange, Option<TableStructure>)>,
     creates: Vec<SchemaChange>,
     late: Vec<SchemaChange>,
+    /// Ready statements, run with the creates (wide-column tables).
+    create_sql: Vec<String>,
+}
+
+/// Adds the statements of one change; a change the engine cannot make (SQLite
+/// altering a column, …) becomes a warning so the rest of the plan still applies.
+fn push_change(
+    d: &dyn Dialect,
+    change: &SchemaChange,
+    structure: Option<&TableStructure>,
+    statements: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> DbResult<()> {
+    match ddl::statements(d, change, structure) {
+        Ok(sql) => statements.extend(sql),
+        Err(e) if e.kind == ErrorKind::Unsupported => {
+            warnings.push(format!("{}: {} Change it manually.", change.table().name, e.message.trim_end_matches('.')));
+        }
+        Err(e) => return Err(e),
+    }
+    Ok(())
 }
 
 /// Compares `source` with `target` and plans changes to the target.
 pub fn diff(
     d: &dyn Dialect,
-    source: &[TableStructure],
+    source: &[DiffTable],
     source_container: &Container,
-    target: &[TableStructure],
+    target: &[DiffTable],
     target_container: &Container,
 ) -> DbResult<SchemaDiff> {
     let mut out = SchemaDiff::default();
-    let mut plan = Plan { drops: Vec::new(), alters: Vec::new(), creates: Vec::new(), late: Vec::new() };
+    let mut plan =
+        Plan { drops: Vec::new(), alters: Vec::new(), creates: Vec::new(), late: Vec::new(), create_sql: Vec::new() };
     let item = |out: &mut SchemaDiff, table: &str, kind: &str, name: &str, change, detail: String| {
         out.items.push(DiffItem { table: table.into(), kind: kind.into(), name: name.into(), change, detail });
     };
-    let tables = |list: &[TableStructure]| -> Vec<String> {
-        list.iter().filter(|t| t.object.kind == NodeKind::Table).map(|t| t.object.name.clone()).collect()
+    let tables = |list: &[DiffTable]| -> Vec<String> {
+        list.iter().map(|t| &t.structure.object).filter(|o| o.kind == NodeKind::Table).map(|o| o.name.clone()).collect()
     };
     let (source_names, target_names) = (tables(source), tables(target));
-    let find = |list: &'_ [TableStructure], name: &str| {
-        list.iter().find(|t| t.object.name == name && t.object.kind == NodeKind::Table).cloned()
+    let find = |list: &'_ [DiffTable], name: &str| {
+        list.iter().find(|t| t.structure.object.name == name && t.structure.object.kind == NodeKind::Table).cloned()
     };
 
     for name in &source_names {
-        let s = find(source, name).ok_or_else(|| DbError::internal("source table vanished"))?;
+        let source_table = find(source, name).ok_or_else(|| DbError::internal("source table vanished"))?;
+        let s = &source_table.structure;
         let table = target_container.table(name);
-        let Some(t) = find(target, name) else {
+        let Some(target_table) = find(target, name) else {
             item(&mut out, name, "table", name, DiffChange::Added, format!("{} columns", s.columns.len()));
-            plan.creates.push(SchemaChange::CreateTable {
-                table: table.clone(),
-                columns: s.columns.iter().map(column_def).collect(),
-                primary_key: primary_key(&s),
-            });
+            let columns = s.columns.iter().map(column_def).collect::<Vec<_>>();
+            if source_table.keys.is_empty() {
+                plan.creates.push(SchemaChange::CreateTable {
+                    table: table.clone(),
+                    columns,
+                    primary_key: primary_key(s),
+                });
+            } else {
+                // Static columns are marked by the CQL catalog's column comment.
+                let statics: Vec<String> = s
+                    .columns
+                    .iter()
+                    .filter(|c| c.comment.as_deref() == Some("static"))
+                    .map(|c| c.name.clone())
+                    .collect();
+                plan.create_sql.push(ddl::cql_create_table(d, &table, &columns, &statics, &source_table.keys)?);
+            }
             for c in &s.constraints {
-                if let Some((_, change)) = constraint_change(&s, &c.name, &table, source_container, target_container) {
+                if let Some((_, change)) = constraint_change(s, &c.name, &table, source_container, target_container) {
                     plan.late.push(change);
                 }
             }
-            for i in plain_indexes(&s) {
+            for i in plain_indexes(s) {
                 if i.columns.is_empty() {
                     out.warnings.push(format!("{name}: expression index {} must be created manually.", i.name));
                 } else {
@@ -197,6 +266,20 @@ pub fn diff(
             }
             continue;
         };
+        let t = &target_table.structure;
+        let (source_key, target_key) = (source_table.key_layout(), target_table.key_layout());
+        if source_key != target_key {
+            if !target_table.keys.is_empty() {
+                // Columns of a key cannot be added or dropped on their own: compare nothing else.
+                out.warnings.push(format!(
+                    "{name}: the primary key differs ({source_key} vs {target_key}). \
+                     CQL cannot change a primary key: create a new table and copy the rows."
+                ));
+                continue;
+            }
+            out.warnings
+                .push(format!("{name}: the primary key differs ({source_key} vs {target_key}); change it manually."));
+        }
         // Columns
         for sc in &s.columns {
             match t.column(&sc.name) {
@@ -251,7 +334,7 @@ pub fn diff(
             .constraints
             .iter()
             .filter_map(|c| {
-                constraint_change(&s, &c.name, &table, source_container, target_container)
+                constraint_change(s, &c.name, &table, source_container, target_container)
                     .map(|(k, ch)| (c.name.clone(), k, ch))
             })
             .collect();
@@ -259,7 +342,7 @@ pub fn diff(
             .constraints
             .iter()
             .filter_map(|c| {
-                constraint_change(&t, &c.name, &table, target_container, target_container)
+                constraint_change(t, &c.name, &table, target_container, target_container)
                     .map(|(k, _)| (c.name.clone(), k))
             })
             .collect();
@@ -285,8 +368,8 @@ pub fn diff(
             plan.drops.insert(0, SchemaChange::DropConstraint { table: table.clone(), name: cname.clone(), kind });
         }
         // Plain indexes, matched by name.
-        for si in plain_indexes(&s) {
-            let ti = plain_indexes(&t).find(|i| i.name == si.name);
+        for si in plain_indexes(s) {
+            let ti = plain_indexes(t).find(|i| i.name == si.name);
             let same = ti.is_some_and(|ti| ti.unique == si.unique && ti.columns == si.columns);
             if same {
                 continue;
@@ -307,16 +390,9 @@ pub fn diff(
                 unique: si.unique,
             });
         }
-        for ti in plain_indexes(&t).filter(|ti| !plain_indexes(&s).any(|si| si.name == ti.name)) {
+        for ti in plain_indexes(t).filter(|ti| !plain_indexes(s).any(|si| si.name == ti.name)) {
             item(&mut out, name, "index", &ti.name, DiffChange::Removed, format!("({})", ti.columns.join(", ")));
             plan.drops.insert(0, SchemaChange::DropIndex { table: table.clone(), name: ti.name.clone() });
-        }
-        if primary_key(&s) != primary_key(&t) {
-            out.warnings.push(format!(
-                "{name}: the primary key differs ({:?} vs {:?}); change it manually.",
-                primary_key(&s),
-                primary_key(&t)
-            ));
         }
     }
     for name in target_names.iter().filter(|n| !source_names.contains(n)) {
@@ -327,25 +403,19 @@ pub fn diff(
     // A change the engine cannot make (SQLite altering a column, …) becomes a
     // warning; the rest of the plan still applies.
     let mut statements = Vec::new();
-    let changes = plan
+    let early = plan
         .drops
         .iter()
         .chain(&plan.creates)
         .map(|c| (c, None))
-        .chain(plan.alters.iter().map(|(c, s)| (c, s.as_ref())))
-        .chain(plan.late.iter().map(|c| (c, None)));
-    for (change, structure) in changes {
-        match ddl::statements(d, change, structure) {
-            Ok(sql) => statements.extend(sql),
-            Err(e) if e.kind == ErrorKind::Unsupported => {
-                out.warnings.push(format!(
-                    "{}: {} Change it manually.",
-                    change.table().name,
-                    e.message.trim_end_matches('.')
-                ));
-            }
-            Err(e) => return Err(e),
-        }
+        .chain(plan.alters.iter().map(|(c, s)| (c, s.as_ref())));
+    for (change, structure) in early {
+        push_change(d, change, structure, &mut statements, &mut out.warnings)?;
+    }
+    // Ready-made creates go before the indexes and constraints that need their tables.
+    statements.append(&mut plan.create_sql);
+    for change in &plan.late {
+        push_change(d, change, None, &mut statements, &mut out.warnings)?;
     }
     out.sql = if statements.is_empty() { String::new() } else { ddl::preview(&statements) };
     Ok(out)
@@ -399,6 +469,95 @@ mod tests {
         }
     }
 
+    fn tables(list: Vec<TableStructure>) -> Vec<DiffTable> {
+        list.into_iter().map(DiffTable::from).collect()
+    }
+
+    /// A CQL table keyed by `keys` (partition first), plus its secondary indexes.
+    fn cql_table(keyspace: &str, name: &str, columns: &[(&str, &str)], keys: Vec<KeyRole>) -> DiffTable {
+        let is_key = |c: &str| keys.iter().any(|k| k.column == c);
+        let columns = columns.iter().map(|(n, ty)| col(n, ty, !is_key(n))).collect();
+        let mut structure = table(keyspace, name, columns);
+        structure.object.schema = None;
+        structure.object.database = keyspace.into();
+        structure.indexes.clear();
+        structure.constraints.clear();
+        DiffTable { structure, keys }
+    }
+
+    #[test]
+    fn plans_cql_tables_with_their_keys() {
+        use crate::sql::dialect::CqlDialect;
+        let key = |column: &str, role, descending| KeyRole { column: column.into(), role, descending };
+        let src_c = Container { database: "prod".into(), schema: None };
+        let dst_c = Container { database: "dev".into(), schema: None };
+        let readings_keys = || {
+            vec![
+                key("sensor", KeyRoleKind::Partition, false),
+                key("day", KeyRoleKind::Partition, false),
+                key("at", KeyRoleKind::Clustering, true),
+            ]
+        };
+        let mut readings = cql_table(
+            "prod",
+            "readings",
+            &[("sensor", "uuid"), ("day", "date"), ("at", "timestamp"), ("value", "double"), ("unit", "text")],
+            readings_keys(),
+        );
+        readings.structure.columns[4].comment = Some("static".into());
+        let mut users = cql_table(
+            "prod",
+            "users",
+            &[("id", "uuid"), ("email", "text"), ("age", "int")],
+            vec![key("id", KeyRoleKind::Partition, false)],
+        );
+        users.structure.indexes.push(IndexInfo {
+            name: "users_email_idx".into(),
+            definition: String::new(),
+            unique: false,
+            primary: false,
+            columns: vec!["email".into()],
+            size_bytes: None,
+        });
+        let events = cql_table(
+            "prod",
+            "events",
+            &[("id", "uuid"), ("at", "timestamp")],
+            vec![key("id", KeyRoleKind::Partition, false)],
+        );
+        let source = vec![readings, users, events];
+        let target = vec![
+            cql_table(
+                "dev",
+                "users",
+                &[("id", "uuid"), ("email", "text"), ("age", "bigint"), ("legacy", "text")],
+                vec![key("id", KeyRoleKind::Partition, false)],
+            ),
+            cql_table(
+                "dev",
+                "events",
+                &[("id", "uuid"), ("at", "timestamp")],
+                vec![key("id", KeyRoleKind::Partition, false), key("at", KeyRoleKind::Clustering, false)],
+            ),
+        ];
+        let diff = diff(&CqlDialect, &source, &src_c, &target, &dst_c).unwrap();
+        assert!(diff.sql.contains(
+            "CREATE TABLE \"dev\".\"readings\" (\n  \"sensor\" uuid,\n  \"day\" date,\n  \"at\" timestamp,\n  \"value\" double,\n  \"unit\" text STATIC,\n  PRIMARY KEY ((\"sensor\", \"day\"), \"at\")\n) WITH CLUSTERING ORDER BY (\"at\" DESC)"
+        ), "{}", diff.sql);
+        assert!(diff.sql.contains(r#"ALTER TABLE "dev"."users" DROP "legacy""#), "{}", diff.sql);
+        assert!(diff.sql.contains(r#"CREATE INDEX "users_email_idx" ON "dev"."users" ("email")"#), "{}", diff.sql);
+        // A type change and a different key cannot be applied in CQL: warnings, no SQL.
+        assert!(diff.warnings.iter().any(|w| w.starts_with("users:") && w.contains("type")), "{:?}", diff.warnings);
+        assert!(
+            diff.warnings.iter().any(|w| w.starts_with("events: the primary key differs ((id) vs (id), at)")),
+            "{:?}",
+            diff.warnings
+        );
+        assert!(!diff.sql.contains("events"), "{}", diff.sql);
+        let same = super::diff(&CqlDialect, &target, &dst_c, &target, &dst_c).unwrap();
+        assert!(same.items.is_empty() && same.sql.is_empty() && same.warnings.is_empty());
+    }
+
     #[test]
     fn plans_creates_alters_and_drops() {
         let src_c = Container { database: "app".into(), schema: Some("public".into()) };
@@ -416,15 +575,15 @@ mod tests {
             columns: vec!["total".into()],
             size_bytes: None,
         });
-        let source = vec![orders, table("public", "customers", vec![col("id", "bigint", false)])];
-        let target = vec![
+        let source = tables(vec![orders, table("public", "customers", vec![col("id", "bigint", false)])]);
+        let target = tables(vec![
             table(
                 "staging",
                 "orders",
                 vec![col("id", "bigint", false), col("total", "numeric(12,2)", true), col("legacy", "text", true)],
             ),
             table("staging", "old_stuff", vec![col("id", "int", false)]),
-        ];
+        ]);
         let diff = diff(&PostgresDialect, &source, &src_c, &target, &dst_c).unwrap();
         let kinds: Vec<_> = diff.items.iter().map(|i| (i.kind.as_str(), i.name.as_str(), i.change)).collect();
         assert!(kinds.contains(&("column", "total", DiffChange::Changed)));

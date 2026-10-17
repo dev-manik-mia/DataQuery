@@ -32,8 +32,8 @@ pub struct DuckSession {
     info: ServerInfo,
     read_only: bool,
     worker: mpsc::Sender<Command>,
-    interrupter: Arc<Interrupter>,
-    catalog: Arc<Mutex<Connection>>,
+    pub(crate) interrupter: Arc<Interrupter>,
+    pub(crate) catalog: Arc<Mutex<Connection>>,
     writer: Arc<Mutex<Connection>>,
 }
 
@@ -60,7 +60,7 @@ fn open_database(params: &ConnectParams) -> DbResult<Connection> {
 }
 
 /// Runs `work` with a connection on a blocking thread.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     conn: &Arc<Mutex<Connection>>,
     work: impl FnOnce(&Connection) -> DbResult<T> + Send + 'static,
 ) -> DbResult<T> {
@@ -321,6 +321,10 @@ impl Session for DuckSession {
         // Rows of (explain_key, explain_value); the plan is the JSON value.
         let raw = result.rows.iter().filter_map(|r| r.last()).filter_map(Cell::to_text).collect::<Vec<_>>().join("\n");
         crate::explain::parse(&raw, analyze)
+    }
+
+    fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
+        Some(self)
     }
 
     async fn close(&self) {

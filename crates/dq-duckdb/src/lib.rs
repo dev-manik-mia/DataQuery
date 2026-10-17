@@ -7,6 +7,7 @@
 mod catalog;
 mod error;
 mod explain;
+mod monitor;
 mod session;
 pub mod values;
 mod worker;
@@ -35,7 +36,7 @@ impl DuckdbAdapter {
         schemas: true,
         materialized_views: false,
         explain: true,
-        monitoring: false,
+        monitoring: true,
         transactions: true,
         schema_diff: true,
     };

@@ -603,7 +603,8 @@ async fn schema_changes_and_diff() {
     let invoices = ops::structure(&*s, &table("IT_DIFF_INVOICES")).await.unwrap();
     assert!(invoices.column("TOTAL").is_some() && invoices.indexes.iter().any(|i| i.name == "IT_DIFF_INVOICES_QTY"));
     // A diff against an empty container plans every table, foreign keys last.
-    let structures = vec![ops::structure(&*s, &table("IT_DIFF_ACCOUNTS")).await.unwrap(), invoices];
+    let structures: Vec<dq_core::diff::DiffTable> =
+        vec![ops::structure(&*s, &table("IT_DIFF_ACCOUNTS")).await.unwrap().into(), invoices.into()];
     let here = Container { database: PDB.into(), schema: Some(SCHEMA.into()) };
     let there = Container { database: PDB.into(), schema: Some("BILLING".into()) };
     let plan = diff(s.dialect(), &structures, &here, &[], &there).unwrap();

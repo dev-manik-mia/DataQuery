@@ -202,6 +202,38 @@ async fn results_are_bounded_resumable_and_cancellable() {
 }
 
 #[tokio::test]
+async fn monitors_the_query_connection() {
+    let (_dir, _cfg, s) = seeded().await;
+    let m = s.monitor().expect("monitoring");
+    let idle = m.snapshot(5).await.unwrap();
+    assert_eq!((idle.active_queries, idle.processes.len()), (Some(0), 1));
+    assert!(!idle.processes[0].active && idle.processes[0].query.is_none());
+
+    let slow = "SELECT count(*) FROM range(1000000000) a, range(1000) b";
+    let runner = s.clone();
+    let handle = tokio::spawn(async move { runner.execute(slow, &[], OPTS).await });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let busy = m.snapshot(0).await.unwrap();
+    let p = &busy.processes[0];
+    assert_eq!((busy.active_queries, busy.long_running), (Some(1), Some(1)));
+    assert_eq!(p.query.as_deref(), Some(slow));
+    assert!(p.duration_ms.unwrap() >= 400);
+    assert_eq!(m.kill(p.pid, true).await.unwrap_err().kind, ErrorKind::Unsupported);
+    assert!(m.kill(p.pid, false).await.unwrap());
+    assert_eq!(handle.await.unwrap().unwrap_err().kind, ErrorKind::Cancelled);
+    assert!(m.snapshot(5).await.unwrap().processes[0].query.is_none());
+
+    let settings = m.server_settings(Some("THREADS")).await.unwrap();
+    assert!(settings.iter().any(|x| x.name == "threads" && x.description.is_some()), "{settings:?}");
+    s.execute("CHECKPOINT", &[], OPTS).await.unwrap();
+    let sizes = m.largest_tables("sales", 2).await.unwrap();
+    assert_eq!(sizes.len(), 2);
+    assert_eq!(sizes[0].object.name, "orders");
+    assert_eq!(sizes[0].rows, Some(1200));
+    assert!(sizes[0].total_bytes > 0);
+}
+
+#[tokio::test]
 async fn counts_transactions_and_parameters() {
     let (_dir, _cfg, s) = seeded().await;
     let r = s.execute("UPDATE orders SET notes = 'x' WHERE id <= 3", &[], OPTS).await.unwrap();
@@ -418,7 +450,7 @@ async fn explain_and_schema_changes() {
             let model = s.schema_model("sales", Some(schema)).await.unwrap();
             let mut tables = Vec::new();
             for table in model.tables {
-                tables.push(ops::structure(&*s, &table.object).await.unwrap());
+                tables.push(ops::structure(&*s, &table.object).await.unwrap().into());
             }
             tables
         }

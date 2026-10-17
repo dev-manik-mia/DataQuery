@@ -200,14 +200,15 @@ pub async fn key_roles(driver: &Driver, object: &ObjectRef) -> DbResult<Vec<KeyR
     Ok(roles(&columns(driver, object).await?))
 }
 
-/// `PRIMARY KEY ((a, b), c DESC)`.
-fn primary_key(keys: &[KeyRole]) -> String {
+/// `PRIMARY KEY ((a, b), c)`, with ` DESC` after descending clustering columns
+/// when `with_order` (for display; CQL takes the order in `WITH CLUSTERING ORDER BY`).
+fn primary_key(keys: &[KeyRole], with_order: bool) -> String {
     let partition: Vec<String> =
         keys.iter().filter(|k| k.role == KeyRoleKind::Partition).map(|k| name(&k.column)).collect();
     let clustering: Vec<String> = keys
         .iter()
         .filter(|k| k.role == KeyRoleKind::Clustering)
-        .map(|k| format!("{}{}", name(&k.column), if k.descending { " DESC" } else { "" }))
+        .map(|k| format!("{}{}", name(&k.column), if with_order && k.descending { " DESC" } else { "" }))
         .collect();
     let partition = if partition.len() == 1 { partition[0].clone() } else { format!("({})", partition.join(", ")) };
     if clustering.is_empty() {
@@ -282,7 +283,7 @@ pub async fn structure(driver: &Driver, object: &ObjectRef) -> DbResult<TableStr
         constraints: vec![ConstraintInfo {
             kind: ConstraintKind::PrimaryKey,
             name: "primary key".into(),
-            definition: primary_key(&keys),
+            definition: primary_key(&keys, true),
         }],
         indexes,
         row_identity: if view { Vec::new() } else { keys.iter().map(|k| k.column.clone()).collect() },
@@ -328,7 +329,7 @@ pub async fn ddl(driver: &Driver, object: &ObjectRef) -> DbResult<String> {
                     format!("  {} {}{}", name(&c.name), c.data_type, if c.kind == "static" { " STATIC" } else { "" })
                 })
                 .collect();
-            lines.push(format!("  {}", primary_key(&keys)));
+            lines.push(format!("  {}", primary_key(&keys, false)));
             let order: Vec<String> = keys
                 .iter()
                 .filter(|k| k.role == KeyRoleKind::Clustering)
@@ -431,9 +432,10 @@ mod tests {
             k("bucket", KeyRoleKind::Partition, false),
             k("ts", KeyRoleKind::Clustering, true),
         ];
-        assert_eq!(primary_key(&keys), "PRIMARY KEY ((device_id, bucket), ts DESC)");
-        assert_eq!(primary_key(&keys[..1]), "PRIMARY KEY (device_id)");
-        assert_eq!(primary_key(&[k("Id", KeyRoleKind::Partition, false)]), "PRIMARY KEY (\"Id\")");
+        assert_eq!(primary_key(&keys, true), "PRIMARY KEY ((device_id, bucket), ts DESC)");
+        assert_eq!(primary_key(&keys, false), "PRIMARY KEY ((device_id, bucket), ts)");
+        assert_eq!(primary_key(&keys[..1], true), "PRIMARY KEY (device_id)");
+        assert_eq!(primary_key(&[k("Id", KeyRoleKind::Partition, false)], true), "PRIMARY KEY (\"Id\")");
         assert!(is_system("system_schema") && !is_system("telemetry"));
     }
 }

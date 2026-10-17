@@ -737,7 +737,7 @@ async fn schema_changes_diff_and_migrations() {
             let model = s.schema_model("dataquery_test", Some(schema)).await.unwrap();
             let mut tables = Vec::new();
             for table in model.tables {
-                tables.push(ops::structure(&*s, &table.object).await.unwrap());
+                tables.push(ops::structure(&*s, &table.object).await.unwrap().into());
             }
             tables
         }

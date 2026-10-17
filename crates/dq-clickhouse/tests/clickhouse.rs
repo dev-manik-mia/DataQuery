@@ -410,7 +410,7 @@ async fn schema_diff_round_trip() {
             let model = s.schema_model(db, None).await.unwrap();
             let mut tables = Vec::new();
             for t in model.tables.into_iter().filter(|t| t.object.kind == NodeKind::Table) {
-                tables.push(ops::structure(&*s, &t.object).await.unwrap());
+                tables.push(ops::structure(&*s, &t.object).await.unwrap().into());
             }
             tables
         }

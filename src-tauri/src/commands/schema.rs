@@ -5,11 +5,10 @@
 use std::time::Instant;
 
 use dq_core::adapter::Session;
-use dq_core::diff::{Container, SchemaDiff};
+use dq_core::diff::{Container, DiffTable, SchemaDiff};
 use dq_core::edit::BoundStatement;
 use dq_core::migrations::FrameworkMigrations;
 use dq_core::node::NodeKind;
-use dq_core::schema::TableStructure;
 use dq_core::sql::ddl::{self, SchemaChange};
 use dq_core::sql::split_statements;
 use dq_core::{DbError, DbResult, ops};
@@ -101,7 +100,7 @@ pub async fn apply_schema_changes(
     })
 }
 
-/// One side of a schema diff: a saved connection and a schema (PostgreSQL) or database (MySQL).
+/// One side of a schema diff: a saved connection and a schema (PostgreSQL), database (MySQL) or keyspace (CQL).
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export)]
 pub struct DiffSide {
@@ -110,7 +109,7 @@ pub struct DiffSide {
     pub schema: Option<String>,
 }
 
-async fn snapshot(session: &dyn Session, side: &DiffSide) -> DbResult<Vec<TableStructure>> {
+async fn snapshot(session: &dyn Session, side: &DiffSide) -> DbResult<Vec<DiffTable>> {
     let model = session.schema_model(&side.database, side.schema.as_deref()).await?;
     let tables: Vec<_> = model.tables.iter().filter(|t| t.object.kind == NodeKind::Table).collect();
     if model.truncated || tables.len() > MAX_DIFF_TABLES {
@@ -118,7 +117,10 @@ async fn snapshot(session: &dyn Session, side: &DiffSide) -> DbResult<Vec<TableS
     }
     let mut out = Vec::with_capacity(tables.len());
     for t in tables {
-        out.push(ops::structure(session, &t.object).await?);
+        out.push(DiffTable {
+            structure: ops::structure(session, &t.object).await?,
+            keys: session.key_roles(&t.object).await?,
+        });
     }
     Ok(out)
 }
@@ -142,7 +144,9 @@ pub async fn schema_diff(state: State<'_, AppState>, source: DiffSide, target: D
     let ((source_tables, flavor), (target_tables, target_flavor)) =
         tokio::try_join!(open_side(source.clone()), open_side(target.clone()))?;
     if flavor != target_flavor {
-        return Err(DbError::invalid("Both sides must use the same SQL dialect (PostgreSQL or MySQL/MariaDB)."));
+        return Err(DbError::invalid(
+            "Both sides must use the same query language (e.g. PostgreSQL, MySQL/MariaDB or CQL for Cassandra/ScyllaDB).",
+        ));
     }
     let container = |side: &DiffSide| Container { database: side.database.clone(), schema: side.schema.clone() };
     dq_core::diff::diff(
