@@ -31,6 +31,7 @@ dq-elasticsearch.workspace = true
 dq-neo4j.workspace = true
 dq-store.workspace = true
 dq-ssh.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 
 import type { Cell } from '@/bindings/Cell';
 import type { ExportFormat } from '@/bindings/ExportFormat';
@@ -170,14 +170,17 @@ export function DataGrid({
     return left;
   }, [visible, pinned, widths]);
 
-  // Client-side column search for results the grid already holds.
+  // Client-side column search for results the grid already holds; deferred so typing stays responsive.
+  const deferredSearches = useDeferredValue(searches);
   const shownRows = useMemo(() => {
-    const active = Object.entries(searches).filter(([, v]) => v.trim());
+    const active = Object.entries(deferredSearches)
+      .map(([c, v]) => [Number(c), v.trim().toLowerCase()] as const)
+      .filter(([, v]) => v);
     if (onColumnSearch || !active.length) return rows.map((_, i) => i);
     return rows.flatMap((r, i) =>
-      active.every(([c, v]) => (cellText(r.cells[Number(c)] ?? { kind: 'null' }) ?? 'null').toLowerCase().includes(v.trim().toLowerCase())) ? [i] : [],
+      active.every(([c, needle]) => (cellText(r.cells[c] ?? { kind: 'null' }) ?? 'null').toLowerCase().includes(needle)) ? [i] : [],
     );
-  }, [rows, searches, onColumnSearch]);
+  }, [rows, deferredSearches, onColumnSearch]);
 
   useEffect(() => {
     if (!onColumnSearch) return;
@@ -392,6 +395,40 @@ export function DataGrid({
     ];
   };
 
+  // Rows read the latest state through this ref, so they all share one stable handler object.
+  const latest = useRef({ startEdit, commitEdit, moveActive, onRowNumberClick, masked, hasSelection: selection.size > 0, setSelection });
+  latest.current = { startEdit, commitEdit, moveActive, onRowNumberClick, masked, hasSelection: selection.size > 0, setSelection };
+  const rowHandlers = useMemo<RowHandlers>(
+    () => ({
+      cellMouseDown: (row, col) => {
+        setActive({ row, col });
+        if (latest.current.hasSelection) latest.current.setSelection(new Set());
+      },
+      cellDoubleClick: (row, col) => {
+        const at = { row, col };
+        if (latest.current.masked.has(col) || !latest.current.startEdit(at)) setInspect(at);
+      },
+      cellContextMenu: (e, row, col) => {
+        e.preventDefault();
+        const at = { row, col };
+        setActive(at);
+        setMenu({ x: e.clientX, y: e.clientY, at });
+      },
+      numberClick: (e, row) => latest.current.onRowNumberClick(e, row),
+      editChange: (value) => setEditing((ed) => (ed ? { ...ed, value } : ed)),
+      editCommit: (value) => latest.current.commitEdit(value),
+      editCancel: () => {
+        setEditing(null);
+        scroller.current?.focus();
+      },
+      editTab: (value) => {
+        latest.current.commitEdit(value);
+        latest.current.moveActive(0, 1);
+      },
+    }),
+    [],
+  );
+
   if (!columns.length) return <div className={styles.empty}>{emptyText}</div>;
 
   const items = virtualizer.getVirtualItems();
@@ -526,31 +563,7 @@ export function DataGrid({
                 selected={selection.has(index)}
                 activeCol={active?.row === index ? active.col : null}
                 editing={editing?.row === index ? editing : null}
-                onCellMouseDown={(col) => {
-                  setActive({ row: index, col });
-                  if (selection.size) setSelection(new Set());
-                }}
-                onCellDoubleClick={(col) => {
-                  const at = { row: index, col };
-                  if (masked.has(col) || !startEdit(at)) setInspect(at);
-                }}
-                onCellContextMenu={(e, col) => {
-                  e.preventDefault();
-                  const at = { row: index, col };
-                  setActive(at);
-                  setMenu({ x: e.clientX, y: e.clientY, at });
-                }}
-                onNumberClick={(e) => onRowNumberClick(e, index)}
-                onEditChange={(value) => setEditing((ed) => (ed ? { ...ed, value } : ed))}
-                onEditCommit={commitEdit}
-                onEditCancel={() => {
-                  setEditing(null);
-                  scroller.current?.focus();
-                }}
-                onEditTab={(value) => {
-                  commitEdit(value);
-                  moveActive(0, 1);
-                }}
+                handlers={rowHandlers}
               />
               );
             })}
@@ -593,14 +606,19 @@ interface GridRowViewProps {
   selected: boolean;
   activeCol: number | null;
   editing: (CellPosition & { value: string }) | null;
-  onCellMouseDown: (col: number) => void;
-  onCellDoubleClick: (col: number) => void;
-  onCellContextMenu: (e: MouseEvent, col: number) => void;
-  onNumberClick: (e: MouseEvent) => void;
-  onEditChange: (value: string) => void;
-  onEditCommit: (value: string | null) => void;
-  onEditCancel: () => void;
-  onEditTab: (value: string) => void;
+  handlers: RowHandlers;
+}
+
+/** Row callbacks; one stable object for all rows so the row memo holds. */
+interface RowHandlers {
+  cellMouseDown: (row: number, col: number) => void;
+  cellDoubleClick: (row: number, col: number) => void;
+  cellContextMenu: (e: MouseEvent, row: number, col: number) => void;
+  numberClick: (e: MouseEvent, row: number) => void;
+  editChange: (value: string) => void;
+  editCommit: (value: string | null) => void;
+  editCancel: () => void;
+  editTab: (value: string) => void;
 }
 
 const marker = { new: '+', deleted: '−' } as const;
@@ -616,7 +634,7 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
       data-status={p.row.status}
       style={{ top: p.top, gridTemplateColumns: p.template, width: p.width }}
     >
-      <div className={`${styles.cell} ${styles.rowNumber}`} role="rowheader" onClick={p.onNumberClick} onMouseDown={(e) => e.preventDefault()}>
+      <div className={`${styles.cell} ${styles.rowNumber}`} role="rowheader" onClick={(e) => p.handlers.numberClick(e, p.index)} onMouseDown={(e) => e.preventDefault()}>
         {p.row.status ? marker[p.row.status] : p.row.edited?.size ? '●' : p.number}
       </div>
       {p.order.map((ci) => {
@@ -635,9 +653,9 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
             data-numeric={column.numeric}
             data-active={p.activeCol === ci}
             data-edited={p.row.edited?.has(ci) ?? false}
-            onMouseDown={() => p.onCellMouseDown(ci)}
-            onDoubleClick={() => p.onCellDoubleClick(ci)}
-            onContextMenu={(e) => p.onCellContextMenu(e, ci)}
+            onMouseDown={() => p.handlers.cellMouseDown(p.index, ci)}
+            onDoubleClick={() => p.handlers.cellDoubleClick(p.index, ci)}
+            onContextMenu={(e) => p.handlers.cellContextMenu(e, p.index, ci)}
           >
             {isEditing && p.editing ? (
               <input
@@ -645,15 +663,15 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
                 aria-label={`Edit ${column.name}`}
                 autoFocus
                 value={p.editing.value}
-                onChange={(e) => p.onEditChange(e.target.value)}
-                onBlur={(e) => p.onEditCommit(e.target.value)}
+                onChange={(e) => p.handlers.editChange(e.target.value)}
+                onBlur={(e) => p.handlers.editCommit(e.target.value)}
                 onKeyDown={(e) => {
                   e.stopPropagation();
-                  if (e.key === 'Enter') p.onEditCommit(e.currentTarget.value);
-                  else if (e.key === 'Escape') p.onEditCancel();
+                  if (e.key === 'Enter') p.handlers.editCommit(e.currentTarget.value);
+                  else if (e.key === 'Escape') p.handlers.editCancel();
                   else if (e.key === 'Tab') {
                     e.preventDefault();
-                    p.onEditTab(e.currentTarget.value);
+                    p.handlers.editTab(e.currentTarget.value);
                   }
                 }}
               />

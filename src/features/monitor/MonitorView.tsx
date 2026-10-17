@@ -11,6 +11,7 @@ import { toAppError } from '@/lib/errors';
 import { formatBytes, formatCount, formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { objectLabel } from '@/lib/objects';
+import { usePageVisible } from '@/lib/visibility';
 import { guarded, useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
@@ -77,7 +78,11 @@ const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   neo4j: 'Transactions from SHOW TRANSACTIONS',
 };
 
-export function MonitorView({ active }: { active: boolean }) {
+export function MonitorView({ active: shown }: { active: boolean }) {
+  // Poll only while the tab is on screen: not behind another page or in a hidden window.
+  const onWorkspace = useUi((s) => s.view.name === 'workspace');
+  const visible = usePageVisible();
+  const active = shown && onWorkspace && visible;
   const session = useWorkspace((s) => s.session)!;
   const sid = { sessionId: session.session_id };
   const [snapshot, setSnapshot] = useState<MonitorSnapshot | null>(null);

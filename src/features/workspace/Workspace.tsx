@@ -1,5 +1,6 @@
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { useEffect, type ReactNode } from 'react';
+import { memo, useEffect, type ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { Button, EmptyState, Splitter } from '@/components/ui';
 import { openSqlFiles } from '@/features/editor/fileActions';
@@ -19,7 +20,8 @@ import { useWorkspace, type Tab } from '@/stores/workspace';
 import { TabBar } from './TabBar';
 import styles from './Workspace.module.css';
 
-function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
+/** One tab's view; memoized so typing in one tab does not re-render the others. */
+const TabContent = memo(function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
   switch (tab.kind) {
     case 'query':
       return <QueryTabView tab={tab} active={active} />;
@@ -34,7 +36,7 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
     case 'monitor':
       return <MonitorView active={active} />;
   }
-}
+});
 
 /**
  * Explorer, tab bar and the open tabs. Every tab stays mounted (editor state
@@ -42,8 +44,8 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
  * column of one grid, so moving it between panes never remounts it.
  */
 export function Workspace() {
-  const { tabs, activeTabId, split, openQueryTab, focusPane } = useWorkspace();
-  const { explorerWidth, set } = useLayout();
+  const { tabs, activeTabId, split, openQueryTab, focusPane } = useWorkspace(useShallow((s) => ({ tabs: s.tabs, activeTabId: s.activeTabId, split: s.split, openQueryTab: s.openQueryTab, focusPane: s.focusPane })));
+  const { explorerWidth, set } = useLayout(useShallow((s) => ({ explorerWidth: s.explorerWidth, set: s.set })));
   // Key-value engines browse keys with SCAN instead of an object tree (screen 12).
   const keyValue = useWorkspace((s) => s.session?.keys != null);
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { Button, Card, PageHead } from '@/components/ui';
 import { appCommands, commandKeys, DEFAULT_KEYS } from '@/features/commands/commands';
@@ -9,7 +10,7 @@ import styles from './Settings.module.css';
 
 /** Every command with its shortcut; click a shortcut and press keys to change it. */
 export function KeyboardSettings() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const [recording, setRecording] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const commands = useMemo(() => appCommands().filter((c) => `${c.group} ${c.title}`.toLowerCase().includes(filter.toLowerCase())), [filter]);

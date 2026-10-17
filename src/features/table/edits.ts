@@ -38,15 +38,20 @@ export function rowKey(cells: Cell[], identity: number[]): string {
 }
 
 export function counts(edits: Edits): EditCounts {
-  const changedRows = Object.entries(edits.updates).filter(([k, v]) => !edits.deletes.includes(k) && Object.keys(v).length > 0);
+  const deleted = new Set(edits.deletes);
+  const changedRows = Object.entries(edits.updates).filter(([k, v]) => !deleted.has(k) && Object.keys(v).length > 0);
   const cells = changedRows.reduce((n, [, v]) => n + Object.keys(v).length, 0);
   return { cells, inserts: edits.inserts.length, deletes: edits.deletes.length, total: changedRows.length + edits.inserts.length + edits.deletes.length };
 }
 
+/** Whether `value` is what the cell already holds, so there is nothing to change. */
+function unchanged(original: Cell | undefined, value: Value): boolean {
+  return original !== undefined && (original.kind === 'null' ? value === null : value === cellText(original));
+}
+
 export function setCell(edits: Edits, key: string, col: number, value: Value, original: Cell | undefined): Edits {
   const row = { ...(edits.updates[key] ?? {}) };
-  const same = original !== undefined && (original.kind === 'null' ? value === null : value === cellText(original));
-  if (same) delete row[col];
+  if (unchanged(original, value)) delete row[col];
   else row[col] = value;
   const updates = { ...edits.updates, [key]: row };
   if (Object.keys(row).length === 0) delete updates[key];
@@ -62,13 +67,69 @@ export function addInsert(edits: Edits, values: Record<number, Value> = {}): Edi
 }
 
 export function toggleDeletes(edits: Edits, keys: string[]): Edits {
-  const allDeleted = keys.every((k) => edits.deletes.includes(k));
-  const deletes = allDeleted ? edits.deletes.filter((k) => !keys.includes(k)) : [...new Set([...edits.deletes, ...keys])];
-  return { ...edits, deletes };
+  const deleted = new Set(edits.deletes);
+  const allDeleted = keys.every((k) => deleted.has(k));
+  if (allDeleted) {
+    const removed = new Set(keys);
+    return { ...edits, deletes: edits.deletes.filter((k) => !removed.has(k)) };
+  }
+  for (const k of keys) deleted.add(k);
+  return { ...edits, deletes: [...deleted] };
 }
 
 export function removeInserts(edits: Edits, ids: string[]): Edits {
-  return { ...edits, inserts: edits.inserts.filter((r) => !ids.includes(r.id)) };
+  const removed = new Set(ids);
+  return { ...edits, inserts: edits.inserts.filter((r) => !removed.has(r.id)) };
+}
+
+/** What a paste needs to know about the page: rows shown are the pending inserts, then the page rows. */
+export interface PasteTarget {
+  pageRows: Cell[][];
+  /** Row keys of `pageRows`, in order. */
+  pageKeys: string[];
+  editableColumn: (col: number) => boolean;
+}
+
+/**
+ * Spreadsheet cells pasted at a position, in one pass: existing rows are
+ * edited, extra rows become new rows. Returns the edits and the number of
+ * read-only cells skipped.
+ */
+export function applyPaste(
+  edits: Edits,
+  at: { row: number; col: number },
+  values: string[][],
+  target: PasteTarget,
+): { edits: Edits; skipped: number } {
+  const insertCount = edits.inserts.length;
+  const rowCount = insertCount + target.pageRows.length;
+  const inserts = edits.inserts.map((r) => ({ ...r, values: { ...r.values } }));
+  const updates: Edits['updates'] = { ...edits.updates };
+  const added: PendingInsert[] = [];
+  let skipped = 0;
+  values.forEach((line, r) => {
+    const index = at.row + r;
+    let insert: PendingInsert | null = null;
+    if (index >= rowCount) added.push((insert = { id: uid('new'), values: {} }));
+    else if (index < insertCount) insert = inserts[index]!;
+    const pageIndex = index - insertCount;
+    const key = insert ? '' : target.pageKeys[pageIndex]!;
+    const row = insert ? insert.values : { ...(updates[key] ?? {}) };
+    line.forEach((value, c) => {
+      const col = at.col + c;
+      if (!target.editableColumn(col)) {
+        skipped += 1;
+        return;
+      }
+      if (!insert && unchanged(target.pageRows[pageIndex]![col], value)) delete row[col];
+      else row[col] = value;
+    });
+    if (insert) return;
+    if (Object.keys(row).length) updates[key] = row;
+    else delete updates[key];
+  });
+  // New rows go on top, newest first, as `addInsert` does.
+  return { edits: { ...edits, updates, inserts: [...added.reverse(), ...inserts] }, skipped };
 }
 
 /** Values for a duplicated row: every editable, non-generated column. */
@@ -76,7 +137,8 @@ export function duplicateValues(cells: Cell[], columns: ColumnInfo[]): Record<nu
   const values: Record<number, Value> = {};
   columns.forEach((c, i) => {
     const cell = cells[i];
-    if (c.editable && !c.generated && !c.primary_key && cell && cell.kind !== 'binary' && cell.kind !== 'unsupported') values[i] = cellText(cell);
+    if (c.editable && !c.generated && !c.primary_key && cell && cell.kind !== 'binary' && cell.kind !== 'unsupported')
+      values[i] = cellText(cell);
   });
   return values;
 }
@@ -89,14 +151,18 @@ export function toChanges(edits: Edits, columns: ColumnInfo[], identity: number[
     return identity.map((col, i) => ({ column: name(col), value: values[i] ?? null }));
   };
   const known = new Set(rows.map((r) => rowKey(r, identity)));
+  const deleted = new Set(edits.deletes);
   const changes: RowChange[] = [];
   for (const [key, cols] of Object.entries(edits.updates)) {
-    if (edits.deletes.includes(key) || !known.has(key)) continue;
+    if (deleted.has(key) || !known.has(key)) continue;
     const values = Object.entries(cols).map(([c, value]) => ({ column: name(Number(c)), value }));
     if (values.length) changes.push({ op: 'update', key: keyValues(key), values });
   }
   for (const insert of [...edits.inserts].reverse()) {
-    changes.push({ op: 'insert', values: Object.entries(insert.values).map(([c, value]) => ({ column: name(Number(c)), value })) });
+    changes.push({
+      op: 'insert',
+      values: Object.entries(insert.values).map(([c, value]) => ({ column: name(Number(c)), value })),
+    });
   }
   for (const key of edits.deletes) if (known.has(key)) changes.push({ op: 'delete', key: keyValues(key) });
   return changes;

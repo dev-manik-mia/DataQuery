@@ -78,6 +78,8 @@ const MIGRATIONS: &[&str] = &[
 ];
 
 const MAX_SQL_BYTES: usize = 1024 * 1024;
+/// Extra history SQL kept past the cap while redacting (see `add_history_batch`).
+const REDACT_SLACK_BYTES: usize = 64 * 1024;
 const MAX_KV_BYTES: usize = 4 * 1024 * 1024;
 const SETTINGS_KEY: &str = "settings";
 
@@ -91,6 +93,18 @@ fn storage_error(e: rusqlite::Error) -> DbError {
 
 fn json_error(e: serde_json::Error) -> DbError {
     DbError::new(ErrorKind::Storage, format!("Local storage data is invalid: {e}"))
+}
+
+/// Longest prefix of `text` of at most `max` bytes, cut on a char boundary.
+fn truncate(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut cut = max;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &text[..cut]
 }
 
 fn now_ms() -> i64 {
@@ -141,7 +155,7 @@ impl Store {
     }
 
     fn init(conn: Connection) -> DbResult<Self> {
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;")
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2000;")
             .map_err(storage_error)?;
         let version: usize = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(storage_error)?;
         for (i, migration) in MIGRATIONS.iter().enumerate().skip(version) {
@@ -273,36 +287,51 @@ impl Store {
     /// Records a statement. SQL is redacted and capped; rows are never stored.
     /// Entries beyond the retention limits are pruned.
     pub fn add_history(&self, entry: &NewHistoryEntry, retention: Retention) -> DbResult<()> {
-        let mut sql = redact(&entry.sql);
-        if sql.len() > MAX_SQL_BYTES {
-            let mut cut = MAX_SQL_BYTES;
-            while !sql.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            sql.truncate(cut);
+        self.add_history_batch(std::slice::from_ref(entry), retention)
+    }
+
+    /// Records several statements (one script run) in a single transaction.
+    pub fn add_history_batch(&self, entries: &[NewHistoryEntry], retention: Retention) -> DbResult<()> {
+        if entries.is_empty() {
+            return Ok(());
         }
-        let error = entry.error.as_deref().map(redact);
+        // Cap before redacting so huge statements are not scanned in full; the
+        // slack keeps a secret that straddles the cap whole for `redact`.
+        let rows: Vec<(String, Option<String>)> = entries
+            .iter()
+            .map(|e| {
+                let sql = redact(truncate(&e.sql, MAX_SQL_BYTES + REDACT_SLACK_BYTES));
+                (truncate(&sql, MAX_SQL_BYTES).to_owned(), e.error.as_deref().map(redact))
+            })
+            .collect();
         self.with(|db| {
-            db.execute(
-                "INSERT INTO history (connection_id, connection_name, database, sql, executed_at, duration_ms, status, rows, error) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    entry.connection_id,
-                    entry.connection_name,
-                    entry.database,
-                    sql,
-                    now_ms(),
-                    entry.duration_ms,
-                    entry.status.as_str(),
-                    entry.rows,
-                    error
-                ],
-            )?;
-            let id = db.last_insert_rowid();
-            if id % 100 == 0 {
-                Self::prune(db, retention, id)?;
+            let tx = db.unchecked_transaction()?;
+            {
+                let mut insert = tx.prepare_cached(
+                    "INSERT INTO history (connection_id, connection_name, database, sql, executed_at, duration_ms, status, rows, error) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )?;
+                for (entry, (sql, error)) in entries.iter().zip(&rows) {
+                    insert.execute(params![
+                        entry.connection_id,
+                        entry.connection_name,
+                        entry.database,
+                        sql,
+                        entry.executed_at,
+                        entry.duration_ms,
+                        entry.status.as_str(),
+                        entry.rows,
+                        error
+                    ])?;
+                }
             }
-            Ok(())
+            // Ids are consecutive inside the transaction; prune when the batch crossed a multiple of 100.
+            let last = tx.last_insert_rowid();
+            let first = last - entries.len() as i64 + 1;
+            if last / 100 > (first - 1) / 100 {
+                Self::prune(&tx, retention, last)?;
+            }
+            tx.commit()
         })
     }
 
@@ -606,6 +635,7 @@ mod tests {
                         connection_name: "dev".into(),
                         database: "app".into(),
                         sql: format!("SELECT {i} FROM orders_{i}"),
+                        executed_at: now_ms(),
                         duration_ms: 3,
                         status: HistoryStatus::Ok,
                         rows: Some(1),
@@ -622,6 +652,7 @@ mod tests {
                     connection_name: "dev".into(),
                     database: "app".into(),
                     sql: "ALTER ROLE app PASSWORD 'topsecret'".into(),
+                    executed_at: now_ms(),
                     duration_ms: 1,
                     status: HistoryStatus::Error,
                     rows: None,
@@ -664,6 +695,7 @@ mod tests {
             connection_name: conn.into(),
             database: "app".into(),
             sql: "select 1".into(),
+            executed_at: now_ms(),
             duration_ms: 1,
             status,
             rows: None,
@@ -693,6 +725,61 @@ mod tests {
         assert_eq!(store.history(&HistoryQuery { limit: 50, ..Default::default() }).unwrap().total, 2);
         store.clear_history(Some("b")).unwrap();
         assert_eq!(store.history(&HistoryQuery { limit: 50, ..Default::default() }).unwrap().total, 0);
+    }
+
+    #[test]
+    fn history_batch_keeps_order_timing_and_redaction() {
+        let store = Store::in_memory().unwrap();
+        let entry = |i: i64| NewHistoryEntry {
+            connection_id: Some("c1".into()),
+            connection_name: "dev".into(),
+            database: "app".into(),
+            sql: if i == 1 { "ALTER ROLE app PASSWORD 'topsecret'".into() } else { format!("select {i}") },
+            executed_at: 1_000 + i,
+            duration_ms: i,
+            status: if i == 2 { HistoryStatus::Error } else { HistoryStatus::Ok },
+            rows: Some(i),
+            error: (i == 2).then(|| "token=abc123".into()),
+        };
+        let batch: Vec<_> = (0..250).map(entry).collect();
+        store.add_history_batch(&batch, Retention { max_entries: 120, max_days: 0 }).unwrap();
+        store.add_history_batch(&[], Retention::default()).unwrap();
+        let page = store.history(&HistoryQuery { limit: 500, ..Default::default() }).unwrap();
+        // The batch crossed id 200, so retention pruned it down to the last 120 + those after id 200.
+        assert_eq!(page.total, 120);
+        let oldest = page.entries.last().unwrap();
+        assert_eq!((oldest.sql.as_str(), oldest.executed_at, oldest.duration_ms), ("select 130", 1_130, 130));
+        assert_eq!(page.entries[0].sql, "select 249");
+
+        store.clear_history(None).unwrap();
+        store.add_history_batch(&batch[..3], Retention::default()).unwrap();
+        let page = store.history(&HistoryQuery { limit: 10, ..Default::default() }).unwrap();
+        let sqls: Vec<_> = page.entries.iter().map(|e| e.sql.as_str()).collect();
+        assert_eq!(sqls, ["select 2", "ALTER ROLE app PASSWORD '***'", "select 0"]);
+        assert_eq!(page.entries[0].error.as_deref(), Some("token=***"));
+        assert_eq!(page.entries[0].status, HistoryStatus::Error);
+    }
+
+    #[test]
+    fn history_sql_is_capped_on_a_char_boundary() {
+        let store = Store::in_memory().unwrap();
+        let sql = format!("select '{}' -- password=hunter2", "é".repeat(MAX_SQL_BYTES));
+        let entry = NewHistoryEntry {
+            connection_id: None,
+            connection_name: "dev".into(),
+            database: "app".into(),
+            sql,
+            executed_at: now_ms(),
+            duration_ms: 1,
+            status: HistoryStatus::Ok,
+            rows: None,
+            error: None,
+        };
+        store.add_history(&entry, Retention::default()).unwrap();
+        let page = store.history(&HistoryQuery { limit: 1, ..Default::default() }).unwrap();
+        let stored = &page.entries[0].sql;
+        assert!(stored.len() <= MAX_SQL_BYTES && stored.len() > MAX_SQL_BYTES - 4);
+        assert!(stored.starts_with("select 'éé"));
     }
 
     #[test]

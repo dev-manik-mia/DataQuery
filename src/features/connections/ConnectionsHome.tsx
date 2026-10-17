@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { HistoryEntry } from '@/bindings/HistoryEntry';
 import type { SavedConnection } from '@/bindings/SavedConnection';
@@ -37,10 +38,10 @@ interface Group {
 }
 
 export function ConnectionsHome() {
-  const { connections, folders, engines, loaded, toggleFavorite, remove, duplicate, createFolder, renameFolder, deleteFolder } = useConnections();
+  const { connections, folders, engines, loaded, toggleFavorite, remove, duplicate, createFolder, renameFolder, deleteFolder } = useConnections(useShallow((s) => ({ connections: s.connections, folders: s.folders, engines: s.engines, loaded: s.loaded, toggleFavorite: s.toggleFavorite, remove: s.remove, duplicate: s.duplicate, createFolder: s.createFolder, renameFolder: s.renameFolder, deleteFolder: s.deleteFolder })));
   const navigate = useUi((s) => s.navigate);
   const ask = useUi((s) => s.ask);
-  const { connect, connectingId, connectError } = useWorkspace();
+  const { connect, connectingId, connectError } = useWorkspace(useShallow((s) => ({ connect: s.connect, connectingId: s.connectingId, connectError: s.connectError })));
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});

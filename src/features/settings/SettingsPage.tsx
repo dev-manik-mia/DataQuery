@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { AppInfo } from '@/bindings/AppInfo';
 import type { Capabilities } from '@/bindings/Capabilities';
@@ -70,7 +71,7 @@ function Row({ title, help, children }: { title: ReactNode; help?: ReactNode; ch
 type NumericField = keyof Pick<Settings, 'row_limit' | 'timeout_secs' | 'editor_font_size' | 'page_size' | 'editor_line_height' | 'history_max_entries' | 'history_max_days'>;
 
 function NumberSetting({ label, field, suffix, hint }: { label: string; field: NumericField; suffix: string; hint?: string }) {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const [value, setValue] = useState(String(settings[field]));
   useEffect(() => setValue(String(settings[field])), [settings, field]);
   const commit = () => {
@@ -94,7 +95,7 @@ function NumberSetting({ label, field, suffix, hint }: { label: string; field: N
 }
 
 function General() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   return (
     <>
       <PageHead eyebrow="Settings" title="General" />
@@ -133,7 +134,7 @@ function General() {
 }
 
 function Editor() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const [family, setFamily] = useState(settings.editor_font_family);
   useEffect(() => setFamily(settings.editor_font_family), [settings.editor_font_family]);
   return (
@@ -183,7 +184,7 @@ function Results() {
 }
 
 function History() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const apply = () => void api.applyHistoryRetention().catch(useUi.getState().toastError);
   return (
     <>
@@ -220,7 +221,7 @@ function History() {
 }
 
 function Security() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
   useEffect(() => {
     api.keychainStatus().then(setKeychain).catch(() => setKeychain(null));
@@ -297,7 +298,7 @@ function Security() {
 }
 
 function MaskPatterns() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const [value, setValue] = useState(settings.mask_patterns.join(', '));
   useEffect(() => setValue(settings.mask_patterns.join(', ')), [settings.mask_patterns]);
   return (
@@ -313,7 +314,7 @@ function MaskPatterns() {
 }
 
 function AiSettings() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [key, setKey] = useState('');

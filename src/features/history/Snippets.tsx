@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { Snippet } from '@/bindings/Snippet';
 import { Button, Card, EmptyState, TextAreaField, TextField } from '@/components/ui';
@@ -20,7 +21,7 @@ const EMPTY: Draft = { id: null, name: '', prefix: '', body: '' };
 /** Snippets: SQL templates inserted from autocomplete by typing their prefix. */
 export function SnippetsPanel() {
   const snippets = useCompletion((s) => s.snippets);
-  const { toastError, ask, toast } = useUi();
+  const { toastError, ask, toast } = useUi(useShallow((s) => ({ toastError: s.toastError, ask: s.ask, toast: s.toast })));
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [busy, setBusy] = useState(false);
 

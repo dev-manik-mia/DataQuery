@@ -8,10 +8,11 @@ use dq_core::adapter::Session;
 use dq_core::diff::{Container, DiffTable, SchemaDiff};
 use dq_core::edit::BoundStatement;
 use dq_core::migrations::FrameworkMigrations;
-use dq_core::node::NodeKind;
+use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::sql::ddl::{self, SchemaChange};
 use dq_core::sql::split_statements;
 use dq_core::{DbError, DbResult, ops};
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
@@ -25,6 +26,8 @@ use crate::state::AppState;
 const MAX_CHANGES: usize = 200;
 /// Tables compared per side; each needs a structure read.
 const MAX_DIFF_TABLES: usize = 500;
+/// Tables whose structure is read at the same time while snapshotting a side.
+const DIFF_READ_CONCURRENCY: usize = 8;
 
 async fn build(session: &dyn Session, changes: &[SchemaChange]) -> DbResult<Vec<String>> {
     if changes.is_empty() || changes.len() > MAX_CHANGES {
@@ -115,14 +118,15 @@ async fn snapshot(session: &dyn Session, side: &DiffSide) -> DbResult<Vec<DiffTa
     if model.truncated || tables.len() > MAX_DIFF_TABLES {
         return Err(DbError::invalid(format!("Schema diff supports up to {MAX_DIFF_TABLES} tables per side.")));
     }
-    let mut out = Vec::with_capacity(tables.len());
-    for t in tables {
-        out.push(DiffTable {
-            structure: ops::structure(session, &t.object).await?,
-            keys: session.key_roles(&t.object).await?,
-        });
-    }
-    Ok(out)
+    // Futures are built up front: a mapping closure inside the stream trips
+    // the `Send` check of the command future (higher-ranked lifetimes).
+    let reads: Vec<_> = tables.iter().map(|t| diff_table(session, &t.object)).collect();
+    stream::iter(reads).buffered(DIFF_READ_CONCURRENCY).try_collect().await
+}
+
+async fn diff_table(session: &dyn Session, object: &ObjectRef) -> DbResult<DiffTable> {
+    let (structure, keys) = tokio::try_join!(ops::structure(session, object), session.key_roles(object))?;
+    Ok(DiffTable { structure, keys })
 }
 
 /// Compares two schemas, possibly on different connections, and plans the SQL

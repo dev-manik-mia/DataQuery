@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { DbError } from '@/bindings/DbError';
 import type { KeyEntry } from '@/bindings/KeyEntry';
@@ -30,7 +31,7 @@ export const useKeyBrowser = create<{ database: number | null; version: number; 
 /** Screen 12: keys of one database, found with SCAN (never KEYS), grouped by prefix. */
 export function KeyBrowser({ width }: { width: number }) {
   const session = useWorkspace((s) => s.session)!;
-  const { openTableTab, openContainerTab } = useWorkspace();
+  const { openTableTab, openContainerTab } = useWorkspace(useShallow((s) => ({ openTableTab: s.openTableTab, openContainerTab: s.openContainerTab })));
   const features = session.keys!;
   const sid = useMemo(() => ({ sessionId: session.session_id }), [session.session_id]);
   const { database: chosen, version, setDatabase } = useKeyBrowser();

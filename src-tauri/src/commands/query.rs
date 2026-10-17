@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use dq_core::explain::ExplainResult;
@@ -7,14 +8,14 @@ use dq_core::sql::{
     SqlFlavor, StatementInfo, StatementKind, TxEffect, redact_literals, split_statements, transaction_effect,
 };
 use dq_core::{DbError, ErrorKind};
-use dq_store::{HistoryStatus, NewHistoryEntry, Retention, SavedConnection};
+use dq_store::{HistoryStatus, NewHistoryEntry, Retention, SavedConnection, Store};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
 
 use super::{CmdResult, Guarded};
 use crate::safety::{self, Confirmation, Intent};
-use crate::state::{AppState, OpenSession, TxStatus};
+use crate::state::{AppState, OpenSession, TxStatus, now_ms};
 
 const MAX_SCRIPT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -54,31 +55,93 @@ pub fn record_history(
     duration: std::time::Duration,
     result: Result<Option<i64>, DbError>,
 ) {
-    if !settings.keep_history {
-        return;
-    }
-    let flavor = open.session.dialect().flavor();
-    let entry = NewHistoryEntry {
-        connection_id: Some(connection.id.clone()),
-        connection_name: connection.name.clone(),
-        database: open.session.info().database.clone(),
-        sql: if settings.history_redact_literals { redact_literals(sql, flavor) } else { sql.to_owned() },
-        duration_ms: duration.as_millis() as i64,
-        status: match &result {
-            Ok(_) => HistoryStatus::Ok,
-            Err(e) if e.kind == ErrorKind::Cancelled => HistoryStatus::Cancelled,
-            Err(_) => HistoryStatus::Error,
-        },
-        rows: result.as_ref().ok().copied().flatten(),
-        error: result.err().map(|e| e.message),
-    };
-    let store = state.store.clone();
-    let retention = Retention { max_entries: settings.history_max_entries, max_days: settings.history_max_days };
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Err(e) = store.add_history(&entry, retention) {
-            tracing::warn!(error = %e, "could not record history");
+    HistoryBatch::new(state, settings, connection, open).push(sql, duration, result);
+}
+
+/// History of one run, written in store transactions on a blocking thread:
+/// every [`HistoryBatch::FLUSH_EVERY`] statements, and the rest when dropped,
+/// so a run that fails or is abandoned midway still records what ran.
+pub struct HistoryBatch {
+    /// `None` when history is off.
+    store: Option<Arc<Store>>,
+    retention: Retention,
+    /// Literal redaction (on the blocking thread), when enabled.
+    redact_literals: Option<SqlFlavor>,
+    connection_id: String,
+    connection_name: String,
+    database: String,
+    entries: Vec<NewHistoryEntry>,
+}
+
+impl HistoryBatch {
+    /// Statements per write: long scripts show up in history while they run.
+    const FLUSH_EVERY: usize = 100;
+
+    pub fn new(
+        state: &AppState,
+        settings: &dq_store::Settings,
+        connection: &SavedConnection,
+        open: &OpenSession,
+    ) -> Self {
+        Self {
+            store: settings.keep_history.then(|| state.store.clone()),
+            retention: Retention { max_entries: settings.history_max_entries, max_days: settings.history_max_days },
+            redact_literals: settings.history_redact_literals.then(|| open.session.dialect().flavor()),
+            connection_id: connection.id.clone(),
+            connection_name: connection.name.clone(),
+            database: open.session.info().database.clone(),
+            entries: Vec::new(),
         }
-    });
+    }
+
+    pub fn push(&mut self, sql: &str, duration: std::time::Duration, result: Result<Option<i64>, DbError>) {
+        if self.store.is_none() {
+            return;
+        }
+        self.entries.push(NewHistoryEntry {
+            connection_id: Some(self.connection_id.clone()),
+            connection_name: self.connection_name.clone(),
+            database: self.database.clone(),
+            sql: sql.to_owned(),
+            executed_at: now_ms(),
+            duration_ms: duration.as_millis() as i64,
+            status: match &result {
+                Ok(_) => HistoryStatus::Ok,
+                Err(e) if e.kind == ErrorKind::Cancelled => HistoryStatus::Cancelled,
+                Err(_) => HistoryStatus::Error,
+            },
+            rows: result.as_ref().ok().copied().flatten(),
+            error: result.err().map(|e| e.message),
+        });
+        if self.entries.len() >= Self::FLUSH_EVERY {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        let Some(store) = self.store.clone() else { return };
+        if self.entries.is_empty() {
+            return;
+        }
+        let mut entries = std::mem::take(&mut self.entries);
+        let (retention, redact) = (self.retention, self.redact_literals);
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Some(flavor) = redact {
+                for entry in &mut entries {
+                    entry.sql = redact_literals(&entry.sql, flavor);
+                }
+            }
+            if let Err(e) = store.add_history_batch(&entries, retention) {
+                tracing::warn!(error = %e, "could not record history");
+            }
+        });
+    }
+}
+
+impl Drop for HistoryBatch {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 /// Next transaction state after a statement ran (or failed).
@@ -155,21 +218,15 @@ pub async fn run_sql(
     let started = Instant::now();
     begin_if_manual(&state, &open, &settings, &statements).await?;
     let mut outcomes = Vec::with_capacity(statements.len());
+    // Written when the run ends, also if it errors out or is dropped midway.
+    let mut history = HistoryBatch::new(&state, &settings, &connection, &open);
     for (index, statement) in statements.iter().enumerate() {
         let text = statement.text(&sql);
         let ran = Instant::now();
         let result = open.session.execute(text, &params, options).await;
         open.set_tx_status(next_tx(open.tx_status(), text, flavor, result.is_err()));
         let rows = result.as_ref().ok().map(|r| r.affected.map_or(r.rows.len() as i64, |a| a as i64));
-        record_history(
-            &state,
-            &settings,
-            &connection,
-            &open,
-            text,
-            ran.elapsed(),
-            result.as_ref().map(|_| rows).map_err(Clone::clone),
-        );
+        history.push(text, ran.elapsed(), result.as_ref().map(|_| rows).map_err(Clone::clone));
         let failed = result.is_err();
         let (result, error) = match result {
             Ok(r) => (Some(r), None),

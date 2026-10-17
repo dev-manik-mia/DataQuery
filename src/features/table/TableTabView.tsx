@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { DbError } from '@/bindings/DbError';
 import type { TableStructure } from '@/bindings/TableStructure';
@@ -20,7 +21,7 @@ import styles from './Table.module.css';
 /** Data / Structure / DDL for one table or view. */
 export function TableTabView({ tab, active }: { tab: TableTab; active: boolean }) {
   const session = useWorkspace((s) => s.session)!;
-  const { setTableView, openQueryTab } = useWorkspace();
+  const { setTableView, openQueryTab } = useWorkspace(useShallow((s) => ({ setTableView: s.setTableView, openQueryTab: s.openQueryTab })));
   const [structure, setStructure] = useState<TableStructure | null>(null);
   const [error, setError] = useState<DbError | null>(null);
   const [version, setVersion] = useState(0);

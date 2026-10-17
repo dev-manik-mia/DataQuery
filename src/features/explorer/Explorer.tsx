@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { Node } from '@/bindings/Node';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
@@ -31,7 +32,7 @@ function compactCount(n: number): string {
 
 /** Flattens the expanded tree into visible rows, applying the name filter. */
 function useVisibleItems(): Item[] {
-  const { children, expanded, loading, errors, filter } = useExplorer();
+  const { children, expanded, loading, errors, filter } = useExplorer(useShallow((s) => ({ children: s.children, expanded: s.expanded, loading: s.loading, errors: s.errors, filter: s.filter })));
   return useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const out: Item[] = [];
@@ -72,9 +73,9 @@ const TEMPLATE_WORDS: Partial<Record<SqlFlavor, [string, string, string, string]
 };
 
 export function Explorer({ width }: { width: number }) {
-  const { expanded, selected, filter, toggle, refresh, select, setFilter } = useExplorer();
+  const { expanded, selected, filter, toggle, refresh, select, setFilter } = useExplorer(useShallow((s) => ({ expanded: s.expanded, selected: s.selected, filter: s.filter, toggle: s.toggle, refresh: s.refresh, select: s.select, setFilter: s.setFilter })));
   const session = useWorkspace((s) => s.session);
-  const { openTableTab, openQueryTab, openContainerTab } = useWorkspace();
+  const { openTableTab, openQueryTab, openContainerTab } = useWorkspace(useShallow((s) => ({ openTableTab: s.openTableTab, openQueryTab: s.openQueryTab, openContainerTab: s.openContainerTab })));
   const toast = useUi((s) => s.toast);
   const navigate = useUi((s) => s.navigate);
   const items = useVisibleItems();

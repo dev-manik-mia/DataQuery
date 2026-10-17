@@ -2,6 +2,8 @@
 //! Object names travel as parameters; a database (schema) name can only be
 //! spliced in quoted, as `"name".sqlite_master`.
 
+use std::collections::HashMap;
+
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::TextRow;
 use dq_core::schema::{
@@ -86,7 +88,8 @@ pub fn databases(conn: &Connection) -> DbResult<Vec<Node>> {
 }
 
 /// Row counts from `ANALYZE` statistics, when the file has them.
-fn stat_estimates(conn: &Connection, database: &str) -> Vec<(String, i64)> {
+/// Row estimates by table name (one per table: grouped by `tbl`).
+fn stat_estimates(conn: &Connection, database: &str) -> HashMap<String, i64> {
     let sql =
         format!("SELECT tbl, max(CAST(stat AS INTEGER)) FROM {}.sqlite_stat1 GROUP BY tbl", D.quote_ident(database));
     rows(conn, &sql, &[])
@@ -110,7 +113,7 @@ pub fn relations(conn: &Connection, database: &str) -> DbResult<Vec<Node>> {
         .iter()
         .map(|r| {
             let mut node = relation_node(database, r.string(0), &r.string(1));
-            node.row_estimate = estimates.iter().find(|(t, _)| *t == node.object.name).map(|(_, n)| *n);
+            node.row_estimate = estimates.get(&node.object.name).copied();
             node
         })
         .collect())
@@ -159,7 +162,7 @@ fn relation_kind(conn: &Connection, object: &ObjectRef) -> DbResult<NodeKind> {
 }
 
 pub fn row_estimate(conn: &Connection, object: &ObjectRef) -> Option<i64> {
-    stat_estimates(conn, &object.database).into_iter().find(|(t, _)| *t == object.name).map(|(_, n)| n)
+    stat_estimates(conn, &object.database).remove(&object.name)
 }
 
 fn columns(conn: &Connection, object: &ObjectRef) -> DbResult<Vec<ColumnInfo>> {

@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import { Icon, Menu, useContextMenu, type MenuEntry } from '@/components/ui';
 import { t } from '@/i18n';
 import { KIND_MARK, objectLabel, objectPath } from '@/lib/objects';
@@ -25,7 +26,7 @@ function tabTitle(tab: Tab): string {
 }
 
 export function TabBar() {
-  const { tabs, activeTabId, split, activate, closeTab, openQueryTab, moveToOtherPane, toggleSplit } = useWorkspace();
+  const { tabs, activeTabId, split, activate, closeTab, openQueryTab, moveToOtherPane, toggleSplit } = useWorkspace(useShallow((s) => ({ tabs: s.tabs, activeTabId: s.activeTabId, split: s.split, activate: s.activate, closeTab: s.closeTab, openQueryTab: s.openQueryTab, moveToOtherPane: s.moveToOtherPane, toggleSplit: s.toggleSplit })));
   const context = useContextMenu<Tab>();
 
   const menu = (tab: Tab): MenuEntry[] => [

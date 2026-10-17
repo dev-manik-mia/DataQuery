@@ -1,9 +1,9 @@
 //! An open `DuckDB` database file (or in-memory database).
 //!
 //! User statements run on a connection owned by a worker thread (see
-//! [`crate::worker`]). Catalog reads, table pages and exports use a second
-//! connection to the same database, and grid edits and imports a third, so
-//! the explorer keeps working while a query runs.
+//! [`crate::worker`]). Catalog reads and table pages use a second connection
+//! to the same database, grid edits and imports a third, and each export its
+//! own, so the explorer keeps working while a query or export runs.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -147,16 +147,24 @@ impl DuckSession {
         rx.await.map_err(|_| DbError::internal("the query thread stopped"))?
     }
 
+    /// Reads on the catalog connection, or on a clone of it (`own_connection`)
+    /// so a long export does not hold up the explorer.
     async fn read_batches(
         &self,
+        own_connection: bool,
         sql: &str,
         params: Params<'_>,
         limits: CellLimits,
         on_batch: &mut BatchFn<'_>,
     ) -> DbResult<u64> {
         let (sql, params) = (sql.to_owned(), params.to_vec());
+        let conn = if own_connection {
+            Arc::new(Mutex::new(blocking(&self.catalog, |c| c.try_clone().map_err(|e| map_error(&e))).await?))
+        } else {
+            self.catalog.clone()
+        };
         let (tx, mut rx) = mpsc::channel::<(Vec<ColumnMeta>, Vec<CellRow>)>(2);
-        let work = blocking(&self.catalog, move |conn| {
+        let work = blocking(&conn, move |conn| {
             read_blocking(conn, &sql, &params, limits, |meta, rows| tx.blocking_send((meta.to_vec(), rows)).is_ok())
         });
         let mut total = 0u64;
@@ -252,7 +260,7 @@ impl Session for DuckSession {
     ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
-        self.read_batches(sql, params, limits, &mut |meta, batch| {
+        self.read_batches(false, sql, params, limits, &mut |meta, batch| {
             if columns.is_empty() {
                 columns = meta.to_vec();
             }
@@ -270,7 +278,7 @@ impl Session for DuckSession {
         params: Params<'_>,
         on_batch: &mut BatchFn<'_>,
     ) -> DbResult<u64> {
-        self.read_batches(sql, params, CellLimits::FULL, on_batch).await
+        self.read_batches(true, sql, params, CellLimits::FULL, on_batch).await
     }
 
     async fn row_estimate(&self, object: &ObjectRef) -> DbResult<Option<i64>> {

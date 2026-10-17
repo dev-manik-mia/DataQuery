@@ -140,6 +140,8 @@ pub struct NewHistoryEntry {
     pub connection_name: String,
     pub database: String,
     pub sql: String,
+    /// When the statement finished, in Unix milliseconds.
+    pub executed_at: i64,
     pub duration_ms: i64,
     pub status: HistoryStatus,
     pub rows: Option<i64>,

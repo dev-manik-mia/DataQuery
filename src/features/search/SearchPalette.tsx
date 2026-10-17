@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { Node } from '@/bindings/Node';
 import type { SavedScript } from '@/bindings/SavedScript';
@@ -18,7 +19,7 @@ type Result = { type: 'object'; node: Node } | { type: 'script'; script: SavedSc
 export function SearchPalette() {
   const setOpen = useUi((s) => s.setPaletteOpen);
   const session = useWorkspace((s) => s.session);
-  const { openTableTab, openQueryTab } = useWorkspace();
+  const { openTableTab, openQueryTab } = useWorkspace(useShallow((s) => ({ openTableTab: s.openTableTab, openQueryTab: s.openQueryTab })));
   const [query, setQuery] = useState('');
   const [objects, setObjects] = useState<Node[]>([]);
   const [scripts, setScripts] = useState<SavedScript[]>([]);

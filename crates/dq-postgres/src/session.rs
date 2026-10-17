@@ -111,18 +111,20 @@ impl PgSession {
 
     /// Read-only catalog connection for `database`, opened on first use and
     /// reopened if the server closed it. At most `pool_size` stay open; the
-    /// least recently used one is closed first.
+    /// least recently used one is closed first. The lock is not held while
+    /// connecting, so one slow handshake never blocks other databases.
     async fn catalog(&self, database: &str) -> DbResult<Arc<Client>> {
         let database = if database.is_empty() { &self.info.database } else { database };
+        if let Some(client) = Self::cached_catalog(&mut *self.catalogs.lock().await, database) {
+            return Ok(client);
+        }
+        let conn = connect::open(&self.params, database, Role::Catalog, &self.tls).await?;
         let mut catalogs = self.catalogs.lock().await;
-        if let Some(i) = catalogs.iter().position(|(db, c)| db == database && !c.is_closed()) {
-            let entry = catalogs.remove(i);
-            let client = entry.1.clone();
-            catalogs.push(entry);
+        // Another task may have connected meanwhile; keep theirs and drop ours.
+        if let Some(client) = Self::cached_catalog(&mut catalogs, database) {
             return Ok(client);
         }
         catalogs.retain(|(db, c)| db != database && !c.is_closed());
-        let conn = connect::open(&self.params, database, Role::Catalog, &self.tls).await?;
         let client = Arc::new(conn.client);
         let max = self.params.config.options.pool_size.max(1) as usize;
         while catalogs.len() >= max {
@@ -130,6 +132,15 @@ impl PgSession {
         }
         catalogs.push((database.to_owned(), client.clone()));
         Ok(client)
+    }
+
+    /// The open catalog connection for `database`, marked most recently used.
+    fn cached_catalog(catalogs: &mut Vec<(String, Arc<Client>)>, database: &str) -> Option<Arc<Client>> {
+        let i = catalogs.iter().position(|(db, c)| db == database && !c.is_closed())?;
+        let entry = catalogs.remove(i);
+        let client = entry.1.clone();
+        catalogs.push(entry);
+        Some(client)
     }
 
     /// Stops the open cursor, if any. The cancel request completes before we
@@ -313,7 +324,10 @@ impl Session for PgSession {
         params: Params<'_>,
         on_batch: &mut BatchFn<'_>,
     ) -> DbResult<u64> {
-        let client = self.catalog(database).await?;
+        // A connection of its own: a long export would otherwise hold up every
+        // catalog call queued behind it on the shared catalog connection.
+        let database = if database.is_empty() { &self.info.database } else { database };
+        let client = connect::open(&self.params, database, Role::Export, &self.tls).await?.client;
         let statement = client.prepare(sql).await.map_err(|e| self.err(&e))?;
         check_param_count(statement.params().len(), params.len())?;
         let columns = column_meta(statement.columns());

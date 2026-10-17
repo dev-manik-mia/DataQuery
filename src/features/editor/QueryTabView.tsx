@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { Button, Menu, PromptDialog, Splitter, type MenuEntry } from '@/components/ui';
 import { AiPanel } from '@/features/ai/AiPanel';
@@ -28,10 +29,10 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
   const editor = useRef<SqlEditorHandle>(null);
   const session = useWorkspace((s) => s.session);
   const tx = useWorkspace((s) => s.tx);
-  const { updateSql, run, cancel, explain, transaction, setBookmarks } = useWorkspace();
+  const { updateSql, run, cancel, explain, transaction, setBookmarks } = useWorkspace(useShallow((s) => ({ updateSql: s.updateSql, run: s.run, cancel: s.cancel, explain: s.explain, transaction: s.transaction, setBookmarks: s.setBookmarks })));
   const settings = useSettings((s) => s.settings);
   const navigate = useUi((s) => s.navigate);
-  const { editorHeight, set: setLayout } = useLayout();
+  const { editorHeight, set: setLayout } = useLayout(useShallow((s) => ({ editorHeight: s.editorHeight, set: s.set })));
   const { model, snippets } = useCompletion();
   const [naming, setNaming] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[]; label: string } | null>(null);

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Cell } from '@/bindings/Cell';
 import type { ColumnInfo } from '@/bindings/ColumnInfo';
 
-import { NO_EDITS, addInsert, counts, rowKey, setCell, setInsertCell, toChanges, toggleDeletes } from './edits';
+import { NO_EDITS, addInsert, applyPaste, counts, rowKey, setCell, setInsertCell, toChanges, toggleDeletes, type Edits } from './edits';
 
 const col = (name: string, extra: Partial<ColumnInfo> = {}): ColumnInfo => ({
   name,
@@ -59,5 +59,43 @@ describe('table edits', () => {
       { op: 'delete', key: [{ column: 'id', value: '9007199254740993' }] },
     ]);
     expect(counts(toggleDeletes(edits, [k0])).deletes).toBe(0);
+  });
+
+  it('pastes in one pass with the same result as cell-by-cell edits', () => {
+    const identity = [0];
+    const pageKeys = rows.map((r) => rowKey(r, identity));
+    const editableColumn = (c: number) => c > 0 && c < columns.length;
+    const start = addInsert(toggleDeletes(NO_EDITS, [pageKeys[1]!]), { 1: 'draft@x' });
+    // Row 0 is the pending insert, rows 1-2 the page rows, rows 3-4 become new rows.
+    const values = [
+      ['x', 'n@x', 'n0'],
+      ['y', 'a@x', 'changed'],
+      ['z', 'c@x', ''],
+      ['w', 'd@x', 'd'],
+      ['v', 'e@x', 'e'],
+    ];
+    const { edits, skipped } = applyPaste(start, { row: 0, col: 0 }, values, { pageRows: rows, pageKeys, editableColumn });
+    expect(skipped).toBe(5);
+
+    // Reference: the previous cell-by-cell path.
+    let ref: Edits = start;
+    values.forEach((line, r) => {
+      let id: string | null = null;
+      if (r >= 3) {
+        ref = addInsert(ref);
+        id = ref.inserts[0]!.id;
+      }
+      line.forEach((value, c) => {
+        if (!editableColumn(c)) return;
+        if (id) ref = setInsertCell(ref, id, c, value);
+        else if (r === 0) ref = setInsertCell(ref, ref.inserts[0]!.id, c, value);
+        else ref = setCell(ref, pageKeys[r - 1]!, c, value, rows[r - 1]![c]);
+      });
+    });
+    const strip = (e: Edits) => ({ ...e, inserts: e.inserts.map((i) => i.values) });
+    expect(strip(edits)).toEqual(strip(ref));
+    // Unchanged values ('a@x' on row 1) leave no update behind.
+    expect(edits.updates[pageKeys[0]!]).toEqual({ 2: 'changed' });
+    expect(start.inserts[0]!.values).toEqual({ 1: 'draft@x' });
   });
 });

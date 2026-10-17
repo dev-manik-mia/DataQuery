@@ -104,6 +104,7 @@ async fn opens_files_and_memory_and_reports_errors() {
         memory.list_children(Some(&ObjectRef::new(NodeKind::Database, "main", None, "main"))).await.unwrap().len(),
         1
     );
+    assert_eq!(memory.stream_query("main", "SELECT * FROM t", &[], &mut |_, _| Ok(())).await.unwrap(), 1);
     let missing = ConnConfig { database: "/no/such/folder/x.sqlite".into(), ..cfg.clone() };
     assert_eq!(SqliteAdapter.test(&ConnectParams::new(missing, None)).await.unwrap_err().kind, ErrorKind::Storage);
     let not_db = dir.path().join("notes.txt");
@@ -153,8 +154,13 @@ async fn explorer_lists_lazily() {
     .await
     .unwrap();
     assert_eq!(page.columns[0].name, "id");
+    // Exports read on their own connection, which sees the attached databases too.
+    run_all(&*s, "INSERT INTO billing.invoices VALUES (1, 9.5), (2, 3.0)").await;
+    let export = "SELECT * FROM billing.invoices";
+    assert_eq!(s.stream_query("main", export, &[], &mut |_, _| Ok(())).await.unwrap(), 2);
     run_all(&*s, "DETACH billing").await;
     assert_eq!(s.list_children(None).await.unwrap().len(), 1);
+    assert!(s.stream_query("main", export, &[], &mut |_, _| Ok(())).await.is_err());
 }
 
 #[tokio::test]

@@ -1,9 +1,9 @@
 //! An open `SQLite` database file (or in-memory database).
 //!
 //! User statements run on a connection owned by a worker thread (see
-//! [`crate::worker`]). Catalog reads, table pages and exports use a second
-//! connection to the same file, and grid edits and imports a third, so the
-//! explorer keeps working while a query runs.
+//! [`crate::worker`]). Catalog reads and table pages use a second connection
+//! to the same file, grid edits and imports a third, and each export its own,
+//! so the explorer keeps working while a query or export runs.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,6 +36,10 @@ pub struct SqliteSession {
     interrupter: Arc<Interrupter>,
     catalog: Arc<Mutex<Connection>>,
     writer: Arc<Mutex<Connection>>,
+    /// Where the connections open, for export connections.
+    location: (String, OpenFlags),
+    /// `ATTACH` / `DETACH` statements run so far, replayed on export connections.
+    attachments: Mutex<Vec<(String, Vec<Option<String>>)>>,
 }
 
 fn read_only_error() -> DbError {
@@ -121,6 +125,7 @@ impl SqliteSession {
         let (path, flags) = location(params)?;
         let read_only = params.config.read_only;
         let engine = params.config.engine;
+        let session_location = (path.clone(), flags);
         let (conn, catalog, writer, info) = tokio::task::spawn_blocking(move || {
             let started = Instant::now();
             let conn = open_connection(&path, flags, read_only)?;
@@ -152,7 +157,26 @@ impl SqliteSession {
             interrupter,
             catalog: Arc::new(Mutex::new(catalog)),
             writer: Arc::new(Mutex::new(writer)),
+            location: session_location,
+            attachments: Mutex::new(Vec::new()),
         })
+    }
+
+    /// A new connection that sees what the catalog connection sees: same
+    /// file, flags and attached databases.
+    async fn export_connection(&self) -> DbResult<Connection> {
+        let ((path, flags), read_only) = (self.location.clone(), self.read_only);
+        let attachments =
+            self.attachments.lock().map_err(|_| DbError::internal("attachment list lock poisoned"))?.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_connection(&path, flags, read_only)?;
+            for (sql, params) in &attachments {
+                conn.execute(sql, params_from_iter(params.iter())).map_err(|e| map_error(&e))?;
+            }
+            Ok(conn)
+        })
+        .await
+        .map_err(|e| DbError::internal(format!("database task failed: {e}")))?
     }
 
     async fn request<T>(&self, make: impl FnOnce(oneshot::Sender<DbResult<T>>) -> Command) -> DbResult<T> {
@@ -161,16 +185,21 @@ impl SqliteSession {
         rx.await.map_err(|_| DbError::internal("the query thread stopped"))?
     }
 
+    /// Reads on the catalog connection, or on an export connection
+    /// (`own_connection`) so a long export does not hold up the explorer.
     async fn read_batches(
         &self,
+        own_connection: bool,
         sql: &str,
         params: Params<'_>,
         limits: CellLimits,
         on_batch: &mut BatchFn<'_>,
     ) -> DbResult<u64> {
         let (sql, params) = (sql.to_owned(), params.to_vec());
+        let conn =
+            if own_connection { Arc::new(Mutex::new(self.export_connection().await?)) } else { self.catalog.clone() };
         let (tx, mut rx) = mpsc::channel::<(Vec<ColumnMeta>, Vec<CellRow>)>(2);
-        let work = blocking(&self.catalog, move |conn| {
+        let work = blocking(&conn, move |conn| {
             read_blocking(conn, &sql, &params, limits, |meta, rows| tx.blocking_send((meta.to_vec(), rows)).is_ok())
         });
         let mut total = 0u64;
@@ -234,6 +263,10 @@ impl Session for SqliteSession {
                 })
                 .await?;
             }
+            self.attachments
+                .lock()
+                .map_err(|_| DbError::internal("attachment list lock poisoned"))?
+                .push((sql.to_owned(), params.to_vec()));
         }
         Ok(result)
     }
@@ -275,7 +308,7 @@ impl Session for SqliteSession {
     ) -> DbResult<(Vec<ColumnMeta>, Vec<CellRow>)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
-        self.read_batches(sql, params, limits, &mut |meta, batch| {
+        self.read_batches(false, sql, params, limits, &mut |meta, batch| {
             if columns.is_empty() {
                 columns = meta.to_vec();
             }
@@ -293,7 +326,7 @@ impl Session for SqliteSession {
         params: Params<'_>,
         on_batch: &mut BatchFn<'_>,
     ) -> DbResult<u64> {
-        self.read_batches(sql, params, CellLimits::FULL, on_batch).await
+        self.read_batches(true, sql, params, CellLimits::FULL, on_batch).await
     }
 
     async fn row_estimate(&self, object: &ObjectRef) -> DbResult<Option<i64>> {

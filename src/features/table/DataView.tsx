@@ -29,6 +29,7 @@ import type { DbError } from '@/bindings/DbError';
 import {
   NO_EDITS,
   addInsert,
+  applyPaste,
   applyRow,
   counts,
   duplicateValues,
@@ -159,6 +160,8 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
   );
 
   const pageRows = useMemo(() => page?.rows ?? [], [page]);
+  // Row keys computed once per page, not on every edit.
+  const pageKeys = useMemo(() => pageRows.map((cells, i) => (editable ? rowKey(cells, identity) : String(i))), [pageRows, editable, identity]);
   const rows = useMemo<GridRow[]>(() => {
     const inserted = edits.inserts.map<GridRow>((r) => ({
       key: r.id,
@@ -167,18 +170,19 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
       edited: new Set(Object.keys(r.values).map(Number)),
       defaults: new Set(structure.columns.map((_, i) => i).filter((i) => !(i in r.values))),
     }));
+    const deleted = new Set(edits.deletes);
     const existing = pageRows.map<GridRow>((cells, i) => {
-      const key = editable ? rowKey(cells, identity) : String(i);
+      const key = pageKeys[i]!;
       const changes = edits.updates[key];
       return {
         key: `${key}#${i}`,
         cells: applyRow(cells, changes),
-        status: edits.deletes.includes(key) ? 'deleted' : undefined,
+        status: deleted.has(key) ? 'deleted' : undefined,
         edited: changes ? new Set(Object.keys(changes).map(Number)) : undefined,
       };
     });
     return [...inserted, ...existing];
-  }, [pageRows, edits, structure, editable, identity]);
+  }, [pageRows, pageKeys, edits, structure]);
 
   const insertCount = edits.inserts.length;
   const locate = (index: number) =>
@@ -346,33 +350,12 @@ export function DataView({ object, structure, onReloadStructure, leading, matche
   /** Spreadsheet cells pasted at a position: existing rows are edited, extra rows become new rows. */
   const paste = (at: { row: number; col: number }, values: string[][]) => {
     if (!editable) return toast('This table cannot be edited.');
-    let skipped = 0;
-    {
-      let next = edits;
-      values.forEach((line, r) => {
-        const index = at.row + r;
-        let insertId: string | null = null;
-        if (index >= rows.length) {
-          next = addInsert(next);
-          insertId = next.inserts[0]!.id;
-        }
-        line.forEach((value, c) => {
-          const col = at.col + c;
-          const info = structure.columns[col];
-          if (!info?.editable) {
-            skipped += 1;
-            return;
-          }
-          if (insertId) next = setInsertCell(next, insertId, col, value);
-          else if (index < insertCount) next = setInsertCell(next, next.inserts[index]!.id, col, value);
-          else {
-            const cells = pageRows[index - insertCount]!;
-            next = setCell(next, rowKey(cells, identity), col, value, cells[col]);
-          }
-        });
-      });
-      setEdits(next);
-    }
+    const { edits: next, skipped } = applyPaste(edits, at, values, {
+      pageRows,
+      pageKeys,
+      editableColumn: (col) => structure.columns[col]?.editable ?? false,
+    });
+    setEdits(next);
     toast(`Pasted ${values.length} row${values.length === 1 ? '' : 's'} as pending changes${skipped ? ` (${skipped} read-only cells skipped)` : ''}.`);
   };
 

@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import { Alert, Button, Card, Checkbox } from '@/components/ui';
 import { formatBytes } from '@/lib/format';
 import { useSettings } from '@/stores/settings';
@@ -11,7 +12,7 @@ import { useUpdates } from '@/stores/updates';
  * the app before anything is installed.
  */
 export function UpdatesCard() {
-  const { settings, update } = useSettings();
+  const { settings, update } = useSettings(useShallow((s) => ({ settings: s.settings, update: s.update })));
   const { state, check, install, restart } = useUpdates();
   const busy = state.step === 'checking' || state.step === 'downloading';
 

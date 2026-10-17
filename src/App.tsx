@@ -1,5 +1,6 @@
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import { GlobalDialogs } from '@/components/shell/GlobalDialogs';
 import styles from '@/components/shell/Shell.module.css';
@@ -97,7 +98,7 @@ export function App() {
 }
 
 function AppTitleBar({ view, production }: { view: View; production: boolean }) {
-  const { navigate, back, setPaletteOpen } = useUi();
+  const { navigate, back, setPaletteOpen } = useUi(useShallow((s) => ({ navigate: s.navigate, back: s.back, setPaletteOpen: s.setPaletteOpen })));
   const session = useWorkspace((s) => s.session);
   const link = useWorkspace((s) => s.link);
   const { disconnect, reconnect } = useWorkspace.getState();

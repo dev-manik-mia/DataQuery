@@ -13,12 +13,15 @@ use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::error::map_error;
 
-/// What a connection is used for. Catalog connections are read-only at the
-/// session level, so table views and exports can never write.
+/// What a connection is used for. Catalog and export connections are
+/// read-only at the session level, so table views and exports can never write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Query,
     Catalog,
+    /// One export: read-only like a catalog connection, but without the
+    /// catalog's statement timeout, since streaming a large table takes longer.
+    Export,
     Write,
 }
 
@@ -60,6 +63,7 @@ pub async fn open(params: &ConnectParams, database: &str, role: Role, tls: &Make
         .application_name(match role {
             Role::Query => "DataQuery",
             Role::Catalog => "DataQuery (catalog)",
+            Role::Export => "DataQuery (export)",
             Role::Write => "DataQuery (edit)",
         })
         .ssl_mode(match config.ssl_mode {
@@ -72,7 +76,7 @@ pub async fn open(params: &ConnectParams, database: &str, role: Role, tls: &Make
     }
     if role == Role::Catalog {
         pg.options("-c default_transaction_read_only=on -c statement_timeout=60000");
-    } else if config.read_only {
+    } else if role == Role::Export || config.read_only {
         // Read-only profiles: every transaction on this session is read-only.
         pg.options("-c default_transaction_read_only=on");
     }

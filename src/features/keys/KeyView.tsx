@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { DbError } from '@/bindings/DbError';
 import type { KeyEdit } from '@/bindings/KeyEdit';
@@ -51,7 +52,7 @@ type Dialog = { title: string; fields: FieldSpec[]; confirm: string; run: (v: Re
 /** Screen 12, main pane: one key's facts, its value (paged and editable) and the console. */
 export function KeyView({ object }: { object: ObjectRef }) {
   const session = useWorkspace((s) => s.session)!;
-  const { openTableTab, closeTab, tabs } = useWorkspace();
+  const { openTableTab, closeTab, tabs } = useWorkspace(useShallow((s) => ({ openTableTab: s.openTableTab, closeTab: s.closeTab, tabs: s.tabs })));
   const toast = useUi((s) => s.toast);
   const reloadBrowser = useKeyBrowser((s) => s.reload);
   const key = useMemo(() => keyRefOf(object), [object]);

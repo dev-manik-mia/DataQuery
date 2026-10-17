@@ -182,6 +182,8 @@ pub async fn open(
         keepalive_interval: Some(Duration::from_secs(30)),
         keepalive_max: 3,
         inactivity_timeout: None,
+        // Database protocols are request/response; Nagle would delay each reply.
+        nodelay: true,
         ..client::Config::default()
     });
     let mut sessions: Vec<Arc<Handle<Client>>> = Vec::new();

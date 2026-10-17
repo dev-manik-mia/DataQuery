@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { HistoryEntry } from '@/bindings/HistoryEntry';
 import type { SavedScript } from '@/bindings/SavedScript';
@@ -61,7 +62,7 @@ export function HistoryPage() {
   const [folder, setFolder] = useState('');
   const [tag, setTag] = useState('');
   const connections = useConnections((s) => s.connections);
-  const { ask, toast, toastError } = useUi();
+  const { ask, toast, toastError } = useUi(useShallow((s) => ({ ask: s.ask, toast: s.toast, toastError: s.toastError })));
 
   const load = useCallback(
     async (before: number | null) => {

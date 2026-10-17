@@ -256,6 +256,21 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T24.3 Cassandra/ScyllaDB schema diff: the diff carries each table's partition and clustering keys (`DiffTable`), so new tables get `PRIMARY KEY ((a, b), c) WITH CLUSTERING ORDER BY (…)` and static columns (`ddl::cql_create_table`, also used by the create-table form); columns and secondary indexes are added and dropped; a different primary key or column type is a warning (CQL cannot change them). User-defined types are not compared and must exist in the target keyspace. Round trip tested on Cassandra 5 and ScyllaDB.
 - [x] T24.4 The fallback CQL DDL (servers without `DESCRIBE`) no longer puts `DESC` inside `PRIMARY KEY (…)`.
 
+## 25. Release 0.2.2: performance
+
+- [x] T25.1 Re-render fan-out: whole-store zustand subscriptions became `useShallow` selectors and `TabContent` is memoized, so a keystroke in one editor (or a toast, or a splitter drag) no longer re-renders every open tab and its grid.
+- [x] T25.2 Result grid: rows share one stable handler object, so the row memo holds on scroll, selection and parent renders; client-side column search is deferred and precomputes its needles; the cell inspector formats JSON once per value.
+- [x] T25.3 Table edits: paste builds its edits in one pass (`applyPaste`, was O(rows² × columns)); delete lookups use sets; row keys are computed once per page.
+- [x] T25.4 ER diagram: edges and boxes are a memoized layer, so panning and zooming only move the transform; foreign-key and column lookups are built once per model.
+- [x] T25.5 Monitor polling pauses while another page is open or the window is hidden. The SQL editor no longer copies the whole document a second time on every keystroke.
+- [x] T25.6 PostgreSQL: catalog connections are opened outside the pool lock (a slow handshake no longer stalls every database), and exports stream on their own read-only connection without the catalog's 60 s statement timeout (long exports used to be cut off, and blocked the explorer while they ran).
+- [x] T25.7 DuckDB and SQLite exports use their own connection (SQLite replays `ATTACH`es), so the explorer keeps working during an export; SQLite row estimates are a map lookup.
+- [x] T25.8 ClickHouse result lines are split in one pass per network chunk (was quadratic).
+- [x] T25.9 Query history: a run's statements are written in batched transactions (every 100 statements and at the end) instead of one commit each; `synchronous=NORMAL` under WAL; SQL is capped before redaction, and literal redaction runs off the async runtime.
+- [x] T25.10 Schema diff reads table structures 8 at a time (was one by one) and no longer clones every structure; SSH tunnels set `TCP_NODELAY`.
+
+Not done yet (found in the audit, larger changes): caching table structure between grid pages, reusing the write connection across saves and import batches, column and explorer-tree virtualization, Oracle catalog N+1 queries and fetch size, keyset paging for MongoDB/Neo4j documents, Neo4j editor row limit.
+
 ---
 
 ## Verification

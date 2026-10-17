@@ -270,11 +270,7 @@ impl Rows {
             if let Some(chunk) = self.body.next().await {
                 let chunk =
                     chunk.map_err(|e| DbError::new(ErrorKind::Network, format!("The result stream broke: {e}")))?;
-                self.buffer.extend_from_slice(&chunk);
-                while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
-                    let line: Vec<u8> = self.buffer.drain(..=end).collect();
-                    self.lines.push_back(line[..line.len() - 1].to_vec());
-                }
+                split_lines(&mut self.buffer, &chunk, &mut self.lines);
             } else {
                 self.done = true;
                 if !self.buffer.iter().all(u8::is_ascii_whitespace) {
@@ -299,9 +295,45 @@ impl Rows {
     }
 }
 
+/// Appends `chunk` to `buffer` and moves every complete line into `lines`,
+/// keeping the unfinished tail. Only the new bytes are searched, and the
+/// consumed prefix is removed once.
+fn split_lines(buffer: &mut Vec<u8>, chunk: &[u8], lines: &mut VecDeque<Vec<u8>>) {
+    // The buffered tail holds no newline, so the search starts at the chunk.
+    let mut scan = buffer.len();
+    buffer.extend_from_slice(chunk);
+    let mut start = 0;
+    while let Some(i) = buffer[scan..].iter().position(|b| *b == b'\n') {
+        let end = scan + i;
+        lines.push_back(buffer[start..end].to_vec());
+        start = end + 1;
+        scan = start;
+    }
+    buffer.drain(..start);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_lines_across_chunks() {
+        let (mut buffer, mut lines) = (Vec::new(), VecDeque::new());
+        split_lines(&mut buffer, b"[1,\"a", &mut lines);
+        assert!(lines.is_empty());
+        split_lines(&mut buffer, b"b\"]\n[2", &mut lines);
+        split_lines(&mut buffer, b"]\n\n[3]", &mut lines);
+        assert_eq!(lines, [b"[1,\"ab\"]".to_vec(), b"[2]".to_vec(), Vec::new()]);
+        assert_eq!(buffer, b"[3]");
+
+        lines.clear();
+        let many: Vec<u8> = (0..1000).flat_map(|i| format!("[{i}]\n").into_bytes()).collect();
+        split_lines(&mut buffer, &many, &mut lines);
+        assert_eq!(lines.len(), 1000);
+        assert_eq!(lines[0], b"[3][0]");
+        assert_eq!(lines[999], b"[999]");
+        assert_eq!(buffer, b"");
+    }
 
     #[test]
     fn reads_server_errors() {

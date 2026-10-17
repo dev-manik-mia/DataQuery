@@ -97,6 +97,8 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
   const language = useRef(new Compartment());
   const keyCompartment = useRef(new Compartment());
   const analyzeTimer = useRef<number>(undefined);
+  /** The text last passed to `onChange`. */
+  const emitted = useRef<string | null>(null);
 
   const analyze = async (doc: string) => {
     const statements = await api.analyzeSql(doc, flavor).catch(() => []);
@@ -138,6 +140,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
           }
           if (u.docChanged) {
             const doc = u.state.doc.toString();
+            emitted.current = doc;
             callbacks.current.onChange(doc);
             window.clearTimeout(analyzeTimer.current);
             analyzeTimer.current = window.setTimeout(() => void analyze(doc), ANALYZE_DELAY_MS);
@@ -162,10 +165,11 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // External value changes (e.g. "Open in editor") replace the document.
+  // External value changes (e.g. "Open in editor") replace the document. The
+  // echo of our own edit is skipped without copying the document again.
   useEffect(() => {
     const v = view.current;
-    if (v && v.state.doc.toString() !== value) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
+    if (v && value !== emitted.current && v.state.doc.toString() !== value) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
   }, [value]);
 
   useEffect(() => {

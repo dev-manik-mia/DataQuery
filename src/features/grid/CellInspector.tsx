@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { Cell } from '@/bindings/Cell';
 import { Alert, Button, Dialog, Segmented, Spinner } from '@/components/ui';
@@ -44,7 +44,7 @@ export function CellInspector({ column, typeName, cell: preview, load, onSaveFil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const text = cell.kind === 'json' ? prettyJson(cell.value) : cellText(cell);
+  const text = useMemo(() => (cell.kind === 'json' ? prettyJson(cell.value) : cellText(cell)), [cell]);
   const meta: [string, string][] = [
     ['Column', column],
     ['Type', typeName || cell.kind],

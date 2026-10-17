@@ -6,6 +6,8 @@
 //! clustering keys: new tables are created with that layout, and a key that
 //! differs is reported, since CQL cannot change a primary key.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -174,9 +176,11 @@ fn constraint_change(
     }
 }
 
-struct Plan {
+struct Plan<'a> {
+    /// Drops that run before all others, in reverse order of planning.
+    first_drops: Vec<SchemaChange>,
     drops: Vec<SchemaChange>,
-    alters: Vec<(SchemaChange, Option<TableStructure>)>,
+    alters: Vec<(SchemaChange, Option<&'a TableStructure>)>,
     creates: Vec<SchemaChange>,
     late: Vec<SchemaChange>,
     /// Ready statements, run with the creates (wide-column tables).
@@ -202,6 +206,15 @@ fn push_change(
     Ok(())
 }
 
+/// Tables by name; the first one wins, like a linear search.
+fn by_name(list: &[DiffTable]) -> HashMap<&str, &DiffTable> {
+    let mut map = HashMap::with_capacity(list.len());
+    for t in list.iter().filter(|t| t.structure.object.kind == NodeKind::Table) {
+        map.entry(t.structure.object.name.as_str()).or_insert(t);
+    }
+    map
+}
+
 /// Compares `source` with `target` and plans changes to the target.
 pub fn diff(
     d: &dyn Dialect,
@@ -211,8 +224,14 @@ pub fn diff(
     target_container: &Container,
 ) -> DbResult<SchemaDiff> {
     let mut out = SchemaDiff::default();
-    let mut plan =
-        Plan { drops: Vec::new(), alters: Vec::new(), creates: Vec::new(), late: Vec::new(), create_sql: Vec::new() };
+    let mut plan = Plan {
+        first_drops: Vec::new(),
+        drops: Vec::new(),
+        alters: Vec::new(),
+        creates: Vec::new(),
+        late: Vec::new(),
+        create_sql: Vec::new(),
+    };
     let item = |out: &mut SchemaDiff, table: &str, kind: &str, name: &str, change, detail: String| {
         out.items.push(DiffItem { table: table.into(), kind: kind.into(), name: name.into(), change, detail });
     };
@@ -220,15 +239,14 @@ pub fn diff(
         list.iter().map(|t| &t.structure.object).filter(|o| o.kind == NodeKind::Table).map(|o| o.name.clone()).collect()
     };
     let (source_names, target_names) = (tables(source), tables(target));
-    let find = |list: &'_ [DiffTable], name: &str| {
-        list.iter().find(|t| t.structure.object.name == name && t.structure.object.kind == NodeKind::Table).cloned()
-    };
+    let (source_by_name, target_by_name) = (by_name(source), by_name(target));
 
     for name in &source_names {
-        let source_table = find(source, name).ok_or_else(|| DbError::internal("source table vanished"))?;
+        let source_table =
+            *source_by_name.get(name.as_str()).ok_or_else(|| DbError::internal("source table vanished"))?;
         let s = &source_table.structure;
         let table = target_container.table(name);
-        let Some(target_table) = find(target, name) else {
+        let Some(&target_table) = target_by_name.get(name.as_str()) else {
             item(&mut out, name, "table", name, DiffChange::Added, format!("{} columns", s.columns.len()));
             let columns = s.columns.iter().map(column_def).collect::<Vec<_>>();
             if source_table.keys.is_empty() {
@@ -319,7 +337,7 @@ pub fn diff(
                                     None => DefaultChange::Drop,
                                 }),
                             },
-                            Some(t.clone()),
+                            Some(t),
                         ));
                     }
                 }
@@ -365,7 +383,7 @@ pub fn diff(
         for (cname, key) in target_keys.iter().filter(|(n, _)| !source_keys.iter().any(|(sn, _, _)| sn == n)) {
             item(&mut out, name, "constraint", cname, DiffChange::Removed, key.clone());
             let kind = t.constraints.iter().find(|c| &c.name == cname).map_or(ConstraintKind::Check, |c| c.kind);
-            plan.drops.insert(0, SchemaChange::DropConstraint { table: table.clone(), name: cname.clone(), kind });
+            plan.first_drops.push(SchemaChange::DropConstraint { table: table.clone(), name: cname.clone(), kind });
         }
         // Plain indexes, matched by name.
         for si in plain_indexes(s) {
@@ -381,7 +399,7 @@ pub fn diff(
             let change = if ti.is_some() { DiffChange::Changed } else { DiffChange::Added };
             item(&mut out, name, "index", &si.name, change, format!("({})", si.columns.join(", ")));
             if ti.is_some() {
-                plan.drops.insert(0, SchemaChange::DropIndex { table: table.clone(), name: si.name.clone() });
+                plan.first_drops.push(SchemaChange::DropIndex { table: table.clone(), name: si.name.clone() });
             }
             plan.late.push(SchemaChange::CreateIndex {
                 table: table.clone(),
@@ -392,10 +410,10 @@ pub fn diff(
         }
         for ti in plain_indexes(t).filter(|ti| !plain_indexes(s).any(|si| si.name == ti.name)) {
             item(&mut out, name, "index", &ti.name, DiffChange::Removed, format!("({})", ti.columns.join(", ")));
-            plan.drops.insert(0, SchemaChange::DropIndex { table: table.clone(), name: ti.name.clone() });
+            plan.first_drops.push(SchemaChange::DropIndex { table: table.clone(), name: ti.name.clone() });
         }
     }
-    for name in target_names.iter().filter(|n| !source_names.contains(n)) {
+    for name in target_names.iter().filter(|n| !source_by_name.contains_key(n.as_str())) {
         item(&mut out, name, "table", name, DiffChange::Removed, String::new());
         plan.drops.push(SchemaChange::DropTable { table: target_container.table(name), cascade: false });
     }
@@ -404,11 +422,13 @@ pub fn diff(
     // warning; the rest of the plan still applies.
     let mut statements = Vec::new();
     let early = plan
-        .drops
+        .first_drops
         .iter()
+        .rev()
+        .chain(&plan.drops)
         .chain(&plan.creates)
         .map(|c| (c, None))
-        .chain(plan.alters.iter().map(|(c, s)| (c, s.as_ref())));
+        .chain(plan.alters.iter().map(|&(ref c, s)| (c, s)));
     for (change, structure) in early {
         push_change(d, change, structure, &mut statements, &mut out.warnings)?;
     }

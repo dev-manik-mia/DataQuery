@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { AuthMethod } from '@/bindings/AuthMethod';
 import type { ConnConfig } from '@/bindings/ConnConfig';
@@ -156,7 +157,7 @@ function validate(s: FormState, fileBased: boolean, engine: Engine): Errors {
 /** Step 2: connection details, test, save. */
 export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engine; connectionId?: string; prefill?: ParsedUrl }) {
   const info = useEngine(engine);
-  const { connections, folders, save } = useConnections();
+  const { connections, folders, save } = useConnections(useShallow((s) => ({ connections: s.connections, folders: s.folders, save: s.save })));
   const navigate = useUi((s) => s.navigate);
   const connect = useWorkspace((s) => s.connect);
   const existing = connections.find((c) => c.id === connectionId);
