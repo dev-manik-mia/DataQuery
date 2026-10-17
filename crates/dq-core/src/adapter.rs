@@ -5,7 +5,8 @@
 //! on top of these primitives.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
@@ -216,6 +217,49 @@ pub struct SessionOption {
     pub choices: Vec<String>,
 }
 
+/// One connection kept between uses, e.g. by [`Session::run_in_transaction`],
+/// so back-to-back transactions (grid saves, import chunks) skip the connect
+/// handshake. Callers take it out while they use it (a concurrent caller opens
+/// its own) and put it back only after a clean finish, so a connection in an
+/// unknown state is dropped, never reused. One idle longer than
+/// [`IdleConnection::MAX_IDLE`] is dropped too, before a server or network
+/// idle timeout can have closed it unnoticed.
+pub struct IdleConnection<C> {
+    slot: Mutex<Option<(String, Instant, C)>>,
+}
+
+impl<C> Default for IdleConnection<C> {
+    fn default() -> Self {
+        Self { slot: Mutex::new(None) }
+    }
+}
+
+impl<C> IdleConnection<C> {
+    pub const MAX_IDLE: Duration = Duration::from_secs(60);
+
+    /// The kept connection, if it is for `database` and still fresh. A kept
+    /// connection that does not qualify is closed.
+    pub fn take(&self, database: &str) -> Option<C> {
+        let (db, idle_since, conn) = self.lock().take()?;
+        (db == database && idle_since.elapsed() < Self::MAX_IDLE).then_some(conn)
+    }
+
+    /// Keeps `conn`, opened on `database`, for the next caller, replacing any kept connection.
+    pub fn put(&self, database: &str, conn: C) {
+        // The replaced connection closes after the lock is released.
+        let _replaced = self.lock().replace((database.to_owned(), Instant::now(), conn));
+    }
+
+    /// Removes the kept connection, e.g. to close it with the session.
+    pub fn clear(&self) -> Option<C> {
+        self.lock().take().map(|(_, _, conn)| conn)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<(String, Instant, C)>> {
+        self.slot.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// Checks an affected-row count against a statement's expectation.
 pub fn check_affected(statement: &BoundStatement, affected: u64) -> DbResult<()> {
     match statement.expect_rows {
@@ -226,5 +270,26 @@ pub fn check_affected(statement: &BoundStatement, affected: u64) -> DbResult<()>
             ),
         )),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_connection_is_reused_only_on_its_database() {
+        let idle = IdleConnection::default();
+        assert_eq!(idle.take("a"), None);
+        idle.put("a", 1);
+        assert_eq!(idle.take("a"), Some(1));
+        assert_eq!(idle.take("a"), None, "taken out while in use");
+        idle.put("a", 2);
+        assert_eq!(idle.take("b"), None);
+        assert_eq!(idle.take("a"), None, "a connection for another database is closed");
+        idle.put("a", 3);
+        idle.put("b", 4);
+        assert_eq!(idle.clear(), Some(4), "the newest replaces the kept one");
+        assert_eq!(idle.take("a"), None);
     }
 }

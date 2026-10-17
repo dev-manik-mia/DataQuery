@@ -615,3 +615,181 @@ async fn schema_changes_and_diff() {
     )
     .await;
 }
+
+/// Foreign keys read the same from the structure, the dependencies and the
+/// schema model: composite, ON DELETE CASCADE, to a unique key and to another schema.
+#[tokio::test]
+async fn foreign_keys_search_and_schema_list() {
+    use dq_core::schema::ForeignKey;
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let admin = ADAPTER
+        .connect(&params(&ConnConfig { username: "system".into(), ..cfg.clone() }, PASSWORD))
+        .await
+        .expect("connect as system");
+    admin.execute("GRANT REFERENCES ON billing.invoices TO dataquery", &[], OPTS).await.unwrap();
+    let _ = admin.execute("DROP USER it_empty CASCADE", &[], OPTS).await;
+    admin.execute("CREATE USER it_empty IDENTIFIED BY it_empty", &[], OPTS).await.unwrap();
+    for t in ["IT_FK_CHILD", "IT_FK_PARENT"] {
+        let _ = s.execute(&format!("DROP TABLE {t} CASCADE CONSTRAINTS PURGE"), &[], OPTS).await;
+    }
+    run_all(
+        &*s,
+        "CREATE TABLE it_fk_parent (a NUMBER, b NUMBER, code VARCHAR2(10), \
+           CONSTRAINT it_fk_parent_pk PRIMARY KEY (a, b), CONSTRAINT it_fk_parent_code UNIQUE (code));
+         CREATE TABLE it_fk_child (id NUMBER PRIMARY KEY, pa NUMBER, pb NUMBER, code VARCHAR2(10), inv NUMBER(10), \
+           CONSTRAINT it_fk_child_parent FOREIGN KEY (pa, pb) REFERENCES it_fk_parent (a, b) ON DELETE CASCADE, \
+           CONSTRAINT it_fk_child_code FOREIGN KEY (code) REFERENCES it_fk_parent (code), \
+           CONSTRAINT it_fk_child_invoice FOREIGN KEY (inv) REFERENCES billing.invoices (id))",
+    )
+    .await;
+    let (parent, child) = (table("IT_FK_PARENT"), table("IT_FK_CHILD"));
+    let invoices = ObjectRef::new(NodeKind::Table, PDB, Some("BILLING".into()), "INVOICES");
+    let fk = |name: &str, columns: &[&str], target: &ObjectRef, target_columns: &[&str], on_delete: Option<&str>| {
+        ForeignKey {
+            name: name.into(),
+            source: child.clone(),
+            columns: columns.iter().map(|c| (*c).into()).collect(),
+            target: target.clone(),
+            target_columns: target_columns.iter().map(|c| (*c).into()).collect(),
+            on_update: None,
+            on_delete: on_delete.map(Into::into),
+        }
+    };
+    let expected = vec![
+        fk("IT_FK_CHILD_CODE", &["CODE"], &parent, &["CODE"], None),
+        fk("IT_FK_CHILD_INVOICE", &["INV"], &invoices, &["ID"], None),
+        fk("IT_FK_CHILD_PARENT", &["PA", "PB"], &parent, &["A", "B"], Some("CASCADE")),
+    ];
+    let st = s.structure(&child).await.unwrap();
+    assert_eq!(st.foreign_keys, expected);
+    let definitions: Vec<_> = st
+        .constraints
+        .iter()
+        .filter(|c| c.name.starts_with("IT_FK_CHILD_"))
+        .map(|c| (c.name.as_str(), c.definition.as_str()))
+        .collect();
+    assert_eq!(
+        definitions,
+        [
+            ("IT_FK_CHILD_CODE", "FOREIGN KEY (CODE) REFERENCES IT_FK_PARENT (CODE)"),
+            ("IT_FK_CHILD_INVOICE", "FOREIGN KEY (INV) REFERENCES BILLING.INVOICES (ID)"),
+            ("IT_FK_CHILD_PARENT", "FOREIGN KEY (PA, PB) REFERENCES IT_FK_PARENT (A, B) ON DELETE CASCADE"),
+        ]
+    );
+    let model = s.schema_model(PDB, Some(SCHEMA)).await.unwrap();
+    let modelled: Vec<_> = model.foreign_keys.iter().filter(|f| f.source == child).cloned().collect();
+    assert_eq!(modelled, expected);
+    assert!(model.foreign_keys.iter().any(|f| f.name == "ORDERS_CUSTOMER_FK"));
+    let relations = |deps: &[dq_core::schema::Dependency]| {
+        let mut out: Vec<_> = deps
+            .iter()
+            .filter(|d| d.relation.starts_with("foreign key"))
+            .map(|d| (d.object.clone(), d.relation.clone()))
+            .collect();
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out
+    };
+    let deps = s.dependencies(&child).await.unwrap();
+    assert_eq!(
+        relations(&deps.uses),
+        [
+            (parent.clone(), "foreign key IT_FK_CHILD_CODE".to_owned()),
+            (invoices.clone(), "foreign key IT_FK_CHILD_INVOICE".to_owned()),
+            (parent.clone(), "foreign key IT_FK_CHILD_PARENT".to_owned()),
+        ]
+    );
+    let deps = s.dependencies(&parent).await.unwrap();
+    assert_eq!(
+        relations(&deps.used_by),
+        [
+            (child.clone(), "foreign key IT_FK_CHILD_CODE".to_owned()),
+            (child.clone(), "foreign key IT_FK_CHILD_PARENT".to_owned()),
+        ]
+    );
+    let deps = s.dependencies(&invoices).await.unwrap();
+    assert!(relations(&deps.used_by).contains(&(child.clone(), "foreign key IT_FK_CHILD_INVOICE".to_owned())));
+
+    // Search finds names anywhere in visible schemas, shortest first.
+    let found = s.search("it_fk_", 10).await.unwrap();
+    let names: Vec<_> = found.iter().map(|n| (n.object.schema.as_deref(), n.object.name.as_str())).collect();
+    assert_eq!(names, [(Some(SCHEMA), "IT_FK_CHILD"), (Some(SCHEMA), "IT_FK_PARENT")]);
+    assert_eq!(found[0].object.kind, NodeKind::Table);
+    let found = s.search("ORDER", 2).await.unwrap();
+    let names: Vec<_> = found.iter().map(|n| n.object.name.as_str()).collect();
+    assert_eq!(names, ["ORDERS", "PAID_ORDERS"]);
+    assert!(found.iter().any(|n| n.object.kind == NodeKind::View));
+    assert!(s.search("invoic", 10).await.unwrap().iter().any(|n| n.object.schema.as_deref() == Some("BILLING")));
+    assert!(s.search("no_such_object_name", 10).await.unwrap().is_empty());
+
+    // Schemas carry their relation counts; an empty schema shows 0.
+    let db = s.list_children(None).await.unwrap().remove(0);
+    let schemas = s.list_children(Some(&db.object)).await.unwrap();
+    let count = |name: &str| schemas.iter().find(|n| n.object.name == name).map(|n| n.row_estimate);
+    assert_eq!(count("IT_EMPTY"), Some(Some(0)));
+    assert_eq!(count("BILLING"), Some(Some(1)));
+    assert!(count(SCHEMA).flatten().unwrap() >= 6);
+    assert_eq!(schemas[0].object.name, SCHEMA);
+
+    run_all(&*s, "DROP TABLE it_fk_child CASCADE CONSTRAINTS PURGE; DROP TABLE it_fk_parent CASCADE CONSTRAINTS PURGE")
+        .await;
+    admin.execute("DROP USER it_empty CASCADE", &[], OPTS).await.unwrap();
+}
+
+/// Grid saves reuse one write connection: consecutive transactions, and a
+/// failed one followed by a good one, all land correctly.
+#[tokio::test]
+async fn transactions_reuse_the_write_connection() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let t = scratch(&*s, "IT_WRITES", "(id NUMBER PRIMARY KEY, note VARCHAR2(20))").await;
+    let cv = |c: &str, v: &str| ColumnValue { column: c.into(), value: Some(v.into()) };
+    let insert = |id: &str| vec![RowChange::Insert { values: vec![cv("ID", id), cv("NOTE", "x")] }];
+    let count = |s: Arc<dyn Session>| async move {
+        text(&s.execute("SELECT COUNT(*) FROM it_writes", &[], OPTS).await.unwrap().rows[0][0])
+    };
+    assert_eq!(ops::apply_changes(&*s, &t, &insert("1"), false).await.unwrap().inserted, 1);
+    assert_eq!(ops::apply_changes(&*s, &t, &insert("2"), false).await.unwrap().inserted, 1);
+    assert_eq!(count(s.clone()).await, "2");
+    // The first change runs, the duplicate key fails: nothing is kept.
+    let failing = [insert("3"), insert("1")].concat();
+    assert_eq!(ops::apply_changes(&*s, &t, &failing, false).await.unwrap_err().kind, ErrorKind::Constraint);
+    assert_eq!(count(s.clone()).await, "2");
+    let missing = vec![RowChange::Delete { key: vec![cv("ID", "404")] }];
+    assert!(ops::apply_changes(&*s, &t, &missing, false).await.is_err());
+    let report = ops::apply_changes(&*s, &t, &[insert("3"), insert("4")].concat(), false).await.unwrap();
+    assert_eq!(report.inserted, 2);
+    // Committed: another session sees every row, and no lock is left behind.
+    let other = session(&cfg).await;
+    assert_eq!(count(other.clone()).await, "4");
+    other.execute("DELETE FROM it_writes WHERE id = 4", &[], OPTS).await.unwrap();
+    assert_eq!(count(s.clone()).await, "3");
+    s.close().await;
+    other.execute("DROP TABLE it_writes PURGE", &[], OPTS).await.unwrap();
+}
+
+/// Large reads take few round trips: the fetch is sized from the columns.
+#[tokio::test]
+async fn reads_fetch_many_rows_per_round_trip() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let trips = || async {
+        let sql = "SELECT m.value FROM v$mystat m JOIN v$statname n ON n.statistic# = m.statistic# \
+                   WHERE n.name = 'SQL*Net roundtrips to/from client'";
+        text(&s.execute(sql, &[], OPTS).await.unwrap().rows[0][0]).parse::<i64>().unwrap()
+    };
+    let before = trips().await;
+    let limits = ExecOptions { row_limit: 5_000, timeout_secs: 30 };
+    let r = s.execute("SELECT LEVEL, 'row ' || LEVEL FROM dual CONNECT BY LEVEL <= 4000", &[], limits).await.unwrap();
+    assert_eq!((r.rows.len(), r.has_more), (4_000, false));
+    // Measuring takes two; the read itself, a describe and four fetches of 1,000 rows.
+    let used = trips().await - before;
+    assert!(used <= 8, "{used} round trips");
+    // LOB columns keep the driver's 100 rows per round trip, and still read whole.
+    let r = s.execute("SELECT id, notes FROM orders ORDER BY id", &[], limits).await.unwrap();
+    assert_eq!(r.rows.len(), 1200);
+    assert_eq!(text(&r.rows[1][1]), "Gift wrap");
+    let rows = s.read_query(PDB, "SELECT id, status FROM orders", &[], dq_core::value::CellLimits::FULL).await.unwrap();
+    assert_eq!(rows.1.len(), 1200);
+}

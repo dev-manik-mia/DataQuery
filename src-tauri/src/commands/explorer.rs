@@ -16,7 +16,10 @@ pub async fn list_children(
     session_id: String,
     parent: Option<ObjectRef>,
 ) -> CmdResult<Vec<Node>> {
-    state.session(&session_id).await?.session.list_children(parent.as_ref()).await
+    let open = state.session(&session_id).await?;
+    // Listing is also the explorer's Refresh: structures inside `parent` are read again.
+    open.structures.invalidate(parent.as_ref());
+    open.session.list_children(parent.as_ref()).await
 }
 
 #[tauri::command]

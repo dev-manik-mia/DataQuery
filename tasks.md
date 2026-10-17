@@ -269,7 +269,14 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T25.9 Query history: a run's statements are written in batched transactions (every 100 statements and at the end) instead of one commit each; `synchronous=NORMAL` under WAL; SQL is capped before redaction, and literal redaction runs off the async runtime.
 - [x] T25.10 Schema diff reads table structures 8 at a time (was one by one) and no longer clones every structure; SSH tunnels set `TCP_NODELAY`.
 
-Not done yet (found in the audit, larger changes): caching table structure between grid pages, reusing the write connection across saves and import batches, column and explorer-tree virtualization, Oracle catalog N+1 queries and fetch size, keyset paging for MongoDB/Neo4j documents, Neo4j editor row limit.
+## 26. Release 0.2.3: performance, part 2
+
+- [x] T26.1 Table structure cache per session (`dq_core::schema_cache::StructureCache`, 30 s TTL as a safety net; concurrent misses share one read): grid pages, counts, cells, edits, exports and imports no longer re-read the catalog each time. Invalidated by the structure tab (always fresh), schema changes, any editor statement that may change structure, commit/rollback, explorer refresh and disconnect.
+- [x] T26.2 Reusable write connection (`dq_core::adapter::IdleConnection`): grid saves, schema applies and import chunks reuse one connection per session and database instead of connecting each time (PostgreSQL/CockroachDB, SQL Server, Redis/Valkey/Dragonfly, Oracle; MySQL/MariaDB through a write pool). Returned only after a clean commit, dropped on any error or after 60 s idle. MySQL's catalog pool now keeps idle connections (it closed every one before).
+- [x] T26.3 Result grid windows its columns above 40 visible columns (pinned, active and editing columns always rendered; header and body stay aligned); the explorer tree and key browser are virtualized; "Copy all" serializes large results in chunks and starts the clipboard write within the click (WebKit); completion sources are cached.
+- [x] T26.4 Oracle: foreign keys in one set-based query (was 2N+1); fetch array size from the result's row width (up to 1,000 rows per round trip, defaults kept for LOB/LONG columns); pool rollback only when a transaction is open; schema list counts in one grouped query; search narrows names first, then joins.
+- [x] T26.5 MongoDB Documents view continues after the last `_id` (default order is now `_id` order; other sorts stay offset-based with an `_id` tiebreaker, since MongoDB array and missing-field ordering makes field seeks inexact). Neo4j continues after the last sort key for sorted pages (follows Cypher's cross-type ordering); unsorted pages keep `SKIP`, which measured faster than an `elementId` seek.
+- [x] T26.6 Neo4j editor keeps at most 100,000 rows while parsing (the rest is skipped without building values), caps plain read queries server-side, and says when rows were dropped; label counts and samples run 8 at a time. MongoDB search lists collections 16 databases at a time.
 
 ---
 

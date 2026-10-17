@@ -89,7 +89,7 @@ pub async fn export_data(
     let path = file_path(&path)?;
     let open = state.session(&session_id).await?;
     let control = start_job(&app, &state, &job_id);
-    let result = ops::export(&*open.session, &source, format, &options.unwrap_or_default(), &path, &control).await;
+    let result = ops::export(open.ops(), &source, format, &options.unwrap_or_default(), &path, &control).await;
     end_job(&state, &job_id);
     result
 }
@@ -132,7 +132,7 @@ pub async fn import_data(
         })
         .collect::<CmdResult<Vec<_>>>()?;
     let control = start_job(&app, &state, &job_id);
-    let result = ops::import(&*open.session, &object, &source, &mapping, &options.unwrap_or_default(), &control).await;
+    let result = ops::import(open.ops(), &object, &source, &mapping, &options.unwrap_or_default(), &control).await;
     end_job(&state, &job_id);
     Ok(Guarded::Done { value: result? })
 }

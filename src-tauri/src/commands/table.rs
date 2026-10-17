@@ -16,7 +16,11 @@ pub async fn table_structure(
     session_id: String,
     object: ObjectRef,
 ) -> CmdResult<TableStructure> {
-    ops::structure(&*state.session(&session_id).await?.session, &object).await
+    // Always read fresh (the structure tab and edit forms), and refresh the cache with it.
+    let open = state.session(&session_id).await?;
+    let structure = ops::structure(&*open.session, &object).await?;
+    open.structures.insert(&object, structure.clone());
+    Ok(structure)
 }
 
 /// Partition and clustering columns (CQL), for the `PK` / `CK` header markers.
@@ -41,7 +45,7 @@ pub async fn table_page(
     session_id: String,
     request: TablePageRequest,
 ) -> CmdResult<TablePage> {
-    ops::table_page(&*state.session(&session_id).await?.session, &request).await
+    ops::table_page(state.session(&session_id).await?.ops(), &request).await
 }
 
 #[tauri::command]
@@ -51,7 +55,7 @@ pub async fn row_count(
     object: ObjectRef,
     rows: RowFilter,
 ) -> CmdResult<RowCount> {
-    ops::row_count(&*state.session(&session_id).await?.session, &object, &rows).await
+    ops::row_count(state.session(&session_id).await?.ops(), &object, &rows).await
 }
 
 #[tauri::command]
@@ -62,8 +66,7 @@ pub async fn preview_changes(
     changes: Vec<RowChange>,
     full_row: Option<bool>,
 ) -> CmdResult<String> {
-    ops::preview_changes(&*state.session(&session_id).await?.session, &object, &changes, full_row.unwrap_or(false))
-        .await
+    ops::preview_changes(state.session(&session_id).await?.ops(), &object, &changes, full_row.unwrap_or(false)).await
 }
 
 /// Saves grid changes in one transaction. Production asks first. `full_row`
@@ -82,7 +85,7 @@ pub async fn apply_changes(
     if let Some(request) = safety::check(&connection, &settings, &Intent::write(), confirmation.as_ref())? {
         return Ok(Guarded::NeedsConfirmation { request });
     }
-    let value = ops::apply_changes(&*open.session, &object, &changes, full_row.unwrap_or(false)).await?;
+    let value = ops::apply_changes(open.ops(), &object, &changes, full_row.unwrap_or(false)).await?;
     Ok(Guarded::Done { value })
 }
 
@@ -98,7 +101,7 @@ pub async fn cell_value(
     key: Vec<ColumnValue>,
     column: String,
 ) -> CmdResult<Cell> {
-    ops::cell_value(&*state.session(&session_id).await?.session, &object, &key, &column, VIEWER_LIMITS).await
+    ops::cell_value(state.session(&session_id).await?.ops(), &object, &key, &column, VIEWER_LIMITS).await
 }
 
 /// Writes a cell's complete value (binary as bytes, text as UTF-8) to a file chosen in the save dialog.
@@ -116,7 +119,7 @@ pub async fn save_cell(
         return Err(dq_core::DbError::invalid("Choose a file with the file dialog."));
     }
     let cell =
-        ops::cell_value(&*state.session(&session_id).await?.session, &object, &key, &column, CellLimits::FULL).await?;
+        ops::cell_value(state.session(&session_id).await?.ops(), &object, &key, &column, CellLimits::FULL).await?;
     let bytes = match &cell {
         Cell::Binary { head_hex, .. } => (0..head_hex.len())
             .step_by(2)

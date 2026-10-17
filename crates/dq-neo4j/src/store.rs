@@ -6,6 +6,8 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dq_core::document::{DocField, DocIndex, Document, DocumentFeatures, DocumentPage, DocumentStore, FindRequest};
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::schema::ColumnInfo;
@@ -91,27 +93,32 @@ pub fn validate_fragment(fragment: &str, what: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// `n.name, n.age` → `{`name`: n.name, `age`: n.age}`.
-pub fn projection_map(projection: &str) -> String {
-    let tokens = tokenize(projection, SqlFlavor::Cypher);
+/// Parts of `text` separated by commas outside brackets, trimmed and non-empty.
+fn split_top_level(text: &str) -> Vec<&str> {
+    let tokens = tokenize(text, SqlFlavor::Cypher);
     let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut start = 0;
     for t in &tokens {
-        match (t.kind, t.text(projection)) {
+        match (t.kind, t.text(text)) {
             (TokenKind::OpenParen, _) | (TokenKind::Punct, "[" | "{") => depth += 1,
             (TokenKind::CloseParen, _) | (TokenKind::Punct, "]" | "}") => depth -= 1,
             (TokenKind::Punct, ",") if depth == 0 => {
-                parts.push(projection[start..t.start].trim());
+                parts.push(text[start..t.start].trim());
                 start = t.end;
             }
             _ => {}
         }
     }
-    parts.push(projection[start..].trim());
-    let entries: Vec<String> = parts
+    parts.push(text[start..].trim());
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
+/// `n.name, n.age` → `{`name`: n.name, `age`: n.age}`.
+pub fn projection_map(projection: &str) -> String {
+    let entries: Vec<String> = split_top_level(projection)
         .into_iter()
-        .filter(|p| !p.is_empty())
         .map(|expr| {
             let key = expr
                 .rsplit_once('.')
@@ -125,6 +132,144 @@ pub fn projection_map(projection: &str) -> String {
         })
         .collect();
     format!("{{{}}}", entries.join(", "))
+}
+
+/// One `ORDER BY` term of the sort input.
+#[derive(Debug, PartialEq, Eq)]
+struct SortTerm<'a> {
+    expr: &'a str,
+    descending: bool,
+}
+
+/// `n.name DESC, n.age` → its terms. The sort was validated as a fragment.
+fn sort_terms(sort: &str) -> Vec<SortTerm<'_>> {
+    split_top_level(sort)
+        .into_iter()
+        .map(|term| {
+            let tokens = tokenize(term, SqlFlavor::Cypher);
+            let last = tokens.iter().rev().find(|t| t.kind != TokenKind::Whitespace);
+            match last.filter(|t| t.kind == TokenKind::Word).map(|t| (t.start, t.text(term).to_ascii_uppercase())) {
+                Some((start, word)) if matches!(word.as_str(), "ASC" | "ASCENDING" | "DESC" | "DESCENDING") => {
+                    SortTerm { expr: term[..start].trim(), descending: word.starts_with("DESC") }
+                }
+                _ => SortTerm { expr: term, descending: false },
+            }
+        })
+        .collect()
+}
+
+/// Type classes in `ORDER BY` order from zoned datetimes up (maps, entities, lists,
+/// paths and points come before; `null` after). A seek compares within a class
+/// with `<` / `>` and across classes with type predicates, as `ORDER BY` does.
+const TYPE_CLASSES: &[&[&str]] = &[
+    &["ZONED DATETIME"],
+    &["LOCAL DATETIME"],
+    &["DATE"],
+    &["ZONED TIME"],
+    &["LOCAL TIME"],
+    &["DURATION"],
+    &["STRING"],
+    &["BOOLEAN"],
+    &["INTEGER", "FLOAT"],
+];
+const NUMBER_CLASS: usize = 8;
+
+/// A sort value a page may continue after.
+enum SeekValue {
+    Null,
+    /// An index into [`TYPE_CLASSES`].
+    Class(usize),
+}
+
+/// The class of a sort value, or `None` when seeking on it is not exact
+/// (temporal values lose precision in the typed JSON, NaN and other types do
+/// not compare with `<`).
+fn seek_class(v: &Value) -> Option<SeekValue> {
+    let finite = |v: &Value| {
+        v.get("_value").and_then(Value::as_str).and_then(|s| s.parse::<f64>().ok()).is_some_and(f64::is_finite)
+    };
+    match values::type_of(v) {
+        "Null" => Some(SeekValue::Null),
+        "String" => Some(SeekValue::Class(6)),
+        "Boolean" => Some(SeekValue::Class(7)),
+        "Integer" => Some(SeekValue::Class(NUMBER_CLASS)),
+        "Float" if finite(v) => Some(SeekValue::Class(NUMBER_CLASS)),
+        _ => None,
+    }
+}
+
+/// `e` is not null and of a class in `classes`.
+fn of_classes(e: &str, classes: &[&[&str]]) -> String {
+    let tests: Vec<String> = classes.iter().flat_map(|c| c.iter()).map(|t| format!("{e} IS :: {t} NOT NULL")).collect();
+    if tests.is_empty() { "false".to_owned() } else { tests.join(" OR ") }
+}
+
+/// The rows after the last one of a page in `ORDER BY <terms>, elementId(n)` order,
+/// with its sort values bound as `$seek_<i>` and its id as `$seek_id`. `None` when a
+/// value cannot be sought exactly; the page then continues with `SKIP`.
+fn seek_predicate(terms: &[SortTerm<'_>], keys: &[Value], params: &mut Map<String, Value>) -> Option<String> {
+    if terms.len() != keys.len() {
+        return None;
+    }
+    let mut rest = "elementId(n) > $seek_id".to_owned();
+    for (i, (term, key)) in terms.iter().zip(keys).enumerate().rev() {
+        let e = format!("({})", term.expr);
+        let (after, equal) = match (seek_class(key)?, term.descending) {
+            // Nulls sort last ascending, first descending.
+            (SeekValue::Null, false) => (None, format!("{e} IS NULL")),
+            (SeekValue::Null, true) => (Some(format!("{e} IS NOT NULL")), format!("{e} IS NULL")),
+            (SeekValue::Class(class), descending) => {
+                let p = format!("$seek_{i}");
+                params.insert(format!("seek_{i}"), key.clone());
+                let after = if descending {
+                    format!("{e} < {p} OR ({e} IS NOT NULL AND NOT ({}))", of_classes(&e, &TYPE_CLASSES[class..]))
+                } else {
+                    // NaN sorts after every other number.
+                    let nan = if class == NUMBER_CLASS { format!(" OR {e} <> {e}") } else { String::new() };
+                    format!("{e} > {p}{nan} OR {} OR {e} IS NULL", of_classes(&e, &TYPE_CLASSES[class + 1..]))
+                };
+                (Some(after), format!("{e} = {p}"))
+            }
+        };
+        rest = match after {
+            Some(after) => format!("({after}) OR ({equal} AND ({rest}))"),
+            None => format!("{equal} AND ({rest})"),
+        };
+    }
+    Some(rest)
+}
+
+/// Where a page starts. Plain numbers are offsets (pages without a sort, and
+/// older cursors); `k…` continues a sorted read after its last row, keeping the
+/// offset for when seeking is not possible.
+#[derive(Debug, Default, PartialEq)]
+struct PageCursor {
+    offset: u64,
+    /// The last row's elementId and sort values.
+    after: Option<(String, Vec<Value>)>,
+}
+
+impl PageCursor {
+    fn parse(cursor: Option<&str>) -> DbResult<Self> {
+        let invalid = || DbError::invalid("Invalid cursor.");
+        let Some(c) = cursor else { return Ok(Self::default()) };
+        if let Some(token) = c.strip_prefix('k') {
+            let bytes = URL_SAFE_NO_PAD.decode(token).map_err(|_| invalid())?;
+            let v: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+            let offset = v.get("o").and_then(Value::as_u64).ok_or_else(invalid)?;
+            let after = match (v.get("id").and_then(Value::as_str), v.get("k").and_then(Value::as_array)) {
+                (Some(id), Some(keys)) => Some((id.to_owned(), keys.clone())),
+                _ => None,
+            };
+            return Ok(Self { offset, after });
+        }
+        Ok(Self { offset: c.parse().map_err(|_| invalid())?, after: None })
+    }
+
+    fn token(offset: u64, id: &str, keys: &[Value]) -> String {
+        let body = json!({ "o": offset, "id": id, "k": keys });
+        format!("k{}", URL_SAFE_NO_PAD.encode(body.to_string()))
+    }
 }
 
 /// The pattern and the value returned for a label (nodes) or relationship type.
@@ -146,9 +291,25 @@ fn where_clause(filter: &str) -> DbResult<String> {
 }
 
 /// The read for a page, with `SKIP`/`LIMIT` as given (parameters or literals).
+/// A sort gets `elementId(n)` as the last term so pages split ties the same way
+/// every time. `seek` (a predicate from [`seek_predicate`]) starts after a row;
+/// `keys` also returns the sort values as `sort_key` for the next page's cursor.
 pub fn find_query(request: &FindRequest, skip: &str, limit: &str) -> DbResult<String> {
+    page_query(request, skip, limit, None, false)
+}
+
+fn page_query(request: &FindRequest, skip: &str, limit: &str, seek: Option<&str>, keys: bool) -> DbResult<String> {
     let mut q = pattern(&request.object)?;
-    q.push_str(&where_clause(&request.filter)?);
+    let filter = where_clause(&request.filter)?;
+    match (filter.is_empty(), seek) {
+        (_, None) => q.push_str(&filter),
+        (true, Some(seek)) => {
+            let _ = write!(q, " WHERE {seek}");
+        }
+        (false, Some(seek)) => {
+            let _ = write!(q, " WHERE ({}) AND ({seek})", request.filter.trim());
+        }
+    }
     let projection = request.projection.trim();
     let doc = if projection.is_empty() {
         "n".to_owned()
@@ -160,7 +321,11 @@ pub fn find_query(request: &FindRequest, skip: &str, limit: &str) -> DbResult<St
     let sort = request.sort.trim();
     if !sort.is_empty() {
         validate_fragment(sort, "sort")?;
-        let _ = write!(q, " ORDER BY {sort}");
+        if keys {
+            let exprs: Vec<&str> = sort_terms(sort).iter().map(|t| t.expr).collect();
+            let _ = write!(q, ", [{}] AS sort_key", exprs.join(", "));
+        }
+        let _ = write!(q, " ORDER BY {sort}, elementId(n)");
     }
     let _ = write!(q, " SKIP {skip} LIMIT {limit}");
     Ok(q)
@@ -208,31 +373,47 @@ impl DocumentStore for Neo4jSession {
         FEATURES
     }
 
+    /// Sorted reads continue after the last row (keyset paging): the sort plus
+    /// `elementId(n)` is a total order, so each page costs a scan with a top-`limit`
+    /// sort instead of sorting `offset + limit` rows. Without a sort pages use
+    /// `SKIP` over the label scan: ordering by `elementId(n)` cannot use the scan's
+    /// order and would sort every node on every page.
     async fn find(&self, request: &FindRequest) -> DbResult<DocumentPage> {
         let started = Instant::now();
-        let skip: u64 =
-            request.cursor.as_deref().map_or(Ok(0), str::parse).map_err(|_| DbError::invalid("Invalid cursor."))?;
+        let cursor = PageCursor::parse(request.cursor.as_deref())?;
         let limit = request.limit();
-        let statement = find_query(request, "$skip", "$limit")?;
+        let sorted = !request.sort.trim().is_empty();
+        let terms = sort_terms(request.sort.trim());
         let mut params = Map::new();
+        let seek = match &cursor.after {
+            Some((id, keys)) if sorted => seek_predicate(&terms, keys, &mut params).inspect(|_| {
+                params.insert("seek_id".into(), json!({ "$type": "String", "_value": id }));
+            }),
+            _ => None,
+        };
+        let skip = if seek.is_some() { 0 } else { cursor.offset };
+        let statement = page_query(request, "$skip", "$limit", seek.as_deref(), sorted)?;
         params.insert("skip".into(), json!({ "$type": "Integer", "_value": skip.to_string() }));
         params.insert("limit".into(), json!({ "$type": "Integer", "_value": (u64::from(limit) + 1).to_string() }));
         let reply = self.read(&request.object.database, &statement, params).await?;
-        let mut documents: Vec<Document> = reply
-            .values
+        let more = reply.values.len() > limit as usize;
+        let rows = &reply.values[..reply.values.len().min(limit as usize)];
+        let ids: Vec<String> = rows.iter().map(|r| r.first().and_then(values::text).unwrap_or_default()).collect();
+        let documents: Vec<Document> = rows
             .iter()
-            .map(|r| {
-                let id = r.first().and_then(values::text).unwrap_or_default();
-                document(&request.object, &id, r.get(1).unwrap_or(&Value::Null))
-            })
+            .zip(&ids)
+            .map(|(r, id)| document(&request.object, id, r.get(1).unwrap_or(&Value::Null)))
             .collect();
-        let more = documents.len() > limit as usize;
-        documents.truncate(limit as usize);
-        Ok(DocumentPage {
-            next: more.then(|| (skip + u64::from(limit)).to_string()),
-            documents,
-            duration_ms: started.elapsed().as_millis() as u64,
-        })
+        let offset = cursor.offset + u64::from(limit);
+        let next = more.then(|| match (sorted, rows.last(), ids.last()) {
+            (true, Some(row), Some(id)) => {
+                let keys =
+                    row.get(2).and_then(|k| k.get("_value")).and_then(Value::as_array).cloned().unwrap_or_default();
+                PageCursor::token(offset, id, &keys)
+            }
+            _ => offset.to_string(),
+        });
+        Ok(DocumentPage { next, documents, duration_ms: started.elapsed().as_millis() as u64 })
     }
 
     async fn count(&self, object: &ObjectRef, filter: &str) -> DbResult<Option<RowCount>> {
@@ -280,11 +461,8 @@ impl DocumentStore for Neo4jSession {
     }
 
     fn find_statement(&self, request: &FindRequest) -> DbResult<String> {
-        let skip = request.cursor.as_deref().unwrap_or("0");
-        if skip.parse::<u64>().is_err() {
-            return Err(DbError::invalid("Invalid cursor."));
-        }
-        Ok(find_query(request, skip, &request.limit().to_string())? + ";")
+        let skip = PageCursor::parse(request.cursor.as_deref())?.offset.to_string();
+        Ok(find_query(request, &skip, &request.limit().to_string())? + ";")
     }
 
     /// Creates one node per row with the label, in batches of 500 (one transaction each).
@@ -343,7 +521,7 @@ mod tests {
         let q = find_query(&request("n.age > 30", "n.name, n.age", "n.name DESC"), "$skip", "$limit").unwrap();
         assert_eq!(
             q,
-            "MATCH (n:Person) WHERE n.age > 30 RETURN elementId(n) AS id, {name: n.name, age: n.age} AS doc ORDER BY n.name DESC SKIP $skip LIMIT $limit"
+            "MATCH (n:Person) WHERE n.age > 30 RETURN elementId(n) AS id, {name: n.name, age: n.age} AS doc ORDER BY n.name DESC, elementId(n) SKIP $skip LIMIT $limit"
         );
         let rel =
             FindRequest { object: ObjectRef::new(NodeKind::View, "neo4j", None, "ACTED IN"), ..request("", "", "") };
@@ -352,6 +530,40 @@ mod tests {
             projection_map("size(n.tags), n.`full name`"),
             "{`size(n.tags)`: size(n.tags), `n.``full name```: n.`full name`}"
         );
+    }
+
+    #[test]
+    fn sorted_pages_seek_after_the_last_row() {
+        let terms = sort_terms("n.name DESC, size(n.tags), n.age ascending");
+        assert_eq!(
+            terms,
+            [
+                SortTerm { expr: "n.name", descending: true },
+                SortTerm { expr: "size(n.tags)", descending: false },
+                SortTerm { expr: "n.age", descending: false },
+            ]
+        );
+        let mut params = Map::new();
+        let keys = [json!({ "$type": "String", "_value": "b" }), json!({ "$type": "Null", "_value": null })];
+        let seek = seek_predicate(&sort_terms("n.name DESC, n.age"), &keys, &mut params).unwrap();
+        assert_eq!(
+            seek,
+            "((n.name) < $seek_0 OR ((n.name) IS NOT NULL AND NOT ((n.name) IS :: STRING NOT NULL OR (n.name) IS :: \
+             BOOLEAN NOT NULL OR (n.name) IS :: INTEGER NOT NULL OR (n.name) IS :: FLOAT NOT NULL))) OR ((n.name) = \
+             $seek_0 AND ((n.age) IS NULL AND (elementId(n) > $seek_id)))"
+        );
+        assert_eq!(params.keys().collect::<Vec<_>>(), ["seek_0"]);
+        let nan = [json!({ "$type": "Float", "_value": "NaN" })];
+        assert!(seek_predicate(&sort_terms("n.x"), &nan, &mut params).is_none());
+        let token = PageCursor::token(40, "4:x:7", &keys);
+        let cursor = PageCursor::parse(Some(&token)).unwrap();
+        assert_eq!((cursor.offset, cursor.after.unwrap().0.as_str()), (40, "4:x:7"));
+        assert_eq!(PageCursor::parse(Some("20")).unwrap(), PageCursor { offset: 20, after: None });
+        assert!(PageCursor::parse(Some("kxyz")).is_err());
+        let mut req = request("n.age > 1", "", "n.age");
+        req.cursor = Some(token);
+        let q = page_query(&req, "0", "21", Some("SEEK"), true).unwrap();
+        assert!(q.contains("WHERE (n.age > 1) AND (SEEK) RETURN elementId(n) AS id, n AS doc, [n.age] AS sort_key"));
     }
 
     #[test]

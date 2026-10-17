@@ -85,6 +85,8 @@ pub async fn apply_schema_changes(
     let database = changes.first().map(|c| c.table().database.clone()).unwrap_or_default();
     let bound = statements.iter().map(|s| Ok(BoundStatement { sql: s.clone(), params: Vec::new(), expect_rows: None }));
     let result = open.session.run_in_transaction(&database, &mut bound.collect::<Vec<_>>().into_iter()).await;
+    // Also after a failure: engines without transactional DDL keep what ran.
+    open.structures.invalidate(None);
     record_history(
         &state,
         &settings,

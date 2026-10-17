@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
-use dq_core::edit::{ColumnValue, RowChange};
+use dq_core::edit::{BoundStatement, ColumnValue, RowChange};
 use dq_core::engine::Engine;
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops::{self, ImportMapping};
@@ -739,4 +739,46 @@ async fn schema_changes_and_diff() {
     let again = diff(s.dialect(), &snapshot("it_diff_a").await, &a, &snapshot("it_diff_b").await, &b).unwrap();
     assert!(again.items.is_empty(), "{:#?}\n{}", again.items, again.sql);
     run_all(&*s, "DROP TABLE it_diff_a.invoices; DROP TABLE it_diff_a.accounts; DROP TABLE it_diff_b.invoices; DROP TABLE it_diff_b.accounts;\nDROP SCHEMA it_diff_a\nGO\nDROP SCHEMA it_diff_b\nGO").await;
+}
+
+/// Runs `sql` in one transaction on the session's write connection.
+async fn transact(s: &dyn Session, sql: &[String]) -> DbResult<Vec<u64>> {
+    let mut bound = sql.iter().map(|q| Ok(BoundStatement { sql: q.clone(), params: Vec::new(), expect_rows: None }));
+    s.run_in_transaction(DB, &mut bound).await
+}
+
+#[tokio::test]
+async fn write_connection_is_reused_until_an_error() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let t = scratch(&*s, "it_writer", "(id int PRIMARY KEY, conn int, note nvarchar(10))").await;
+    let insert = |id: u32| format!("INSERT INTO dbo.it_writer VALUES ({id}, @@SPID, NULL)");
+    transact(&*s, &[insert(1)]).await.unwrap();
+    transact(&*s, &[insert(2)]).await.unwrap();
+    // A duplicate key rolls back the whole transaction and drops its connection.
+    assert!(transact(&*s, &[insert(3), insert(1)]).await.is_err());
+    transact(&*s, &[insert(4)]).await.unwrap();
+    // So does an error from the statement source (e.g. a cancelled import).
+    let mut failing = [
+        Ok(BoundStatement { sql: insert(5), params: Vec::new(), expect_rows: None }),
+        Err(dq_core::DbError::invalid("stop")),
+    ]
+    .into_iter();
+    assert!(s.run_in_transaction(DB, &mut failing).await.is_err());
+    transact(&*s, &[insert(6)]).await.unwrap();
+    // Two grid saves in a row.
+    let cv = |c: &str, v: &str| ColumnValue { column: c.into(), value: Some(v.into()) };
+    for note in ["a", "b"] {
+        let change = RowChange::Update { key: vec![cv("id", "1")], values: vec![cv("note", note)] };
+        ops::apply_changes(&*s, &t, &[change], false).await.unwrap();
+    }
+    let r = s.execute("SELECT id, conn, note FROM dbo.it_writer ORDER BY id", &[], OPTS).await.unwrap();
+    let rows: Vec<Vec<String>> = r.rows.iter().map(|r| r.iter().map(text).collect()).collect();
+    let ids: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(ids, ["1", "2", "4", "6"]);
+    assert_eq!(rows[0][2], "b");
+    assert_eq!(rows[0][1], rows[1][1], "the second transaction reused the connection");
+    // Session ids are recycled by the server, so a dropped connection is not
+    // checked here by id; the transactions after each failure succeeding is the check.
+    run_all(&*s, "DROP TABLE dbo.it_writer").await;
 }

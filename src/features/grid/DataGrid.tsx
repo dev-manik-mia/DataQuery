@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 
 import type { Cell } from '@/bindings/Cell';
 import type { ExportFormat } from '@/bindings/ExportFormat';
@@ -13,6 +13,7 @@ import { useUi } from '@/stores/ui';
 
 import { CellInspector } from './CellInspector';
 import { CellView } from './CellView';
+import { columnOffsets, columnRange, columnSlots, revealScrollLeft } from './columnWindow';
 import styles from './Grid.module.css';
 
 export interface GridColumn {
@@ -78,6 +79,9 @@ const ROW_HEIGHT = 28;
 const NUMBER_WIDTH = 52;
 const MIN_WIDTH = 56;
 const MAX_WIDTH = 1200;
+/** Wider results render only the columns near the viewport; narrower ones render every column. */
+const WINDOW_MIN_COLUMNS = 40;
+const COLUMN_OVERSCAN = 3;
 
 function initialWidth(c: GridColumn): number {
   const type = c.typeName.toLowerCase();
@@ -190,7 +194,49 @@ export function DataGrid({
   }, [searches]);
 
   const template = useMemo(() => `${NUMBER_WIDTH}px ${visible.map((i) => `${widths[i] ?? 120}px`).join(' ')}`, [visible, widths]);
-  const totalWidth = NUMBER_WIDTH + visible.reduce((sum, i) => sum + (widths[i] ?? 120), 0);
+  /** offsets[k] is the left edge of on-screen column k; the last entry is the total width. */
+  const offsets = useMemo(() => columnOffsets(visible.map((i) => widths[i] ?? 120), NUMBER_WIDTH), [visible, widths]);
+  const totalWidth = offsets[offsets.length - 1] ?? NUMBER_WIDTH;
+
+  // Horizontal windowing. Every cell sits in its own grid track (grid-column), so the
+  // template keeps all tracks and skipped columns leave empty space, not shifted cells.
+  // The range is state that changes only when a column enters or leaves it, not per scroll pixel.
+  const windowed = visible.length > WINDOW_MIN_COLUMNS;
+  const [range, setRange] = useState<readonly [number, number]>([0, -1]);
+  const offsetsRef = useRef(offsets);
+  offsetsRef.current = offsets;
+  const syncRange = useCallback(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const [first, last] = columnRange(offsetsRef.current, el.scrollLeft, el.scrollLeft + el.clientWidth, COLUMN_OVERSCAN);
+    setRange((r) => (r[0] === first && r[1] === last ? r : [first, last]));
+  }, []);
+  const hasColumns = columns.length > 0;
+  useLayoutEffect(() => {
+    if (windowed) syncRange();
+  }, [windowed, offsets, syncRange]);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!windowed || !el) return;
+    const observer = new ResizeObserver(syncRange);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [windowed, hasColumns, syncRange]);
+  const pinnedCount = pinLeft.size;
+  /** The active and editing cells stay rendered (focus, editor) even when scrolled away. */
+  const outside = (col: number | undefined) => {
+    if (!windowed || col === undefined) return -1;
+    const k = visible.indexOf(col);
+    return k < pinnedCount || (k >= range[0] && k <= range[1]) ? -1 : k;
+  };
+  const activeExtra = outside(active?.col);
+  const editingExtra = outside(editing?.col);
+  /** Indexes into `visible` to render; a new array only when the rendered set changes. */
+  const slots = useMemo(
+    () => (windowed ? columnSlots(visible.length, pinnedCount, range[0], range[1], [activeExtra, editingExtra]) : visible.map((_, k) => k)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `visible` matters only through its length here
+    [windowed, visible.length, pinnedCount, range, activeExtra, editingExtra],
+  );
 
   const virtualizer = useVirtualizer({ count: shownRows.length, getScrollElement: () => scroller.current, estimateSize: () => ROW_HEIGHT, overscan: 16 });
 
@@ -261,6 +307,13 @@ export function DataGrid({
     const col = visible[Math.max(0, Math.min(visible.length - 1, pos + dCol))] ?? current.col;
     setActive({ row, col });
     virtualizer.scrollToIndex(display, { align: 'auto' });
+    // Bring the active column into view (pinned columns are always on screen).
+    const k = visible.indexOf(col);
+    const el = scroller.current;
+    if (el && k >= pinLeft.size) {
+      const left = revealScrollLeft(offsets[k] ?? 0, offsets[k + 1] ?? 0, el.scrollLeft, el.clientWidth, offsets[pinLeft.size] ?? NUMBER_WIDTH);
+      if (left !== el.scrollLeft) el.scrollLeft = left;
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -444,8 +497,9 @@ export function DataGrid({
         role="grid"
         aria-label={label}
         aria-rowcount={rows.length + 1}
-        aria-colcount={visible.length}
+        aria-colcount={visible.length + 1}
         onKeyDown={onKeyDown}
+        onScroll={windowed ? syncRange : undefined}
         onPaste={(e) => {
           if (!onPaste || !active || editing) return;
           const text = e.clipboardData.getData('text/plain');
@@ -455,8 +509,9 @@ export function DataGrid({
         }}
       >
         <div className={styles.header} style={{ gridTemplateColumns: template, width: totalWidth }} role="row">
-          <div className={`${styles.headCell} ${styles.cornerCell}`} role="columnheader" aria-label="Row number" />
-          {visible.map((ci) => {
+          <div className={`${styles.headCell} ${styles.cornerCell}`} style={{ gridColumn: 1, gridRow: 1 }} role="columnheader" aria-colindex={1} aria-label="Row number" />
+          {slots.map((k) => {
+            const ci = visible[k]!;
             const c = columns[ci]!;
             const sorted = sort?.column === c.name;
             const left = pinLeft.get(ci);
@@ -464,10 +519,11 @@ export function DataGrid({
               <div
                 key={c.name + ci}
                 role="columnheader"
+                aria-colindex={k + 2}
                 aria-sort={sorted ? (sort?.descending ? 'descending' : 'ascending') : undefined}
                 className={styles.headCell}
                 data-pinned={left !== undefined}
-                style={left !== undefined ? { position: 'sticky', left, zIndex: 3 } : undefined}
+                style={left !== undefined ? { gridColumn: k + 2, gridRow: 1, position: 'sticky', left, zIndex: 3 } : { gridColumn: k + 2, gridRow: 1 }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setHeadMenu({ x: e.clientX, y: e.clientY, col: ci });
@@ -519,13 +575,18 @@ export function DataGrid({
           })}
           {searchOpen && (
             <>
-              <div className={`${styles.searchCell} ${styles.cornerCell}`}>
+              <div className={`${styles.searchCell} ${styles.cornerCell}`} style={{ gridColumn: 1, gridRow: 2 }}>
                 <Icon name="search" size={11} />
               </div>
-              {visible.map((ci) => {
+              {slots.map((k) => {
+                const ci = visible[k]!;
                 const left = pinLeft.get(ci);
                 return (
-                  <div key={`search-${ci}`} className={styles.searchCell} style={left !== undefined ? { position: 'sticky', left, zIndex: 3 } : undefined}>
+                  <div
+                    key={`search-${ci}`}
+                    className={styles.searchCell}
+                    style={left !== undefined ? { gridColumn: k + 2, gridRow: 2, position: 'sticky', left, zIndex: 3 } : { gridColumn: k + 2, gridRow: 2 }}
+                  >
                     <input
                       className={styles.searchInput}
                       aria-label={`Search ${columns[ci]?.name}`}
@@ -554,6 +615,7 @@ export function DataGrid({
                 row={rows[index]!}
                 number={rowOffset + index + 1}
                 order={visible}
+                slots={slots}
                 pinLeft={pinLeft}
                 masked={masked}
                 foreignKeys={foreignKeys}
@@ -597,6 +659,8 @@ interface GridRowViewProps {
   row: GridRow;
   number: number;
   order: number[];
+  /** Indexes into `order` to render; each cell is placed in grid track index + 2. */
+  slots: number[];
   pinLeft: ReadonlyMap<number, number>;
   masked: ReadonlySet<number>;
   foreignKeys?: ReadonlyMap<number, ForeignKeyLink>;
@@ -634,10 +698,11 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
       data-status={p.row.status}
       style={{ top: p.top, gridTemplateColumns: p.template, width: p.width }}
     >
-      <div className={`${styles.cell} ${styles.rowNumber}`} role="rowheader" onClick={(e) => p.handlers.numberClick(e, p.index)} onMouseDown={(e) => e.preventDefault()}>
+      <div className={`${styles.cell} ${styles.rowNumber}`} style={{ gridColumn: 1 }} role="rowheader" aria-colindex={1} onClick={(e) => p.handlers.numberClick(e, p.index)} onMouseDown={(e) => e.preventDefault()}>
         {p.row.status ? marker[p.row.status] : p.row.edited?.size ? '●' : p.number}
       </div>
-      {p.order.map((ci) => {
+      {p.slots.map((k) => {
+        const ci = p.order[k]!;
         const column = p.columns[ci]!;
         const cell = p.row.cells[ci] ?? ({ kind: 'null' } as Cell);
         const isEditing = p.editing?.col === ci;
@@ -647,9 +712,10 @@ const GridRowView = memo(function GridRowView(p: GridRowViewProps) {
           <div
             key={ci}
             role="gridcell"
+            aria-colindex={k + 2}
             className={styles.cell}
             data-pinned={left !== undefined}
-            style={left !== undefined ? { position: 'sticky', left, zIndex: 1 } : undefined}
+            style={left !== undefined ? { gridColumn: k + 2, position: 'sticky', left, zIndex: 1 } : { gridColumn: k + 2 }}
             data-numeric={column.numeric}
             data-active={p.activeCol === ci}
             data-edited={p.row.edited?.has(ci) ?? false}

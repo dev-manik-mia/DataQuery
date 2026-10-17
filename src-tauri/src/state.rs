@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dq_core::adapter::Session;
+use dq_core::ops::SessionRef;
+use dq_core::schema_cache::StructureCache;
 use dq_core::{DbError, DbResult, ErrorKind};
 use dq_ssh::{KnownHosts, Tunnel};
 use dq_store::{SavedConnection, SecretStore, Settings, Store};
@@ -35,6 +37,9 @@ pub struct OpenSession {
     /// Kept alive as long as the session; dropping it closes the tunnel.
     pub tunnel: Option<Tunnel>,
     pub tx: Mutex<TxStatus>,
+    /// Table structures for grid pages, counts, cell reads and transfers.
+    /// Dropped with the session; cleared when the schema may have changed.
+    pub structures: StructureCache,
     /// Disconnect after this many idle minutes; 0 never.
     pub idle_timeout_mins: u32,
     last_used_ms: AtomicI64,
@@ -52,9 +57,15 @@ impl OpenSession {
             session,
             tunnel,
             tx: Mutex::new(TxStatus::Auto),
+            structures: StructureCache::default(),
             idle_timeout_mins,
             last_used_ms: AtomicI64::new(now_ms()),
         }
+    }
+
+    /// The session with its structure cache, for [`dq_core::ops`].
+    pub fn ops(&self) -> SessionRef<'_> {
+        SessionRef { session: &*self.session, structures: Some(&self.structures) }
     }
 
     pub fn tx_status(&self) -> TxStatus {

@@ -21,6 +21,7 @@ pub mod ops;
 pub mod redact;
 pub mod result;
 pub mod schema;
+pub mod schema_cache;
 pub mod sql;
 pub mod table;
 pub mod tls;

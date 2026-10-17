@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use dq_core::adapter::ConnectParams;
 use dq_core::{DbError, DbResult, ErrorKind};
 use oracle::Connection;
+use oracle::oci_attr::TransactionInProgress;
 use tokio::sync::Semaphore;
 
 use crate::connect;
@@ -56,8 +57,11 @@ impl Pool {
             let result = work(&conn);
             let broken = result.as_ref().is_err_and(|e| matches!(e.kind, ErrorKind::Network | ErrorKind::Timeout));
             if !broken {
-                // Catalog work never leaves a transaction open.
-                let _ = conn.rollback();
+                // Catalog work never leaves a transaction open. The client
+                // library tracks whether one is, so the usual case skips the round trip.
+                if conn.oci_attr::<TransactionInProgress>().unwrap_or(true) {
+                    let _ = conn.rollback();
+                }
                 if let Ok(mut i) = idle.lock() {
                     i.push(conn);
                 }

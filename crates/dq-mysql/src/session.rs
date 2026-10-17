@@ -3,7 +3,7 @@
 //! User statements run on a dedicated query connection that keeps at most one
 //! unfinished result open. Catalog reads, table pages and exports use a small
 //! pool of read-only connections, so the explorer keeps working while a query
-//! runs. Grid edits and imports use a short-lived connection per transaction.
+//! runs. Grid edits and imports use a second pool of write connections.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -21,7 +21,7 @@ use mysql_async::{BinaryProtocol, Column, Conn, Pool, QueryResult, Row, TextProt
 use tokio::sync::Mutex;
 
 use crate::catalog;
-use crate::connect::{self, Flavor, Role};
+use crate::connect::{self, Flavor};
 use crate::error::map_error;
 use crate::values::{column_meta, decode_row, text};
 
@@ -39,6 +39,7 @@ pub struct MySession {
     query_thread: u32,
     running: AtomicBool,
     catalog: Pool,
+    write: Pool,
 }
 
 struct QueryConnection {
@@ -80,6 +81,7 @@ impl MySession {
         let params = connect::resolved(params, &opened.info);
         Ok(Self {
             catalog: connect::catalog_pool(&params, opened.flavor),
+            write: connect::write_pool(&params),
             query_thread: opened.conn.id(),
             query: Mutex::new(QueryConnection { conn: opened.conn, pending: None, binary: false, timeout_secs: None }),
             params,
@@ -114,6 +116,20 @@ impl MySession {
             Err(mysql_async::Error::Server(e)) if e.code == 1094 => Ok(()),
             result => result.map_err(|e| self.err(&e)),
         }
+    }
+
+    async fn transact(&self, conn: &mut Conn, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
+        let mut tx = conn.start_transaction(TxOpts::default()).await.map_err(|e| self.err(&e))?;
+        let mut counts = Vec::new();
+        for statement in statements {
+            let statement = statement?;
+            tx.exec_drop(statement.sql.as_str(), bind(&statement.params)).await.map_err(|e| self.err(&e))?;
+            let affected = tx.affected_rows();
+            check_affected(&statement, affected)?;
+            counts.push(affected);
+        }
+        tx.commit().await.map_err(|e| self.err(&e))?;
+        Ok(counts)
     }
 
     /// Stops the open result, if any, so the next statement starts promptly.
@@ -382,20 +398,15 @@ impl Session for MySession {
         catalog::row_estimate(&mut self.catalog().await?, object).await
     }
 
+    /// Generated SQL is fully qualified, so one pool serves every database.
     async fn run_in_transaction(&self, _database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
-        let mut conn = connect::open(&self.params, Role::Write, Vec::new()).await?;
-        let mut tx = conn.start_transaction(TxOpts::default()).await.map_err(|e| self.err(&e))?;
-        let mut counts = Vec::new();
-        for statement in statements {
-            let statement = statement?;
-            tx.exec_drop(statement.sql.as_str(), bind(&statement.params)).await.map_err(|e| self.err(&e))?;
-            let affected = tx.affected_rows();
-            check_affected(&statement, affected)?;
-            counts.push(affected);
+        let mut conn = self.write.get_conn().await.map_err(|e| self.err(&e))?;
+        let result = self.transact(&mut conn, statements).await;
+        if result.is_err() {
+            // Closed rather than returned to the pool: its transaction rolls back on the server.
+            let _ = conn.disconnect().await;
         }
-        tx.commit().await.map_err(|e| self.err(&e))?;
-        let _ = conn.disconnect().await;
-        Ok(counts)
+        result
     }
 
     fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
@@ -404,6 +415,6 @@ impl Session for MySession {
 
     async fn close(&self) {
         let _ = self.cancel().await;
-        let _ = self.catalog.clone().disconnect().await;
+        let _ = tokio::join!(self.catalog.clone().disconnect(), self.write.clone().disconnect());
     }
 }

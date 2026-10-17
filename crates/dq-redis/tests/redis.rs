@@ -455,3 +455,31 @@ async fn exports_keys_and_command_rows() -> DbResult<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn atomic_writes_reuse_their_connection_until_an_error() -> DbResult<()> {
+    for (adapter, config) in servers() {
+        let s = open(adapter, &config).await;
+        let p = prefix();
+        // `CLIENT ID` replies with a number, which comes back as the "count".
+        let run = |commands: Vec<String>| {
+            let s = s.clone();
+            async move {
+                let mut bound = commands
+                    .into_iter()
+                    .map(|sql| Ok(dq_core::edit::BoundStatement { sql, params: Vec::new(), expect_rows: None }));
+                s.run_in_transaction(&DB.to_string(), &mut bound).await
+            }
+        };
+        let first = run(vec![format!("SET {p}a 1"), "CLIENT ID".into()]).await?;
+        let second = run(vec![format!("SET {p}a 2"), "CLIENT ID".into()]).await?;
+        assert_eq!(first[1], second[1], "the second transaction reused the connection");
+        // A command the server rejects aborts the whole transaction.
+        assert!(run(vec![format!("SET {p}a 3"), "NOT_A_COMMAND".into()]).await.is_err());
+        let third = run(vec!["CLIENT ID".into()]).await?;
+        assert_ne!(second[1], third[0], "the failed transaction's connection was dropped");
+        assert_eq!(console(&s, &format!("GET {p}a")).await, "\"2\"");
+        cleanup(&s, &p).await;
+    }
+    Ok(())
+}

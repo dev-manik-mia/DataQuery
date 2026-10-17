@@ -1,3 +1,4 @@
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -16,7 +17,7 @@ import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
 import styles from './Explorer.module.css';
-
+import { TREE_PADDING, TREE_ROW_HEIGHT } from './tree';
 
 type Item =
   | { type: 'node'; node: Node; key: string; depth: number }
@@ -84,6 +85,14 @@ export function Explorer({ width }: { width: number }) {
   const [creating, setCreating] = useState<Node | null>(null);
   const [editing, setEditing] = useState<{ node: Node; edit: StructureEdit; structure: TableStructure } | null>(null);
   const nodes = items.filter((i): i is Extract<Item, { type: 'node' }> => i.type === 'node');
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => tree.current,
+    estimateSize: () => TREE_ROW_HEIGHT,
+    getItemKey: (i) => items[i]?.key ?? i,
+    scrollMargin: TREE_PADDING,
+    overscan: 12,
+  });
 
   /** Relations open their data; other leaves open their definition; containers expand. */
   const activate = (node: Node) => {
@@ -117,7 +126,7 @@ export function Explorer({ width }: { width: number }) {
   const actions = (node: Node): MenuEntry[] => {
     const copyName = async () => {
       if (!sid) return;
-      await copyText(await api.qualifiedName(sid, node));
+      await copyText(api.qualifiedName(sid, node));
       toast('Name copied');
     };
     // The container of tables: the schema, or the database on engines without schemas.
@@ -210,7 +219,7 @@ export function Explorer({ width }: { width: number }) {
       const next = nodes[Math.max(0, Math.min(nodes.length - 1, i))];
       if (next) {
         select(next.key);
-        tree.current?.querySelector(`[data-key="${CSS.escape(next.key)}"]`)?.scrollIntoView({ block: 'nearest' });
+        virtualizer.scrollToIndex(items.indexOf(next), { align: 'auto' });
       }
     };
     if (e.key === 'ArrowDown') go(index + 1);
@@ -224,6 +233,75 @@ export function Explorer({ width }: { width: number }) {
     } else if (e.key === 'Enter' && current) activate(current);
     else return;
     e.preventDefault();
+  };
+
+  /** One flattened row; the virtual wrapper around it carries the key and position. */
+  const renderItem = (item: Item) => {
+    const pad = 8 + item.depth * 16;
+    if (item.type === 'loading')
+      return (
+        <div className={styles.skeleton} style={{ paddingLeft: pad + 16 }} aria-hidden>
+          <Skeleton width="70%" />
+        </div>
+      );
+    if (item.type === 'error')
+      return (
+        <div className={styles.error} style={{ marginLeft: pad }} role="alert">
+          {item.message}
+          <button type="button" className={styles.errorRetry} onClick={() => refresh(item.parent)}>
+            Retry
+          </button>
+        </div>
+      );
+    if (item.type === 'empty')
+      return (
+        <div className={styles.empty} style={{ paddingLeft: pad + 16 }}>
+          Empty
+        </div>
+      );
+    const { node } = item;
+    const open = Boolean(expanded[item.key]);
+    const count = node.row_estimate;
+    return (
+      <div
+        data-key={item.key}
+        role="treeitem"
+        aria-level={item.depth + 1}
+        aria-expanded={node.expandable ? open : undefined}
+        aria-selected={selected === item.key}
+        aria-label={`${KIND_LABEL[node.kind]} ${objectName(node)}`}
+        className={styles.node}
+        data-container={node.expandable}
+        data-current={node.current}
+        style={{ paddingLeft: pad }}
+        title={node.comment ?? undefined}
+        onClick={() => activate(node)}
+        onContextMenu={(e) => {
+          select(item.key);
+          context.open(e, node);
+        }}
+      >
+        <span
+          className={styles.chevron}
+          onClick={(e) => {
+            if (!node.expandable) return;
+            e.stopPropagation();
+            select(item.key);
+            toggle(node);
+          }}
+        >
+          {node.expandable && <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />}
+        </span>
+        <span className={styles.kind}>{node.kind === 'group' ? <Icon name="folder" size={11} /> : KIND_MARK[node.kind]}</span>
+        <span className={styles.label}>{objectName(node)}</span>
+        {count !== null && count > 0 && (
+          // Containers (schemas, and databases on engines without schemas) count objects; relations estimate rows.
+          <span className={styles.count} title={isRelation(node) ? `About ${formatCount(count)} rows (estimate)` : `${count} objects`}>
+            {isRelation(node) ? `≈${compactCount(count)}` : formatCount(count)}
+          </span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -246,74 +324,15 @@ export function Explorer({ width }: { width: number }) {
         onKeyDown={onKeyDown}
         onFocus={() => !selected && nodes[0] && select(nodes[0].key)}
       >
-        {items.map((item) => {
-          const pad = 8 + item.depth * 16;
-          if (item.type === 'loading')
-            return (
-              <div key={item.key} className={styles.skeleton} style={{ paddingLeft: pad + 16 }} aria-hidden>
-                <Skeleton width="70%" />
-              </div>
-            );
-          if (item.type === 'error')
-            return (
-              <div key={item.key} className={styles.error} style={{ marginLeft: pad }} role="alert">
-                {item.message}
-                <button type="button" className={styles.errorRetry} onClick={() => refresh(item.parent)}>
-                  Retry
-                </button>
-              </div>
-            );
-          if (item.type === 'empty')
-            return (
-              <div key={item.key} className={styles.empty} style={{ paddingLeft: pad + 16 }}>
-                Empty
-              </div>
-            );
-          const { node } = item;
-          const open = Boolean(expanded[item.key]);
-          const count = node.row_estimate;
-          return (
-            <div
-              key={item.key}
-              data-key={item.key}
-              role="treeitem"
-              aria-level={item.depth + 1}
-              aria-expanded={node.expandable ? open : undefined}
-              aria-selected={selected === item.key}
-              aria-label={`${KIND_LABEL[node.kind]} ${objectName(node)}`}
-              className={styles.node}
-              data-container={node.expandable}
-              data-current={node.current}
-              style={{ paddingLeft: pad }}
-              title={node.comment ?? undefined}
-              onClick={() => activate(node)}
-              onContextMenu={(e) => {
-                select(item.key);
-                context.open(e, node);
-              }}
-            >
-              <span
-                className={styles.chevron}
-                onClick={(e) => {
-                  if (!node.expandable) return;
-                  e.stopPropagation();
-                  select(item.key);
-                  toggle(node);
-                }}
-              >
-                {node.expandable && <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />}
-              </span>
-              <span className={styles.kind}>{node.kind === 'group' ? <Icon name="folder" size={11} /> : KIND_MARK[node.kind]}</span>
-              <span className={styles.label}>{objectName(node)}</span>
-              {count !== null && count > 0 && (
-                // Containers (schemas, and databases on engines without schemas) count objects; relations estimate rows.
-                <span className={styles.count} title={isRelation(node) ? `About ${formatCount(count)} rows (estimate)` : `${count} objects`}>
-                  {isRelation(node) ? `≈${compactCount(count)}` : formatCount(count)}
-                </span>
-              )}
+        {/* Only rows near the viewport are in the DOM; the body keeps the full scroll height. */}
+        <div className={styles.virtualBody} style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((row) => (
+            // Measured, so taller rows (errors) get their real height.
+            <div key={row.key} ref={virtualizer.measureElement} data-index={row.index} className={styles.virtualRow} style={{ transform: `translateY(${row.start - TREE_PADDING}px)` }}>
+              {renderItem(items[row.index]!)}
             </div>
-          );
-        })}
+          ))}
+        </div>
         {items.length === 0 && <div className={styles.empty}>{filter ? 'No loaded objects match.' : ' '}</div>}
       </div>
       {context.menu && <Menu x={context.menu.x} y={context.menu.y} items={actions(context.menu.target)} onClose={context.close} label="Object actions" />}

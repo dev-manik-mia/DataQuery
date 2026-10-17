@@ -228,6 +228,96 @@ async fn documents_view_reads() -> DbResult<()> {
     Ok(())
 }
 
+/// The `i` of every document, page by page, with the cursor kinds the pages returned.
+async fn page_through(
+    store: &dyn dq_core::document::DocumentStore,
+    mut req: FindRequest,
+) -> DbResult<(Vec<String>, Vec<String>)> {
+    let (mut seen, mut cursors) = (Vec::new(), Vec::new());
+    loop {
+        let page = store.find(&req).await?;
+        for d in &page.documents {
+            let i = d.fields.iter().find(|f| f.key == "i").and_then(|f| f.value.to_text()).expect("i");
+            seen.push(i);
+        }
+        let Some(next) = page.next else { break };
+        cursors.push(next.clone());
+        req.cursor = Some(next);
+    }
+    Ok((seen, cursors))
+}
+
+/// The `i` of every document of a full query in the editor.
+async fn all_i(x: &Scratch, query: &str) -> DbResult<Vec<String>> {
+    let r = x.session.execute(query, &[], ExecOptions { row_limit: 10_000, timeout_secs: 30 }).await?;
+    assert!(!r.has_more);
+    Ok(column(&r, "i").iter().map(|c| c.to_text().expect("i")).collect())
+}
+
+#[tokio::test]
+async fn documents_view_pages_every_document_once() -> DbResult<()> {
+    let cfg = require_db!();
+    let x = Scratch::new(&cfg).await?;
+    // Mixed `_id` types (numbers < strings < ObjectIds) and a sort field with
+    // duplicates, missing values, nulls, strings and arrays.
+    let docs: Vec<String> = (0..2_500)
+        .map(|i| {
+            let id = match i % 3 {
+                0 => format!("{}", 10_000 - i),
+                1 => format!("'s{i:05}'"),
+                _ => format!("ObjectId('{i:024x}')"),
+            };
+            let g = match i {
+                _ if i % 5 == 0 => String::new(),
+                _ if i % 11 == 0 => ", g: null".into(),
+                _ if i % 13 == 0 => format!(", g: 'x{}'", i % 4),
+                _ if i % 17 == 0 => format!(", g: [{}, {}]", i % 7, i % 3),
+                _ => format!(", g: {}", i % 7),
+            };
+            format!("{{ _id: {id}, i: {i}{g} }}")
+        })
+        .collect();
+    x.run(&format!("db.c.insertMany([{}])", docs.join(", "))).await?;
+    let store = x.session.documents().unwrap();
+    let c = coll(&x.name, "c");
+
+    // Default order: `_id`, continuing after the last one.
+    let (seen, cursors) = page_through(store, FindRequest::new(c.clone(), 100)).await?;
+    assert_eq!(seen, all_i(&x, "db.c.find({}, { i: 1 }).sort({ _id: 1 })").await?);
+    assert_eq!(seen.len(), 2_500);
+    assert!(cursors.len() == 24 && cursors.iter().all(|c| c.starts_with('k')), "{cursors:?}");
+
+    let mut desc = FindRequest::new(c.clone(), 70);
+    desc.sort = "{ _id: -1 }".into();
+    desc.filter = "{ i: { $mod: [2, 0] } }".into();
+    let (seen, _) = page_through(store, desc).await?;
+    assert_eq!(seen, all_i(&x, "db.c.find({ i: { $mod: [2, 0] } }, { i: 1 }).sort({ _id: -1 })").await?);
+    assert_eq!(seen.len(), 1_250);
+
+    // Without `_id` in the projection the pages continue by offset.
+    let mut no_id = FindRequest::new(c.clone(), 300);
+    no_id.projection = "{ _id: 0, i: 1 }".into();
+    let (seen, _) = page_through(store, no_id).await?;
+    assert_eq!(seen, all_i(&x, "db.c.find({}, { i: 1 }).sort({ _id: 1 })").await?);
+
+    // A user sort pages by offset with `_id` breaking ties.
+    let mut by_g = FindRequest::new(c.clone(), 100);
+    by_g.sort = "{ g: -1 }".into();
+    let (seen, cursors) = page_through(store, by_g.clone()).await?;
+    assert_eq!(seen, all_i(&x, "db.c.find({}, { i: 1 }).sort({ g: -1, _id: 1 })").await?);
+    assert_eq!(cursors.first().map(String::as_str), Some("100"));
+
+    // An index serving the sort keeps its own (stable) order.
+    x.run("db.c.createIndex({ g: 1 })").await?;
+    let (mut seen, _) = page_through(store, by_g).await?;
+    assert_eq!(seen.len(), 2_500);
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 2_500);
+    x.drop().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn document_edits_keep_types_and_detect_changes() -> DbResult<()> {
     let cfg = require_db!();

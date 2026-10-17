@@ -21,6 +21,8 @@ use crate::values::{is_numeric, type_label};
 pub const SAMPLE: i64 = 100;
 /// Collections whose document count is read for the explorer.
 const MAX_ESTIMATES: usize = 200;
+/// Catalog commands in flight at once.
+const CONCURRENCY: usize = 16;
 
 /// One entry of `listCollections`.
 pub struct CollectionSpec {
@@ -98,7 +100,8 @@ pub async fn databases(session: &MongoSession) -> DbResult<Vec<Node>> {
         .collect())
 }
 
-/// Document count from the collection's metadata (fast, may lag after a crash).
+/// Document count from the collection's metadata (fast, may lag after a crash):
+/// `count` without a query is what drivers' `estimatedDocumentCount` runs.
 pub async fn estimate(session: &MongoSession, database: &str, collection: &str) -> DbResult<i64> {
     let reply = command(&session.client, database, doc! { "count": collection }, None).await?;
     Ok(int_field(&reply, "n").unwrap_or(0))
@@ -110,7 +113,7 @@ pub async fn collections(session: &MongoSession, database: &str) -> DbResult<Vec
     let names: Vec<String> = specs.iter().filter(|s| !s.view).take(MAX_ESTIMATES).map(|s| s.name.clone()).collect();
     let counts: HashMap<String, i64> = stream::iter(names)
         .map(|name| async move { estimate(session, database, &name).await.ok().map(|n| (name, n)) })
-        .buffer_unordered(8)
+        .buffer_unordered(CONCURRENCY)
         .filter_map(|r| async move { r })
         .collect()
         .await;
@@ -127,15 +130,21 @@ pub async fn collections(session: &MongoSession, database: &str) -> DbResult<Vec
 
 pub async fn search(session: &MongoSession, query: &str, limit: u32) -> DbResult<Vec<Node>> {
     let pattern = mongodb::bson::Regex { pattern: escape_regex(query), options: "i".into() };
+    let mut matches = stream::iter(databases(session).await?)
+        .map(|db| {
+            let filter = doc! { "name": pattern.clone() };
+            async move {
+                let specs = list_collections(session, &db.object.name, filter).await.unwrap_or_default();
+                specs.iter().map(|s| Node::leaf(object(&db.object.name, s))).collect::<Vec<_>>()
+            }
+        })
+        .buffered(CONCURRENCY);
     let mut out = Vec::new();
-    for db in databases(session).await? {
-        if out.len() >= limit as usize {
-            break;
-        }
-        let Ok(specs) = list_collections(session, &db.object.name, doc! { "name": pattern.clone() }).await else {
-            continue;
-        };
-        out.extend(specs.iter().map(|s| Node::leaf(object(&db.object.name, s))));
+    // In database order; dropping the stream once full stops the remaining listings.
+    while out.len() < limit as usize
+        && let Some(nodes) = matches.next().await
+    {
+        out.extend(nodes);
     }
     out.truncate(limit as usize);
     Ok(out)
@@ -156,6 +165,23 @@ pub async fn sample(session: &MongoSession, object: &ObjectRef) -> DbResult<Vec<
     let large = object.kind == NodeKind::Table
         && estimate(session, &object.database, &object.name).await.unwrap_or(0) > SAMPLE * 10;
     let pipeline = if large { vec![doc! { "$sample": { "size": SAMPLE } }] } else { vec![doc! { "$limit": SAMPLE }] };
+    run_sample(session, object, pipeline).await
+}
+
+/// Up to [`SAMPLE`] documents without counting first: `$sample` on collections
+/// (a random cursor when the collection is large, else a shuffle of a small
+/// one), in `_id` order so small collections give the same fields in the same
+/// order each time; the first documents of views.
+async fn sample_uncounted(session: &MongoSession, object: &ObjectRef) -> DbResult<Vec<Document>> {
+    let pipeline = if object.kind == NodeKind::Table {
+        vec![doc! { "$sample": { "size": SAMPLE } }, doc! { "$sort": { "_id": 1 } }]
+    } else {
+        vec![doc! { "$limit": SAMPLE }]
+    };
+    run_sample(session, object, pipeline).await
+}
+
+async fn run_sample(session: &MongoSession, object: &ObjectRef, pipeline: Vec<Document>) -> DbResult<Vec<Document>> {
     documents(
         &session.client,
         &object.database,
@@ -333,7 +359,7 @@ pub async fn schema_model(session: &MongoSession, database: &str) -> DbResult<Sc
     let objects: Vec<ObjectRef> = specs.iter().take(SchemaModel::MAX_TABLES).map(|s| object(database, s)).collect();
     let tables = stream::iter(objects)
         .map(|object| async move {
-            let docs = sample(session, &object).await.unwrap_or_default();
+            let docs = sample_uncounted(session, &object).await.unwrap_or_default();
             let columns = sampled_columns(&docs)
                 .into_iter()
                 .map(|c| ModelColumn {
@@ -345,7 +371,7 @@ pub async fn schema_model(session: &MongoSession, database: &str) -> DbResult<Sc
                 .collect();
             ModelTable { object, columns }
         })
-        .buffered(8)
+        .buffered(CONCURRENCY)
         .collect()
         .await;
     Ok(SchemaModel { tables, foreign_keys: Vec::new(), truncated })

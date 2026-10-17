@@ -65,7 +65,8 @@ pub fn explain(
         conn.execute("ALTER SESSION SET STATISTICS_LEVEL = ALL", &[]).map_err(err)?;
         let run = (|| {
             let started = std::time::Instant::now();
-            let rows = prepare(conn, sql, params).and_then(|s| s.into_result_set::<oracle::Row>(&[])).map_err(err)?;
+            let rows =
+                prepare(conn, sql, params, None).and_then(|s| s.into_result_set::<oracle::Row>(&[])).map_err(err)?;
             for row in rows {
                 row.map_err(err)?;
             }

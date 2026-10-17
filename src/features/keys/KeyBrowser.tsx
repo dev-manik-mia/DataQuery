@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -8,6 +9,7 @@ import type { KeyType } from '@/bindings/KeyType';
 import type { ScanRequest } from '@/bindings/ScanRequest';
 import { Button, Icon, IconButton, Input, Menu, SelectField, type MenuEntry } from '@/components/ui';
 import explorer from '@/features/explorer/Explorer.module.css';
+import { TREE_PADDING, TREE_ROW_HEIGHT } from '@/features/explorer/tree';
 import { exportData } from '@/features/transfer/exportData';
 import { toAppError } from '@/lib/errors';
 import { formatCount } from '@/lib/format';
@@ -84,6 +86,19 @@ export function KeyBrowser({ width }: { width: number }) {
   }, [scan, sid, database, version]);
 
   const rows = useMemo(() => groupKeys(keys, closed), [keys, closed]);
+  const list = useRef<HTMLDivElement>(null);
+  // Keys accumulate across "Scan more"; only rows near the viewport are rendered (all rows are one height).
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => list.current,
+    estimateSize: () => TREE_ROW_HEIGHT,
+    getItemKey: (i) => {
+      const row = rows[i];
+      return !row ? i : row.type === 'group' ? `g:${row.prefix}` : `k:${row.entry.key.text}`;
+    },
+    scrollMargin: TREE_PADDING,
+    overscan: 12,
+  });
   const open = (entry: KeyEntry) => {
     setSelected(entry.key.text);
     openTableTab(keyObject(database, entry.key), 'data');
@@ -147,37 +162,43 @@ export function KeyBrowser({ width }: { width: number }) {
         <Input label="Key pattern" mono placeholder="user:*  (Enter to scan)" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onPatternKey} />
         <span className={styles.hint}>Uses SCAN with COUNT {SCAN_COUNT}. KEYS is never sent.</span>
       </div>
-      <div className={explorer.tree} role="tree" aria-label="Keys">
-        {rows.map((row) =>
-          row.type === 'group' ? (
-            <div key={`g:${row.prefix}`} role="treeitem" aria-expanded={row.open} aria-level={1} className={explorer.node} data-container onClick={() => toggleGroup(row.prefix)}>
-              <span className={explorer.chevron}>
-                <Icon name={row.open ? 'chevronDown' : 'chevronRight'} size={10} />
-              </span>
-              <span className={styles.badge} />
-              <span className={explorer.label}>{row.prefix}</span>
-              <span className={explorer.count}>{formatCount(row.count)}</span>
-            </div>
-          ) : (
-            <div
-              key={`k:${row.entry.key.text}`}
-              role="treeitem"
-              aria-level={row.depth + 1}
-              aria-selected={selected === row.entry.key.text}
-              aria-label={`${TYPE_LABEL[row.entry.key_type]} ${row.entry.key.text}`}
-              className={explorer.node}
-              style={{ paddingLeft: 8 + row.depth * 16 }}
-              title={row.entry.key.binary ? 'Binary key name (escaped)' : row.entry.type_name}
-              onClick={() => open(row.entry)}
-            >
-              <span className={styles.badge} data-type={row.entry.key_type}>
-                {TYPE_BADGE[row.entry.key_type]}
-              </span>
-              <span className={`${explorer.label} mono`}>{row.depth ? row.entry.key.text.slice(row.entry.key.text.indexOf(':') + 1) : row.entry.key.text}</span>
-              <span className={explorer.count}>{formatTtl(row.entry.ttl_ms)}</span>
-            </div>
-          ),
-        )}
+      <div ref={list} className={explorer.tree} role="tree" aria-label="Keys">
+        <div className={explorer.virtualBody} style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map(({ index, key, start }) => {
+            const row = rows[index]!;
+            return (
+              <div key={key} className={explorer.virtualRow} style={{ transform: `translateY(${start - TREE_PADDING}px)` }}>
+                {row.type === 'group' ? (
+                  <div role="treeitem" aria-expanded={row.open} aria-level={1} className={explorer.node} data-container onClick={() => toggleGroup(row.prefix)}>
+                    <span className={explorer.chevron}>
+                      <Icon name={row.open ? 'chevronDown' : 'chevronRight'} size={10} />
+                    </span>
+                    <span className={styles.badge} />
+                    <span className={explorer.label}>{row.prefix}</span>
+                    <span className={explorer.count}>{formatCount(row.count)}</span>
+                  </div>
+                ) : (
+                  <div
+                    role="treeitem"
+                    aria-level={row.depth + 1}
+                    aria-selected={selected === row.entry.key.text}
+                    aria-label={`${TYPE_LABEL[row.entry.key_type]} ${row.entry.key.text}`}
+                    className={explorer.node}
+                    style={{ paddingLeft: 8 + row.depth * 16 }}
+                    title={row.entry.key.binary ? 'Binary key name (escaped)' : row.entry.type_name}
+                    onClick={() => open(row.entry)}
+                  >
+                    <span className={styles.badge} data-type={row.entry.key_type}>
+                      {TYPE_BADGE[row.entry.key_type]}
+                    </span>
+                    <span className={`${explorer.label} mono`}>{row.depth ? row.entry.key.text.slice(row.entry.key.text.indexOf(':') + 1) : row.entry.key.text}</span>
+                    <span className={explorer.count}>{formatTtl(row.entry.ttl_ms)}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
         {!loading && !error && keys.length === 0 && <div className={explorer.empty}>{cursor ? 'No keys in this step; scan more.' : 'No keys match.'}</div>}
         {error && <div className={explorer.error}>{error.message}</div>}
       </div>

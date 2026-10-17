@@ -10,6 +10,7 @@ use dq_core::schema::{
     SchemaModel, TableStructure,
 };
 use dq_core::sql::{CypherDialect, Dialect};
+use futures_util::{StreamExt, stream};
 use serde_json::Value;
 
 use crate::client::{Client, Query};
@@ -18,6 +19,8 @@ use crate::values::{self, int, text, type_label};
 /// Labels or relationship types counted individually; beyond this, counts are skipped.
 const MAX_COUNTED: usize = 200;
 const SAMPLE: u32 = 100;
+/// Catalog reads in flight at once (counts, samples).
+const CONCURRENCY: usize = 8;
 
 /// A label, type or key, quoted with backticks only when needed.
 pub fn quote(name: &str) -> String {
@@ -192,17 +195,21 @@ pub async fn children(client: &Client, parent: &ObjectRef) -> DbResult<Vec<Node>
     }
 }
 
+/// Leaves with counts from the count store, [`CONCURRENCY`] statements at a time.
+/// One statement each keeps a failing count from hiding the others, and avoids
+/// planning one `UNION ALL` of up to [`MAX_COUNTED`] parts.
 async fn counted(client: &Client, db: &str, names: Vec<String>, kind: NodeKind) -> DbResult<Vec<Node>> {
-    let mut out = Vec::with_capacity(names.len());
-    for (i, name) in names.into_iter().enumerate() {
-        let object = ObjectRef::new(kind, db, None, name);
-        let mut node = Node::leaf(object);
-        if i < MAX_COUNTED {
-            node.row_estimate = count(client, &node.object).await.ok().flatten();
-        }
-        out.push(node);
-    }
-    Ok(out)
+    Ok(stream::iter(names.into_iter().enumerate())
+        .map(|(i, name)| async move {
+            let mut node = Node::leaf(ObjectRef::new(kind, db, None, name));
+            if i < MAX_COUNTED {
+                node.row_estimate = count(client, &node.object).await.ok().flatten();
+            }
+            node
+        })
+        .buffered(CONCURRENCY)
+        .collect()
+        .await)
 }
 
 pub async fn search(client: &Client, database: &str, query: &str, limit: u32) -> DbResult<Vec<Node>> {
@@ -384,9 +391,15 @@ pub async fn schema_model(client: &Client, database: &str) -> DbResult<SchemaMod
     let truncated = labels.len() > SchemaModel::MAX_TABLES;
     let mut tables = Vec::new();
     let mut columns = 0;
-    for label in labels.into_iter().take(SchemaModel::MAX_TABLES) {
-        let object = ObjectRef::new(NodeKind::Table, database, None, label);
-        let props = sampled_properties(client, &object, 20).await.unwrap_or_default();
+    let mut sampled = stream::iter(labels.into_iter().take(SchemaModel::MAX_TABLES))
+        .map(|label| async move {
+            let object = ObjectRef::new(NodeKind::Table, database, None, label);
+            let props = sampled_properties(client, &object, 20).await.unwrap_or_default();
+            (object, props)
+        })
+        .buffered(CONCURRENCY);
+    // Dropping the stream at the column limit stops the samples still running.
+    while let Some((object, props)) = sampled.next().await {
         columns += props.len();
         if columns > SchemaModel::MAX_COLUMNS {
             break;

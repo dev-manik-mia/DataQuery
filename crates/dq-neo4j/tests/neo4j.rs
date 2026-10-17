@@ -8,6 +8,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
 use dq_core::document::FindRequest;
@@ -310,7 +312,7 @@ async fn documents_view_reads_nodes_and_relationships() -> DbResult<()> {
     req.sort = "n.name".into();
     let page = store.find(&req).await?;
     assert_eq!(page.documents.len(), 2);
-    assert_eq!(page.next.as_deref(), Some("2"));
+    assert!(page.next.as_deref().is_some_and(|c| c.starts_with('k')));
     let ann = &page.documents[0];
     assert!(ann.label.starts_with(&format!("(:{})", x.label("Person"))));
     let big = ann.fields.iter().find(|f| f.key == "big").unwrap();
@@ -341,6 +343,106 @@ async fn documents_view_reads_nodes_and_relationships() -> DbResult<()> {
     assert!(store.insert(&person, "{}").await.is_err());
     assert!(store.find_statement(&req)?.contains("SKIP 2 LIMIT 2"));
     x.drop().await;
+    Ok(())
+}
+
+/// The `i` of every node, page by page, with the cursors the pages returned.
+async fn page_through(
+    store: &dyn dq_core::document::DocumentStore,
+    mut req: FindRequest,
+) -> DbResult<(Vec<String>, Vec<String>)> {
+    let (mut seen, mut cursors) = (Vec::new(), Vec::new());
+    loop {
+        let page = store.find(&req).await?;
+        for d in &page.documents {
+            seen.push(d.fields.iter().find(|f| f.key == "i").and_then(|f| f.value.to_text()).expect("i"));
+        }
+        let Some(next) = page.next else { break };
+        cursors.push(next.clone());
+        req.cursor = Some(next);
+    }
+    Ok((seen, cursors))
+}
+
+/// The `i` column of a full query in the editor.
+async fn all_i(x: &Scratch, query: &str) -> DbResult<Vec<String>> {
+    let opts = ExecOptions { row_limit: 10_000, timeout_secs: 30 };
+    let r = x.session.execute(&query.replace("$P", &x.prefix), &[], opts).await?;
+    assert!(!r.has_more);
+    Ok(column(&r, "i").iter().map(|c| c.to_text().unwrap()).collect())
+}
+
+#[tokio::test]
+async fn documents_view_pages_every_node_once() -> DbResult<()> {
+    let cfg = require_db!();
+    let x = Scratch::new(&cfg).await;
+    // A sort property with duplicates, missing values, strings, floats, booleans and lists.
+    x.run(
+        "UNWIND range(0, 2499) AS i CREATE (n:$PPage {i: i}) SET n.g = CASE WHEN i % 5 = 0 THEN null \
+         WHEN i % 13 = 0 THEN 'x' + toString(i % 4) WHEN i % 17 = 0 THEN [i % 7, i % 3] \
+         WHEN i % 19 = 0 THEN (i % 7) + 0.5 WHEN i % 23 = 0 THEN i % 2 = 0 ELSE i % 7 END",
+    )
+    .await?;
+    let store = x.session.documents().expect("documents");
+    let page = ObjectRef::new(NodeKind::Table, DB, None, x.label("Page"));
+    let (seen, cursors) = page_through(store, FindRequest::new(page.clone(), 100)).await?;
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!((seen.len(), unique.len(), cursors.first().map(String::as_str)), (2_500, 2_500, Some("100")));
+
+    for sort in ["n.g", "n.g DESC, n.i % 3", "toString(n.i) DESC"] {
+        let mut req = FindRequest::new(page.clone(), 70);
+        req.sort = sort.into();
+        let (seen, cursors) = page_through(store, req).await?;
+        let q = format!("MATCH (n:$PPage) RETURN n.i AS i ORDER BY {sort}, elementId(n)");
+        assert_eq!(seen, all_i(&x, &q).await?, "{sort}");
+        assert_eq!(cursors.len(), 35, "{sort}");
+        // Each cursor carries the last row's sort values to seek after.
+        let terms = sort.split(", ").count();
+        for c in &cursors {
+            let token = c.strip_prefix('k').expect("seek cursor");
+            let body: serde_json::Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(token).unwrap()).unwrap();
+            assert_eq!(body["k"].as_array().map(Vec::len), Some(terms), "{sort}: {body}");
+        }
+    }
+    let mut filtered = FindRequest::new(page.clone(), 33);
+    filtered.sort = "n.g DESC".into();
+    filtered.filter = "n.i % 2 = 0".into();
+    filtered.projection = "n.i".into();
+    let (seen, _) = page_through(store, filtered).await?;
+    let q = "MATCH (n:$PPage) WHERE n.i % 2 = 0 RETURN n.i AS i ORDER BY n.g DESC, elementId(n)";
+    assert_eq!(seen, all_i(&x, q).await?);
+    x.drop().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn editor_keeps_the_row_limit_of_large_results() -> DbResult<()> {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let max = ExecOptions::MAX_ROW_LIMIT as usize;
+    let opts = ExecOptions { row_limit: 1_000, timeout_secs: 60 };
+    // Capped on the server (one read ending in RETURN), and read past on the client (UNION).
+    for sql in
+        ["UNWIND range(1, 100005) AS i RETURN i", "UNWIND range(1, 100005) AS i RETURN i UNION ALL RETURN 0 AS i"]
+    {
+        let r = s.execute(sql, &[], opts).await?;
+        assert_eq!((r.rows.len(), r.has_more), (1_000, true), "{sql}");
+        assert!(r.notices.iter().any(|n| n.contains("Only the first 100000 rows")), "{:?}", r.notices);
+        let mut total = r.rows.len();
+        loop {
+            let more = s.fetch_more(50_000).await?;
+            total += more.rows.len();
+            if !more.has_more {
+                break;
+            }
+        }
+        assert_eq!(total, max, "{sql}");
+    }
+    let exact = s.execute("UNWIND range(1, 100000) AS i RETURN i", &[], opts).await?;
+    assert!(exact.has_more && !exact.notices.iter().any(|n| n.contains("Only the first")));
+    s.close().await;
     Ok(())
 }
 

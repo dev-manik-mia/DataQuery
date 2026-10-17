@@ -3,7 +3,8 @@
 //! User statements run on a dedicated query connection that holds at most one
 //! open cursor. Catalog work uses separate read-only connections (one per
 //! database, opened lazily) so the explorer keeps working while a query runs.
-//! Writes from the grid and imports use a short-lived connection per transaction.
+//! Writes from the grid and imports run on a write connection that is kept
+//! between transactions while it is healthy.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
+use dq_core::adapter::{BatchFn, ConnectParams, IdleConnection, Params, Session, StatementIter, check_affected};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
@@ -54,6 +55,8 @@ pub struct PgSession {
     running: AtomicBool,
     /// Read-only catalog connections by database, most recently used last.
     catalogs: Mutex<Vec<(String, Arc<Client>)>>,
+    /// The write connection between transactions.
+    writer: IdleConnection<Client>,
 }
 
 struct QueryConnection {
@@ -89,6 +92,7 @@ impl PgSession {
             tls,
             running: AtomicBool::new(false),
             catalogs: Mutex::new(Vec::new()),
+            writer: IdleConnection::default(),
         })
     }
 
@@ -351,10 +355,15 @@ impl Session for PgSession {
         catalog::row_estimate(&*self.catalog(&object.database).await?, object).await
     }
 
+    /// On any error the connection is dropped (its transaction rolls back);
+    /// after a commit it is kept for the next transaction.
     async fn run_in_transaction(&self, database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
-        let database = if database.is_empty() { self.info.database.clone() } else { database.to_owned() };
-        let mut conn = connect::open(&self.params, &database, Role::Write, &self.tls).await?;
-        let tx = conn.client.transaction().await.map_err(|e| self.err(&e))?;
+        let database = if database.is_empty() { self.info.database.as_str() } else { database };
+        let mut client = match self.writer.take(database).filter(|c| !c.is_closed()) {
+            Some(client) => client,
+            None => connect::open(&self.params, database, Role::Write, &self.tls).await?.client,
+        };
+        let tx = client.transaction().await.map_err(|e| self.err(&e))?;
         let mut counts = Vec::new();
         for statement in statements {
             let statement = statement?;
@@ -364,6 +373,7 @@ impl Session for PgSession {
             counts.push(affected);
         }
         tx.commit().await.map_err(|e| self.err(&e))?;
+        self.writer.put(database, client);
         Ok(counts)
     }
 
@@ -374,5 +384,6 @@ impl Session for PgSession {
     async fn close(&self) {
         let _ = self.cancel().await;
         self.catalogs.lock().await.clear();
+        self.writer.clear();
     }
 }

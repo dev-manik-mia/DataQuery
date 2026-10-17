@@ -49,9 +49,13 @@ pub fn schemas(conn: &Connection, database: &str) -> DbResult<Vec<Node>> {
     let found = rows(
         conn,
         &format!(
-            "SELECT u.username, (SELECT COUNT(*) FROM all_objects o WHERE o.owner = u.username \
-                    AND o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')) \
-             FROM all_users u WHERE {USER_SCHEMAS} \
+            // One pass over the objects of the listed schemas, not one count per schema.
+            "SELECT u.username, NVL(o.relations, 0) FROM all_users u \
+             LEFT JOIN (SELECT owner, COUNT(*) relations FROM all_objects \
+                        WHERE object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW') \
+                          AND owner IN (SELECT u.username FROM all_users u WHERE {USER_SCHEMAS}) \
+                        GROUP BY owner) o ON o.owner = u.username \
+             WHERE {USER_SCHEMAS} \
              ORDER BY CASE WHEN u.username = USER THEN 0 ELSE 1 END, u.username"
         ),
         &[],
@@ -67,11 +71,14 @@ pub fn schemas(conn: &Connection, database: &str) -> DbResult<Vec<Node>> {
         .collect())
 }
 
-/// Tables, views and materialized views. Tables that store a materialized
-/// view, and generated helper tables, are left out.
-const RELATION_SELECT: &str = "SELECT o.owner, o.object_name, o.object_type, t.num_rows, c.comments \
-FROM all_objects o \
-LEFT JOIN all_tables t ON t.owner = o.owner AND t.table_name = o.object_name AND o.object_type = 'TABLE' \
+/// Tables, views and materialized views among `source` (rows shaped like
+/// `ALL_OBJECTS`, aliased `o`). Tables that store a materialized view, and
+/// generated helper tables, are left out.
+fn relation_select(source: &str) -> String {
+    format!("SELECT o.owner, o.object_name, o.object_type, t.num_rows, c.comments FROM {source} {RELATION_JOINS}")
+}
+
+const RELATION_JOINS: &str = "LEFT JOIN all_tables t ON t.owner = o.owner AND t.table_name = o.object_name AND o.object_type = 'TABLE' \
 LEFT JOIN all_tab_comments c ON c.owner = o.owner AND c.table_name = o.object_name \
 WHERE o.object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW') AND o.generated = 'N' \
   AND o.object_name NOT LIKE 'BIN$%' AND o.object_name NOT LIKE 'MLOG$\\_%' ESCAPE '\\' \
@@ -91,8 +98,9 @@ pub fn relations(conn: &Connection, database: &str, schema: &str) -> DbResult<Ve
     let found = rows(
         conn,
         &format!(
-            "{RELATION_SELECT} AND o.owner = :1 \
-             ORDER BY CASE o.object_type WHEN 'TABLE' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END, o.object_name"
+            "{} AND o.owner = :1 \
+             ORDER BY CASE o.object_type WHEN 'TABLE' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END, o.object_name",
+            relation_select("all_objects o")
         ),
         &[&schema],
     )?;
@@ -165,14 +173,23 @@ pub fn group_children(conn: &Connection, group: &ObjectRef) -> DbResult<Vec<Node
 
 pub fn search(conn: &Connection, database: &str, query: &str, limit: u32) -> DbResult<Vec<Node>> {
     let pattern = dq_core::sql::builder::like_contains(&query.to_lowercase());
+    // Matching names come first, capped, so only those meet the joins. A
+    // materialized view also matches as the table that stores it (dropped
+    // later), hence twice the limit.
+    let candidates = format!(
+        "(SELECT owner, object_name, object_type, generated FROM all_objects \
+          WHERE object_type IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW') AND generated = 'N' \
+            AND LOWER(object_name) LIKE :1 ESCAPE '\\' \
+            AND owner IN (SELECT u.username FROM all_users u WHERE {USER_SCHEMAS}) \
+          ORDER BY LENGTH(object_name), object_name FETCH FIRST :2 ROWS ONLY) o"
+    );
     let found = rows(
         conn,
         &format!(
-            "{RELATION_SELECT} AND LOWER(o.object_name) LIKE :1 ESCAPE '\\' \
-               AND o.owner IN (SELECT u.username FROM all_users u WHERE {USER_SCHEMAS}) \
-             ORDER BY LENGTH(o.object_name), o.object_name FETCH FIRST :2 ROWS ONLY"
+            "{} ORDER BY LENGTH(o.object_name), o.object_name FETCH FIRST :3 ROWS ONLY",
+            relation_select(&candidates)
         ),
-        &[&pattern, &i64::from(limit)],
+        &[&pattern, &(i64::from(limit) * 2), &i64::from(limit)],
     )?;
     Ok(found.iter().map(|r| relation_node(database, r)).collect())
 }
@@ -181,7 +198,7 @@ fn relation(conn: &Connection, object: &ObjectRef) -> DbResult<(NodeKind, Option
     let owner = owner_of(object)?;
     let r = first_row(
         conn,
-        &format!("{RELATION_SELECT} AND o.owner = :1 AND o.object_name = :2"),
+        &format!("{} AND o.owner = :1 AND o.object_name = :2", relation_select("all_objects o")),
         &[&owner, &object.name],
     )?
     .ok_or_else(|| not_found(object))?;
@@ -272,15 +289,11 @@ fn columns(conn: &Connection, object: &ObjectRef) -> DbResult<Vec<Column>> {
         .collect())
 }
 
-/// Columns of each constraint of a table: (name, type, columns, referenced constraint owner/name,
-/// delete rule, check condition, generated name).
+/// Columns of each constraint of a table: (name, type, columns, check condition, generated name).
 struct Constraint {
     name: String,
     kind: String,
     columns: Vec<String>,
-    r_owner: Option<String>,
-    r_name: Option<String>,
-    delete_rule: Option<String>,
     condition: Option<String>,
     generated: bool,
 }
@@ -288,8 +301,7 @@ struct Constraint {
 fn table_constraints(conn: &Connection, owner: &str, table: &str) -> DbResult<Vec<Constraint>> {
     let found = rows(
         conn,
-        "SELECT k.constraint_name, k.constraint_type, kc.column_name, k.r_owner, k.r_constraint_name, k.delete_rule, \
-                k.search_condition_vc, k.generated \
+        "SELECT k.constraint_name, k.constraint_type, kc.column_name, k.search_condition_vc, k.generated \
          FROM all_constraints k \
          LEFT JOIN all_cons_columns kc ON kc.owner = k.owner AND kc.constraint_name = k.constraint_name \
          WHERE k.owner = :1 AND k.table_name = :2 AND k.constraint_type IN ('P', 'U', 'R', 'C') \
@@ -305,51 +317,17 @@ fn table_constraints(conn: &Connection, owner: &str, table: &str) -> DbResult<Ve
                 name,
                 kind: r.string(1),
                 columns: r.text(2).into_iter().collect(),
-                r_owner: r.text(3),
-                r_name: r.text(4),
-                delete_rule: r.text(5).filter(|d| d != "NO ACTION"),
-                condition: r.text(6),
-                generated: r.text(7).as_deref() == Some("GENERATED NAME"),
+                condition: r.text(3),
+                generated: r.text(4).as_deref() == Some("GENERATED NAME"),
             }),
         }
     }
     Ok(out)
 }
 
-/// Columns of a constraint (for the referenced side of a foreign key).
-fn constraint_columns(conn: &Connection, owner: &str, name: &str) -> DbResult<(String, Vec<String>)> {
-    let found = rows(
-        conn,
-        "SELECT table_name, column_name FROM all_cons_columns WHERE owner = :1 AND constraint_name = :2 ORDER BY position",
-        &[&owner, &name],
-    )?;
-    let table = found.first().map(|r| r.string(0)).unwrap_or_default();
-    Ok((table, found.iter().map(|r| r.string(1)).collect()))
-}
-
 /// System-made `"X" IS NOT NULL` checks repeat the column's NOT NULL.
 fn is_not_null_check(c: &Constraint) -> bool {
     c.generated && c.condition.as_deref().is_some_and(|s| s.trim_end().ends_with("IS NOT NULL") && !s.contains(" AND "))
-}
-
-fn foreign_key(
-    conn: &Connection,
-    database: &str,
-    owner: &str,
-    table: &str,
-    c: &Constraint,
-) -> DbResult<Option<ForeignKey>> {
-    let (Some(r_owner), Some(r_name)) = (&c.r_owner, &c.r_name) else { return Ok(None) };
-    let (target_table, target_columns) = constraint_columns(conn, r_owner, r_name)?;
-    Ok(Some(ForeignKey {
-        name: c.name.clone(),
-        source: ObjectRef::new(NodeKind::Table, database, Some(owner.to_owned()), table),
-        columns: c.columns.clone(),
-        target: ObjectRef::new(NodeKind::Table, database, Some(r_owner.clone()), target_table),
-        target_columns,
-        on_update: None,
-        on_delete: c.delete_rule.clone(),
-    }))
 }
 
 struct Index {
@@ -454,6 +432,7 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
     let (kind, estimate, comment) = relation(conn, object)?;
     let columns: Vec<ColumnInfo> = columns(conn, object)?.into_iter().map(|c| c.info).collect();
     let all = table_constraints(conn, owner, &object.name)?;
+    let mut keys = foreign_keys_where(conn, &object.database, FKS_OF_TABLE, &[&owner, &object.name])?;
     let primary_index = first_row(
         conn,
         "SELECT index_name FROM all_constraints WHERE owner = :1 AND table_name = :2 AND constraint_type = 'P'",
@@ -477,7 +456,8 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
                 definition: format!("UNIQUE ({})", list(&c.columns)),
             }),
             "R" => {
-                if let Some(fk) = foreign_key(conn, &object.database, owner, &object.name, c)? {
+                if let Some(at) = keys.iter().position(|k| k.name == c.name) {
+                    let fk = keys.swap_remove(at);
                     let target = if fk.target.schema == object.schema {
                         D.display_ident(&fk.target.name)
                     } else {
@@ -530,6 +510,13 @@ pub fn structure(conn: &Connection, object: &ObjectRef) -> DbResult<TableStructu
     })
 }
 
+/// Foreign keys of one table (`:1` owner, `:2` table).
+const FKS_OF_TABLE: &str = "k.owner = :1 AND k.table_name = :2";
+/// Foreign keys that reference a key of one table (`:1` owner, `:2` table).
+const FKS_TO_TABLE: &str = "r.owner = :1 AND r.table_name = :2 AND r.constraint_type IN ('P', 'U')";
+
+/// Foreign keys (`k`) matching `predicate`, with their columns paired by
+/// position with the referenced key's (`r`), in one query.
 fn foreign_keys_where(
     conn: &Connection,
     database: &str,
@@ -539,17 +526,31 @@ fn foreign_keys_where(
     let found = rows(
         conn,
         &format!(
-            "SELECT k.owner, k.table_name, k.constraint_name FROM all_constraints k \
-             WHERE k.constraint_type = 'R' AND {predicate} ORDER BY k.owner, k.table_name, k.constraint_name"
+            "SELECT k.owner, k.table_name, k.constraint_name, k.delete_rule, k.r_owner, r.table_name, \
+                    kc.column_name, rc.column_name \
+             FROM all_constraints k \
+             LEFT JOIN all_cons_columns kc ON kc.owner = k.owner AND kc.constraint_name = k.constraint_name \
+             LEFT JOIN all_constraints r ON r.owner = k.r_owner AND r.constraint_name = k.r_constraint_name \
+             LEFT JOIN all_cons_columns rc ON rc.owner = k.r_owner AND rc.constraint_name = k.r_constraint_name \
+                  AND rc.position = kc.position \
+             WHERE k.constraint_type = 'R' AND {predicate} \
+             ORDER BY k.owner, k.table_name, k.constraint_name, kc.position"
         ),
         params,
     )?;
     let mut out = Vec::new();
-    for r in &found {
-        let (owner, table) = (r.string(0), r.string(1));
-        for c in table_constraints(conn, &owner, &table)?.iter().filter(|c| c.name == r.string(2)) {
-            out.extend(foreign_key(conn, database, &owner, &table, c)?);
-        }
+    for group in found.chunk_by(|a, b| a.text(0) == b.text(0) && a.text(2) == b.text(2)) {
+        let first = &group[0];
+        let Some(r_owner) = first.text(4) else { continue };
+        out.push(ForeignKey {
+            name: first.string(2),
+            source: ObjectRef::new(NodeKind::Table, database, Some(first.string(0)), first.string(1)),
+            columns: group.iter().filter_map(|r| r.text(6)).collect(),
+            target: ObjectRef::new(NodeKind::Table, database, Some(r_owner), first.string(5)),
+            target_columns: group.iter().filter_map(|r| r.text(7)).collect(),
+            on_update: None,
+            on_delete: first.text(3).filter(|d| d != "NO ACTION"),
+        });
     }
     Ok(out)
 }
@@ -561,16 +562,10 @@ pub fn dependencies(conn: &Connection, object: &ObjectRef) -> DbResult<Dependenc
     let owner = owner_of(object)?;
     let db = &object.database;
     let mut deps = Dependencies::default();
-    for fk in foreign_keys_where(conn, db, "k.owner = :1 AND k.table_name = :2", &[&owner, &object.name])? {
+    for fk in foreign_keys_where(conn, db, FKS_OF_TABLE, &[&owner, &object.name])? {
         deps.uses.push(Dependency { object: fk.target, relation: format!("foreign key {}", fk.name) });
     }
-    for fk in foreign_keys_where(
-        conn,
-        db,
-        "(k.r_owner, k.r_constraint_name) IN (SELECT owner, constraint_name FROM all_constraints \
-          WHERE owner = :1 AND table_name = :2 AND constraint_type IN ('P', 'U'))",
-        &[&owner, &object.name],
-    )? {
+    for fk in foreign_keys_where(conn, db, FKS_TO_TABLE, &[&owner, &object.name])? {
         deps.used_by.push(Dependency { object: fk.source, relation: format!("foreign key {}", fk.name) });
     }
     let uses = rows(
@@ -622,9 +617,10 @@ pub fn schema_model(conn: &Connection, database: &str, schema: &str) -> DbResult
                            ON kc.owner = k.owner AND kc.constraint_name = k.constraint_name \
                          WHERE k.owner = c.owner AND k.table_name = c.table_name AND k.constraint_type = 'P' \
                            AND kc.column_name = c.column_name) THEN 'Y' ELSE 'N' END \
-             FROM ({RELATION_SELECT} AND o.owner = :1) o \
+             FROM ({} AND o.owner = :1) o \
              JOIN all_tab_columns c ON c.owner = o.owner AND c.table_name = o.object_name \
              ORDER BY o.object_name, c.column_id FETCH FIRST {} ROWS ONLY",
+            relation_select("all_objects o"),
             SchemaModel::MAX_COLUMNS
         ),
         &[&schema],

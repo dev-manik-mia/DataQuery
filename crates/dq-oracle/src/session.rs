@@ -6,7 +6,7 @@
 //! the session's statement (`ALTER SYSTEM CANCEL SQL`), and falls back to a
 //! client break when the account may not. Catalog
 //! reads, table pages and exports use a small pool; grid edits and imports
-//! use a short-lived connection per transaction.
+//! use a write connection, opened on first use and kept between transactions.
 //!
 //! Oracle has no autocommit on the server: a write outside an explicit
 //! transaction (`SET TRANSACTION …`) is committed right after it runs.
@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
+use dq_core::edit::BoundStatement;
 use dq_core::explain::ExplainResult;
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
@@ -50,6 +51,9 @@ pub struct OraSession {
     interrupter: std::sync::Mutex<Arc<Interrupter>>,
     running: AtomicBool,
     pub(crate) pool: Arc<Pool>,
+    /// The idle write connection, if one is open. A transaction takes it out
+    /// while it runs; one that failed is closed instead of returned.
+    writer: Arc<std::sync::Mutex<Option<Connection>>>,
 }
 
 /// Cancels whatever the query connection is running.
@@ -183,6 +187,7 @@ impl OraSession {
             query: Mutex::new(QueryState { conn, cursor: None, in_transaction: false }),
             running: AtomicBool::new(false),
             pool,
+            writer: Arc::new(std::sync::Mutex::new(None)),
             sid: opened.sid,
             info: opened.info,
         })
@@ -239,7 +244,9 @@ impl OraSession {
         let secret = self.secret();
         let outcome = with_deadline(interrupter, options.timeout_secs, move |conn| -> DbResult<Outcome> {
             let err = |e: oracle::Error| map_error(&e, secret.as_deref());
-            let mut statement = prepare(conn, &sql, &params).map_err(err)?;
+            // The first page and the row that tells whether more exist.
+            let wanted = options.row_limit.saturating_add(1);
+            let mut statement = prepare(conn, &sql, &params, Some(wanted)).map_err(err)?;
             if statement.is_query() {
                 let rows = statement.into_result_set::<Row>(&[]).map_err(err)?;
                 let columns = column_meta(rows.column_info());
@@ -296,7 +303,9 @@ impl OraSession {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<DbResult<(Vec<ColumnMeta>, Vec<CellRow>)>>(2);
         let work = self.pool.run(move |conn| {
             let err = |e: oracle::Error| map_error(&e, secret.as_deref());
-            let rows = prepare(conn, &sql, &params).and_then(|s| s.into_result_set::<Row>(&[])).map_err(err)?;
+            let rows = prepare(conn, &sql, &params, Some(u32::MAX))
+                .and_then(|s| s.into_result_set::<Row>(&[]))
+                .map_err(err)?;
             let meta = column_meta(rows.column_info());
             let mut batch = Vec::with_capacity(STREAM_BATCH);
             for row in rows {
@@ -331,6 +340,30 @@ impl OraSession {
         result?;
         failure.map_or(Ok(total), Err)
     }
+}
+
+/// Runs `statements` and commits. On failure, also tells whether it came
+/// before the first statement ran.
+fn transact(
+    conn: &Connection,
+    statements: &[BoundStatement],
+    secret: Option<&str>,
+) -> Result<Vec<u64>, (DbError, bool)> {
+    let err = |e: oracle::Error| map_error(&e, secret);
+    let mut counts = Vec::with_capacity(statements.len());
+    for statement in statements {
+        let first = counts.is_empty();
+        let run = || -> DbResult<u64> {
+            let mut stmt = prepare(conn, &statement.sql, &statement.params, None).map_err(err)?;
+            stmt.execute(&[]).map_err(err)?;
+            let affected = stmt.row_count().map_err(err)?;
+            check_affected(statement, affected)?;
+            Ok(affected)
+        };
+        counts.push(run().map_err(|e| (e, first))?);
+    }
+    conn.commit().map_err(|e| (err(e), false))?;
+    Ok(counts)
 }
 
 #[async_trait]
@@ -473,25 +506,41 @@ impl Session for OraSession {
         // Statements are produced lazily; build them here, run them together.
         let statements: Vec<_> = statements.collect::<DbResult<Vec<_>>>()?;
         let params = self.params().clone();
+        let writer = self.writer.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = connect::open_blocking(&params)?;
-            let err = |e: oracle::Error| map_error(&e, params.password());
-            let mut counts = Vec::with_capacity(statements.len());
-            let outcome: DbResult<()> = (|| {
-                for statement in &statements {
-                    let mut stmt = prepare(&conn, &statement.sql, &statement.params).map_err(err)?;
-                    stmt.execute(&[]).map_err(err)?;
-                    let affected = stmt.row_count().map_err(err)?;
-                    check_affected(statement, affected)?;
-                    counts.push(affected);
-                }
-                conn.commit().map_err(err)
-            })();
-            if outcome.is_err() {
-                let _ = conn.rollback();
+            let secret = params.password();
+            let kept = writer.lock().ok().and_then(|mut w| w.take());
+            let reused = kept.is_some();
+            let mut conn = match kept {
+                Some(conn) => conn,
+                None => connect::open_blocking(&params)?,
+            };
+            let mut outcome = transact(&conn, &statements, secret);
+            if reused && matches!(&outcome, Err((e, true)) if e.kind == ErrorKind::Network) {
+                // The kept connection died while idle and its first statement
+                // never ran: run the transaction on a new connection.
+                let _ = conn.close();
+                conn = connect::open_blocking(&params)?;
+                outcome = transact(&conn, &statements, secret);
             }
-            let _ = conn.close();
-            outcome.map(|()| counts)
+            match outcome {
+                Ok(counts) => {
+                    let mut slot = writer.lock().ok();
+                    match slot.as_deref_mut() {
+                        Some(idle @ None) => *idle = Some(conn),
+                        // Another transaction already returned its connection.
+                        _ => {
+                            let _ = conn.close();
+                        }
+                    }
+                    Ok(counts)
+                }
+                Err((e, _)) => {
+                    let _ = conn.rollback();
+                    let _ = conn.close();
+                    Err(e)
+                }
+            }
         })
         .await
         .map_err(|e| DbError::internal(format!("transaction task failed: {e}")))?
@@ -522,6 +571,10 @@ impl Session for OraSession {
     async fn close(&self) {
         let _ = self.cancel().await;
         self.pool.close().await;
+        let writer = self.writer.lock().ok().and_then(|mut w| w.take());
+        if let Some(conn) = writer {
+            let _ = tokio::task::spawn_blocking(move || conn.close()).await;
+        }
         let q = self.query.lock().await;
         let conn = q.conn.clone();
         let _ = tokio::task::spawn_blocking(move || conn.close()).await;

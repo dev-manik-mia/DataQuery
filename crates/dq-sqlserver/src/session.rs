@@ -3,12 +3,13 @@
 //! User statements run on a query connection owned by a worker task (see
 //! [`crate::worker`]). Catalog reads, table pages and exports use a small pool
 //! of other connections, so the explorer keeps working while a query runs.
-//! Grid edits and imports use a short-lived connection per transaction.
+//! Grid edits and imports run on a write connection that is kept between
+//! transactions while it is healthy.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
+use dq_core::adapter::{BatchFn, ConnectParams, IdleConnection, Params, Session, StatementIter, check_affected};
 use dq_core::explain::ExplainResult;
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
@@ -36,6 +37,8 @@ pub struct MsSession {
     worker: mpsc::Sender<Command>,
     signal: Arc<CancelSignal>,
     pub(crate) pool: Pool,
+    /// The write connection between transactions.
+    writer: IdleConnection<Conn>,
 }
 
 fn read_only_error() -> DbError {
@@ -51,6 +54,7 @@ impl MsSession {
             worker: Worker::spawn(params.clone(), opened.conn, signal.clone()),
             signal,
             pool: Pool::new(params.clone(), opened.info.database.clone()),
+            writer: IdleConnection::default(),
             spid: opened.spid,
             info: opened.info,
         })
@@ -147,11 +151,15 @@ impl MsSession {
             .ok_or_else(|| DbError::internal("the server returned no plan"))
     }
 
+    /// The kept write connection for `database`, or a new one.
     async fn write_conn(&self, database: &str) -> DbResult<Conn> {
         if self.params().config.read_only {
             return Err(read_only_error());
         }
-        connect::open(self.params(), Some(database).filter(|d| !d.is_empty())).await
+        match self.writer.take(database) {
+            Some(conn) => Ok(conn),
+            None => connect::open(self.params(), Some(database).filter(|d| !d.is_empty())).await,
+        }
     }
 }
 
@@ -288,13 +296,16 @@ impl Session for MsSession {
             Ok(())
         }
         .await;
-        if outcome.is_err()
-            && let Ok(s) = conn.simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION").await
-        {
-            let _ = s.into_results().await;
+        if let Err(e) = outcome {
+            // Rolled back and closed: a connection in an unknown state is never reused.
+            if let Ok(s) = conn.simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION").await {
+                let _ = s.into_results().await;
+            }
+            let _ = conn.close().await;
+            return Err(e);
         }
-        let _ = conn.close().await;
-        outcome.map(|()| counts)
+        self.writer.put(database, conn);
+        Ok(counts)
     }
 
     async fn explain(
@@ -320,5 +331,8 @@ impl Session for MsSession {
     async fn close(&self) {
         let _ = self.signal.cancel();
         self.pool.close().await;
+        if let Some(conn) = self.writer.clear() {
+            let _ = conn.close().await;
+        }
     }
 }

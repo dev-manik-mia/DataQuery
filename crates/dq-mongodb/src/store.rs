@@ -5,6 +5,8 @@ use std::fmt::Write;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use dq_core::document::{DocIndex, DocumentFeatures, DocumentPage, DocumentStore, FindRequest};
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::schema::ColumnInfo;
@@ -112,13 +114,152 @@ fn infer(text: &str) -> Bson {
     Bson::String(text.to_owned())
 }
 
+/// BSON types in sort order, grouped as queries compare them (numbers with
+/// numbers, strings with symbols); `$gt` / `$lt` only match within a group.
+const TYPE_ORDER: &[&[&str]] = &[
+    &["minKey"],
+    &["undefined"],
+    &["null"],
+    &["double", "int", "long", "decimal"],
+    &["symbol", "string"],
+    &["object"],
+    &["array"],
+    &["binData"],
+    &["objectId"],
+    &["bool"],
+    &["date"],
+    &["timestamp"],
+    &["regex"],
+    &["dbPointer"],
+    &["javascript"],
+    &["javascriptWithScope"],
+    &["maxKey"],
+];
+
+/// The [`TYPE_ORDER`] group of an `_id` a page may continue after. `None` for
+/// values that compare with everything (`MinKey`, `MaxKey`), deprecated
+/// `undefined` and NaN: those pages continue by offset.
+fn type_group(v: &Bson) -> Option<usize> {
+    Some(match v {
+        Bson::Null => 2,
+        Bson::Double(d) if d.is_nan() => return None,
+        Bson::Double(_) | Bson::Int32(_) | Bson::Int64(_) | Bson::Decimal128(_) => 3,
+        Bson::Symbol(_) | Bson::String(_) => 4,
+        Bson::Document(_) => 5,
+        Bson::Array(_) => 6,
+        Bson::Binary(_) => 7,
+        Bson::ObjectId(_) => 8,
+        Bson::Boolean(_) => 9,
+        Bson::DateTime(_) => 10,
+        Bson::Timestamp(_) => 11,
+        Bson::RegularExpression(_) => 12,
+        Bson::DbPointer(_) => 13,
+        Bson::JavaScriptCode(_) => 14,
+        Bson::JavaScriptCodeWithScope(_) => 15,
+        Bson::MinKey | Bson::MaxKey | Bson::Undefined => return None,
+    })
+}
+
+/// Documents after `id` in `_id` order: a greater value of the same type group,
+/// or any value of a later group (BSON order across types, as the sort uses).
+fn after_id(id: &Bson, ascending: bool) -> Option<Document> {
+    let group = type_group(id)?;
+    let others: Vec<&str> = TYPE_ORDER
+        .iter()
+        .enumerate()
+        .filter(|(g, _)| if ascending { *g > group } else { *g < group })
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    let mut or = vec![Bson::Document(doc! { "_id": { if ascending { "$gt" } else { "$lt" }: id.clone() } })];
+    if !others.is_empty() {
+        or.push(Bson::Document(doc! { "_id": { "$type": others } }));
+    }
+    Some(doc! { "$or": or })
+}
+
+/// A sort key's direction: 1 or -1 (`None` for `{ $meta: … }` and other forms).
+fn direction(v: &Bson) -> Option<i64> {
+    let n = match v {
+        Bson::Int32(n) => i64::from(*n),
+        Bson::Int64(n) => *n,
+        Bson::Double(d) if d.fract() == 0.0 => *d as i64,
+        _ => return None,
+    };
+    matches!(n, 1 | -1).then_some(n)
+}
+
+/// `Some(ascending)` when pages are in `_id` order: no sort (on collections) or `{ _id: ±1 }`.
+fn id_order(sort: &Document) -> Option<bool> {
+    match sort.iter().collect::<Vec<_>>().as_slice() {
+        [] => Some(true),
+        [(key, dir)] if key.as_str() == "_id" => direction(dir).map(|d| d == 1),
+        _ => None,
+    }
+}
+
+/// True when `index` returns documents in `sort` order (or its reverse), so ties
+/// come back in a stable order without an `_id` tiebreaker.
+fn index_serves(index: &Document, sort: &Document) -> bool {
+    if index.get_bool("sparse").unwrap_or(false) || index.contains_key("partialFilterExpression") {
+        return false;
+    }
+    let Ok(key) = index.get_document("key") else { return false };
+    if key.len() < sort.len() {
+        return false;
+    }
+    let mut reversed = None;
+    sort.iter().zip(key.iter()).all(|((sk, sv), (ik, iv))| {
+        let (Some(a), Some(b)) = (direction(sv), direction(iv)) else { return false };
+        sk == ik && *reversed.get_or_insert(a != b) == (a != b)
+    })
+}
+
+/// Where a page starts. A plain number is an offset (views, time series, user
+/// sorts, older cursors); `k…` is a page in `_id` order continuing after an `_id`,
+/// with the offset kept for when the last document had no usable `_id`.
+#[derive(Debug, Default, PartialEq)]
+struct PageCursor {
+    offset: u64,
+    /// Pages in `_id` order.
+    seek: bool,
+    /// The `_id` to continue after.
+    after: Option<Bson>,
+}
+
+impl PageCursor {
+    fn parse(cursor: Option<&str>) -> DbResult<Self> {
+        let invalid = || DbError::invalid("Invalid page cursor.");
+        let Some(c) = cursor else { return Ok(Self::default()) };
+        if let Some(token) = c.strip_prefix('k') {
+            let bytes = URL_SAFE_NO_PAD.decode(token).map_err(|_| invalid())?;
+            let d = Document::from_reader(&mut bytes.as_slice()).map_err(|_| invalid())?;
+            let offset = d.get_i64("o").map_err(|_| invalid())?;
+            return Ok(Self { offset: offset.max(0) as u64, seek: true, after: d.get("id").cloned() });
+        }
+        Ok(Self { offset: c.parse().map_err(|_| invalid())?, ..Self::default() })
+    }
+
+    fn token(offset: u64, id: Option<&Bson>) -> String {
+        let mut d = doc! { "o": offset as i64 };
+        if let Some(id) = id {
+            d.insert("id", id.clone());
+        }
+        let mut bytes = Vec::new();
+        let _ = d.to_writer(&mut bytes);
+        format!("k{}", URL_SAFE_NO_PAD.encode(bytes))
+    }
+}
+
 impl MongoSession {
-    fn find_command(request: &FindRequest, skip: u64, limit: u32) -> DbResult<Document> {
-        let o = &request.object;
-        let mut c = doc! { "find": &o.name, "skip": skip as i64, "limit": i64::from(limit) + 1, "maxTimeMS": READ_MS };
-        let filter = parse_document(&request.filter, "filter")?;
-        let projection = parse_document(&request.projection, "projection")?;
-        let sort = parse_document(&request.sort, "sort")?;
+    fn find_command(
+        name: &str,
+        filter: Document,
+        projection: Document,
+        sort: Document,
+        skip: u64,
+        limit: u32,
+    ) -> Document {
+        let mut c = doc! { "find": name, "skip": skip as i64, "limit": i64::from(limit) + 1, "maxTimeMS": READ_MS };
         if !filter.is_empty() {
             c.insert("filter", filter);
         }
@@ -128,7 +269,38 @@ impl MongoSession {
         if !sort.is_empty() {
             c.insert("sort", sort);
         }
-        Ok(c)
+        c
+    }
+
+    /// Pages in `_id` order on a collection: the first page unless the
+    /// collection is a time series (no `_id` index to walk), and every page whose
+    /// cursor is a seek token.
+    async fn id_paging(&self, object: &ObjectRef, sort: &Document, cursor: &PageCursor) -> DbResult<Option<bool>> {
+        let Some(ascending) = id_order(sort).filter(|_| object.kind == NodeKind::Table) else { return Ok(None) };
+        Ok(match cursor {
+            PageCursor { seek: true, .. } => Some(ascending),
+            _ if !sort.is_empty() => Some(ascending),
+            PageCursor { offset: 0, .. } => {
+                let spec = catalog::spec(self, object).await.ok();
+                (!spec.is_some_and(|s| s.options.contains_key("timeseries"))).then_some(ascending)
+            }
+            // An offset without a sort: natural order, as the first page was.
+            _ => None,
+        })
+    }
+
+    /// `sort` plus `_id` when no index returns it in a stable order: Mongo
+    /// returns equal sort values in any order, so offset pages could repeat or
+    /// miss documents. A sort an index serves is left alone so it stays an index walk.
+    async fn stable_sort(&self, object: &ObjectRef, mut sort: Document) -> Document {
+        if sort.is_empty() || sort.contains_key("_id") || sort.values().any(|v| direction(v).is_none()) {
+            return sort;
+        }
+        let indexes = catalog::list_indexes(self, object).await.unwrap_or_default();
+        if !indexes.iter().any(|ix| index_serves(ix, &sort)) {
+            sort.insert("_id", 1);
+        }
+        sort
     }
 
     fn page(docs: Vec<Document>, limit: u32, next: impl FnOnce() -> String, started: Instant) -> DocumentPage {
@@ -159,16 +331,40 @@ impl DocumentStore for MongoSession {
         FEATURES
     }
 
+    /// Collections without a sort (or sorted on `_id` alone) page in `_id` order,
+    /// each page continuing after the last `_id` (keyset paging): an index seek
+    /// whatever the page number. Other sorts page by offset with an `_id`
+    /// tiebreaker; seeking on them is not exact, as a field's sort key and its
+    /// `$gt` matches differ for arrays (the sort uses the smallest or largest
+    /// element, `$gt` matches any element) and missing values.
     async fn find(&self, request: &FindRequest) -> DbResult<DocumentPage> {
         let started = Instant::now();
         let limit = request.limit();
-        let skip = match &request.cursor {
-            None => 0,
-            Some(c) => c.parse::<u64>().map_err(|_| DbError::invalid("Invalid page cursor."))?,
+        let object = &request.object;
+        let cursor = PageCursor::parse(request.cursor.as_deref())?;
+        let filter = parse_document(&request.filter, "filter")?;
+        let projection = parse_document(&request.projection, "projection")?;
+        let sort = parse_document(&request.sort, "sort")?;
+        let next_offset = cursor.offset + u64::from(limit);
+        let Some(ascending) = self.id_paging(object, &sort, &cursor).await? else {
+            let sort = self.stable_sort(object, sort).await;
+            let cmd = Self::find_command(&object.name, filter, projection, sort, cursor.offset, limit);
+            let docs = documents(&self.client, &object.database, cmd, limit as usize + 1).await?;
+            return Ok(Self::page(docs, limit, || next_offset.to_string(), started));
         };
-        let cmd = Self::find_command(request, skip, limit)?;
-        let docs = documents(&self.client, &request.object.database, cmd, limit as usize + 1).await?;
-        Ok(Self::page(docs, limit, || (skip + u64::from(limit)).to_string(), started))
+        let after = cursor.after.and_then(|id| after_id(&id, ascending));
+        let skip = if after.is_some() { 0 } else { cursor.offset };
+        let filter = match after {
+            None => filter,
+            Some(after) if filter.is_empty() => after,
+            Some(after) => doc! { "$and": [filter, after] },
+        };
+        let sort = doc! { "_id": if ascending { 1 } else { -1 } };
+        let cmd = Self::find_command(&object.name, filter, projection, sort, skip, limit);
+        let docs = documents(&self.client, &object.database, cmd, limit as usize + 1).await?;
+        // A projection may leave `_id` out: the next page then continues by offset.
+        let last = docs.get(limit as usize - 1).and_then(|d| d.get("_id")).cloned();
+        Ok(Self::page(docs, limit, || PageCursor::token(next_offset, last.as_ref()), started))
     }
 
     async fn count(&self, object: &ObjectRef, filter: &str) -> DbResult<Option<RowCount>> {
@@ -354,6 +550,43 @@ impl DocumentStore for MongoSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pages_seek_after_the_last_id() {
+        let oid = ObjectId::new();
+        let token = PageCursor::token(40, Some(&Bson::ObjectId(oid)));
+        assert_eq!(
+            PageCursor::parse(Some(&token)).unwrap(),
+            PageCursor { offset: 40, seek: true, after: Some(Bson::ObjectId(oid)) }
+        );
+        assert_eq!(PageCursor::parse(Some(&PageCursor::token(5, None))).unwrap().after, None);
+        assert_eq!(PageCursor::parse(Some("20")).unwrap(), PageCursor { offset: 20, ..PageCursor::default() });
+        assert!(PageCursor::parse(Some("k!")).is_err() && PageCursor::parse(Some("x")).is_err());
+
+        let after = after_id(&Bson::String("m".into()), true).unwrap();
+        let or = after.get_array("$or").unwrap();
+        assert_eq!(or[0], Bson::Document(doc! { "_id": { "$gt": "m" } }));
+        let later = or[1].as_document().unwrap().get_document("_id").unwrap().get_array("$type").unwrap();
+        assert_eq!(later.first(), Some(&Bson::String("object".into())));
+        assert!(!later.contains(&Bson::String("string".into())));
+        let before = after_id(&Bson::Int32(5), false).unwrap();
+        assert_eq!(
+            before.get_array("$or").unwrap()[1],
+            Bson::Document(doc! { "_id": { "$type": ["minKey", "undefined", "null"] } })
+        );
+        assert_eq!(after_id(&Bson::MaxKey, true), None);
+        assert_eq!(after_id(&Bson::Double(f64::NAN), true), None);
+
+        assert_eq!(id_order(&doc! {}), Some(true));
+        assert_eq!(id_order(&doc! { "_id": -1 }), Some(false));
+        assert_eq!(id_order(&doc! { "a": 1 }), None);
+        let ix = |key: Document| doc! { "name": "x", "key": key };
+        assert!(index_serves(&ix(doc! { "a": 1, "b": -1 }), &doc! { "a": -1, "b": 1 }));
+        assert!(index_serves(&ix(doc! { "a": 1, "b": -1 }), &doc! { "a": 1 }));
+        assert!(!index_serves(&ix(doc! { "a": 1, "b": 1 }), &doc! { "a": 1, "b": -1 }));
+        assert!(!index_serves(&ix(doc! { "a": "text" }), &doc! { "a": 1 }));
+        assert!(!index_serves(&doc! { "key": { "a": 1 }, "sparse": true }, &doc! { "a": 1 }));
+    }
 
     #[test]
     fn imports_convert_by_type() {

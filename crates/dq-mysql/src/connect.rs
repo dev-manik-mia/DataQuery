@@ -89,14 +89,20 @@ fn opts(params: &ConnectParams, role: Role, tls: Option<SslOpts>, setup: Vec<Str
         .setup(setup)
 }
 
-/// Opens one connection, honouring the connect timeout and `prefer` fallback.
-/// Query connections of read-only profiles only allow read-only transactions.
-pub async fn open(params: &ConnectParams, role: Role, mut setup: Vec<String>) -> DbResult<Conn> {
-    dq_core::tls::install_crypto_provider();
-    let config = &params.config;
+/// `setup` for a connection of `role`: query and write connections of
+/// read-only profiles only allow read-only transactions.
+fn role_setup(config: &ConnConfig, role: Role, mut setup: Vec<String>) -> Vec<String> {
     if config.read_only && role != Role::Catalog {
         setup.insert(0, READ_ONLY.to_owned());
     }
+    setup
+}
+
+/// Opens one connection, honouring the connect timeout and `prefer` fallback.
+pub async fn open(params: &ConnectParams, role: Role, setup: Vec<String>) -> DbResult<Conn> {
+    dq_core::tls::install_crypto_provider();
+    let config = &params.config;
+    let setup = role_setup(config, role, setup);
     let attempt = |tls| connect(opts(params, role, tls, setup.clone()).into(), config, params.password());
     match attempt(ssl_opts(params, config.ssl_mode)).await {
         // `prefer` falls back to plain text only when the server has no TLS at all.
@@ -141,14 +147,31 @@ pub fn catalog_setup(flavor: Flavor) -> Vec<String> {
     vec![READ_ONLY.to_owned(), flavor.timeout_statement(60)]
 }
 
-/// A small pool of read-only connections for the explorer, table pages and exports.
-/// `params` must be [`resolved`].
-pub fn catalog_pool(params: &ConnectParams, flavor: Flavor) -> mysql_async::Pool {
+/// How long a pooled connection may idle before it is closed. With the
+/// driver's default of zero, a pool whose minimum is 0 keeps no idle
+/// connection, and every checkout would connect anew.
+const POOL_IDLE: Duration = Duration::from_secs(60);
+
+/// Up to `pool_size` connections for `role`. The driver rolls back and resets
+/// each connection returned to the pool. `params` must be [`resolved`].
+fn pool(params: &ConnectParams, role: Role, setup: Vec<String>) -> mysql_async::Pool {
     dq_core::tls::install_crypto_provider();
     let max = params.config.options.pool_size.max(1) as usize;
-    let pool = PoolOpts::default().with_constraints(PoolConstraints::new(0, max).expect("valid pool constraints"));
+    let pool = PoolOpts::default()
+        .with_constraints(PoolConstraints::new(0, max).expect("valid pool constraints"))
+        .with_inactive_connection_ttl(POOL_IDLE);
     let tls = ssl_opts(params, params.config.ssl_mode);
-    mysql_async::Pool::new(opts(params, Role::Catalog, tls, catalog_setup(flavor)).pool_opts(pool))
+    mysql_async::Pool::new(opts(params, role, tls, role_setup(&params.config, role, setup)).pool_opts(pool))
+}
+
+/// Read-only connections for the explorer, table pages and exports.
+pub fn catalog_pool(params: &ConnectParams, flavor: Flavor) -> mysql_async::Pool {
+    pool(params, Role::Catalog, catalog_setup(flavor))
+}
+
+/// Connections for grid edits, imports and schema changes.
+pub fn write_pool(params: &ConnectParams) -> mysql_async::Pool {
+    pool(params, Role::Write, Vec::new())
 }
 
 /// Settles `prefer` to what the first connection negotiated, so later

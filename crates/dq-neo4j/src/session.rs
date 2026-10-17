@@ -18,6 +18,7 @@ use dq_core::monitor::Monitor;
 use dq_core::node::{Node, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult, TlsInfo};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
+use dq_core::sql::lexer::{TokenKind, tokenize};
 use dq_core::sql::{CypherDialect, Dialect, SqlFlavor, command_tag, named_params, split_statements};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult, ErrorKind};
@@ -87,6 +88,70 @@ pub fn bind(sql: &str, params: Params<'_>) -> DbResult<Map<String, Value>> {
         )));
     }
     Ok(names.into_iter().zip(params).map(|(n, v)| (n, values::param(v.as_deref()))).collect())
+}
+
+/// Words that leave a statement uncapped by [`capped`]: writes, procedures,
+/// subqueries, `UNION` (a `LIMIT` would bind to the last part only) and prefixes.
+const UNCAPPED: &[&str] = &[
+    "CREATE",
+    "MERGE",
+    "SET",
+    "DELETE",
+    "DETACH",
+    "REMOVE",
+    "FOREACH",
+    "CALL",
+    "LOAD",
+    "UNION",
+    "FINISH",
+    "USE",
+    "CYPHER",
+    "EXPLAIN",
+    "PROFILE",
+    "SHOW",
+    "TERMINATE",
+];
+
+/// `statement` with `LIMIT rows` appended, so the server stops after the rows the
+/// editor keeps, when it is a plain read query (`MATCH`, `OPTIONAL MATCH`, `WITH`,
+/// `UNWIND` or `RETURN` first) ending in a top-level `RETURN` without `LIMIT`.
+/// Anything else runs as typed and its extra rows are read past.
+fn capped(statement: &str, rows: u64) -> Option<String> {
+    let tokens = tokenize(statement, SqlFlavor::Cypher);
+    let significant: Vec<_> = tokens.iter().filter(|t| !t.is_trivia()).collect();
+    let first = significant.first()?.text(statement).to_ascii_uppercase();
+    if !matches!(first.as_str(), "MATCH" | "OPTIONAL" | "WITH" | "UNWIND" | "RETURN") {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut returns = false;
+    let mut limited = false;
+    for (i, t) in significant.iter().enumerate() {
+        match (t.kind, t.text(statement)) {
+            (TokenKind::OpenParen, _) | (TokenKind::Punct, "[" | "{") => depth += 1,
+            (TokenKind::CloseParen, _) | (TokenKind::Punct, "]" | "}") => depth -= 1,
+            (TokenKind::Semicolon, _) => return None,
+            (TokenKind::Word, word) => {
+                // Property keys and labels: `n.set`, `(n:Union)`.
+                if i > 0 && matches!(significant[i - 1].text(statement), "." | ":") {
+                    continue;
+                }
+                let word = word.to_ascii_uppercase();
+                if UNCAPPED.contains(&word.as_str()) {
+                    return None;
+                }
+                match word.as_str() {
+                    "RETURN" if depth == 0 => (returns, limited) = (true, false),
+                    "LIMIT" if depth == 0 => limited = true,
+                    // A clause after the last RETURN (only possible at depth 0 after UNION).
+                    "MATCH" | "WITH" | "UNWIND" if depth == 0 => returns = false,
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    (returns && !limited && depth == 0).then(|| format!("{statement}\nLIMIT {rows}"))
 }
 
 /// `BEGIN`, `COMMIT`, `ROLLBACK` or `USE db` / `:use db` typed alone.
@@ -187,6 +252,7 @@ impl Neo4jSession {
         parameters: Map<String, Value>,
         access: Access,
         timeout_secs: u32,
+        max_rows: usize,
     ) -> DbResult<Reply> {
         let tag = uuid::Uuid::new_v4().simple().to_string();
         let text = format!("/* dq:{tag} */ {statement}");
@@ -201,7 +267,7 @@ impl Neo4jSession {
             tokio::time::sleep(Duration::from_secs(u64::from(timeout_secs))).await;
         };
         let outcome = tokio::select! {
-            r = self.client.run(&query, false) => Ok(r),
+            r = self.client.run_limited(&query, false, max_rows) => Ok(r),
             _ = stopped => Err(ErrorKind::Cancelled),
             () = deadline => Err(ErrorKind::Timeout),
         };
@@ -239,6 +305,12 @@ impl Neo4jSession {
         state.pending = if rows.len() > limit { rows.split_off(limit).into() } else { VecDeque::new() };
         let mut notices: Vec<String> = reply.counters_summary().into_iter().collect();
         notices.extend(reply.notifications.iter().cloned());
+        if reply.more {
+            notices.push(format!(
+                "Only the first {} rows are kept. Add LIMIT or a more selective MATCH to see the rest.",
+                ExecOptions::MAX_ROW_LIMIT
+            ));
+        }
         StatementResult {
             columns,
             rows,
@@ -383,8 +455,11 @@ impl Session for Neo4jSession {
         self.refuse_writes(sql)?;
         let parameters = bind(sql, params)?;
         let statement = sql.trim().trim_end_matches(';');
+        let max_rows = ExecOptions::MAX_ROW_LIMIT as usize;
+        let capped = capped(statement, max_rows as u64 + 1);
+        let statement = capped.as_deref().unwrap_or(statement);
         let access = self.access();
-        let reply = self.run_tracked(&mut state, statement, parameters, access, options.timeout_secs).await?;
+        let reply = self.run_tracked(&mut state, statement, parameters, access, options.timeout_secs, max_rows).await?;
         Ok(Self::result(&reply, sql, options.row_limit, started, &mut state))
     }
 
@@ -511,7 +586,8 @@ impl Session for Neo4jSession {
         let started = Instant::now();
         let mut state = self.state.lock().await;
         let access = if analyze { Access::Read } else { self.access() };
-        let reply = self.run_tracked(&mut state, &statement, parameters, access, timeout_secs).await?;
+        // Only the plan is used: rows of a PROFILE are read past.
+        let reply = self.run_tracked(&mut state, &statement, parameters, access, timeout_secs, 0).await?;
         let plan = reply.plan.as_ref().ok_or_else(|| DbError::new(ErrorKind::Server, "Neo4j returned no plan."))?;
         Ok(plan::result(plan, reply.profiled, analyze.then(|| started.elapsed().as_secs_f64() * 1000.0)))
     }
@@ -535,6 +611,34 @@ impl Session for Neo4jSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_queries_are_capped_on_the_server() {
+        let cap = |s: &str| capped(s, 11);
+        assert_eq!(cap("MATCH (n) RETURN n").as_deref(), Some("MATCH (n) RETURN n\nLIMIT 11"));
+        assert_eq!(
+            cap("MATCH (n:Union) WITH n LIMIT 5 RETURN n.set ORDER BY n.x SKIP 2 // all").as_deref(),
+            Some("MATCH (n:Union) WITH n LIMIT 5 RETURN n.set ORDER BY n.x SKIP 2 // all\nLIMIT 11")
+        );
+        assert!(cap("MATCH (n) WHERE EXISTS { MATCH (n)--(m) RETURN m LIMIT 1 } RETURN n").is_some());
+        for uncapped in [
+            "MATCH (n) RETURN n LIMIT 5",
+            "MATCH (n) RETURN n limit $l",
+            "MATCH (n) RETURN n UNION MATCH (m) RETURN m",
+            "MATCH (n) RETURN n.x AS limit",
+            "CALL db.labels()",
+            "MATCH (n) CALL { WITH n RETURN 1 AS x } RETURN n, x",
+            "CREATE (n) RETURN n",
+            "MATCH (n) SET n.x = 1 RETURN n",
+            "PROFILE MATCH (n) RETURN n",
+            "SHOW INDEXES",
+            "MATCH (n) DELETE n",
+            "MATCH (n) RETURN n; MATCH (m) RETURN m",
+            "MATCH (n) WITH n",
+        ] {
+            assert_eq!(cap(uncapped), None, "{uncapped}");
+        }
+    }
 
     #[test]
     fn control_words() {

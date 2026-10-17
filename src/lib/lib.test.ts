@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import type { Cell } from '@/bindings/Cell';
 import type { StatementInfo } from '@/bindings/StatementInfo';
 
 import { binaryLabel, cellText, hexDump, isSensitiveColumn, parseClipboardGrid, splitTemporal } from './cells';
-import { serializeRows } from './clipboard';
+import { serializeRows, serializeRowsChunked } from './clipboard';
 import { formatCount, formatDuration, formatTimer } from './format';
 import { statementAt } from './sql';
 
@@ -46,6 +47,21 @@ describe('clipboard', () => {
     expect(parsed[0].id).toBe('9007199254740993');
     expect(parsed[1].v).toEqual({ x: 1 });
     expect(parsed[0].n).toBeNull();
+  });
+
+  it('serialises in chunks byte-identically', async () => {
+    const many = Array.from({ length: 23 }, (_, i) => [...rows[i % 2]!, { kind: 'text', value: `line\n${i}\t"x"` }] as Cell[]);
+    many.push([{ kind: 'json', value: '{"deep":{"a":[1,2]}}' }, { kind: 'null' }, { kind: 'bool', value: false }, { kind: 'text', value: '' }]);
+    const headers = ['id', 'v', 'n', 't'];
+    for (const format of ['tsv', 'csv', 'json'] as const) {
+      for (const withHeader of [true, false]) {
+        for (const chunk of [1, 5, 24, 100]) {
+          expect(await serializeRowsChunked(headers, many, format, withHeader, chunk)).toBe(serializeRows(headers, many, format, withHeader));
+        }
+      }
+      expect(await serializeRowsChunked(headers, [], format, true, 1)).toBe(serializeRows(headers, [], format));
+      expect(await serializeRowsChunked(headers, many.slice(0, 1), format, true, 1)).toBe(serializeRows(headers, many.slice(0, 1), format));
+    }
   });
 });
 

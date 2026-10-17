@@ -1,6 +1,7 @@
 //! Engine-neutral operations written once on top of [`Session`] primitives.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::adapter::Session;
@@ -8,6 +9,7 @@ use crate::edit::{ApplyReport, RowChange};
 use crate::error::{DbError, DbResult, ErrorKind};
 use crate::node::{NodeKind, ObjectRef};
 use crate::schema::TableStructure;
+use crate::schema_cache::StructureCache;
 use crate::sql::builder;
 use crate::table::{RowCount, RowFilter, TablePage, TablePageRequest};
 use crate::transfer::{
@@ -33,10 +35,34 @@ pub async fn structure(session: &dyn Session, object: &ObjectRef) -> DbResult<Ta
     Ok(s)
 }
 
+/// A session and, when the caller keeps one, its structure cache. A plain
+/// `&dyn Session` converts into one that reads the catalog every time.
+#[derive(Clone, Copy)]
+pub struct SessionRef<'a> {
+    pub session: &'a dyn Session,
+    pub structures: Option<&'a StructureCache>,
+}
+
+impl SessionRef<'_> {
+    /// [`structure`], from the cache when there is one.
+    async fn structure(self, object: &ObjectRef) -> DbResult<Arc<TableStructure>> {
+        match self.structures {
+            Some(cache) => cache.get(object, || structure(self.session, object)).await,
+            None => structure(self.session, object).await.map(Arc::new),
+        }
+    }
+}
+
+impl<'a, 'b: 'a> From<&'a (dyn Session + 'b)> for SessionRef<'a> {
+    fn from(session: &'a (dyn Session + 'b)) -> Self {
+        Self { session, structures: None }
+    }
+}
+
 /// Structure used to build edits. `full_row` (confirmed by the user) lets a
 /// table without a key be matched on every comparable column.
-async fn edit_structure(session: &dyn Session, object: &ObjectRef, full_row: bool) -> DbResult<TableStructure> {
-    let mut s = structure(session, object).await?;
+async fn edit_structure(session: SessionRef<'_>, object: &ObjectRef, full_row: bool) -> DbResult<TableStructure> {
+    let mut s = Arc::unwrap_or_clone(session.structure(object).await?);
     if full_row && s.row_identity.is_empty() {
         s.row_identity = std::mem::take(&mut s.full_row_key);
     }
@@ -54,7 +80,9 @@ fn sql_only(session: &dyn Session) -> DbResult<()> {
     Ok(())
 }
 
-pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResult<TablePage> {
+pub async fn table_page(session: impl Into<SessionRef<'_>>, req: &TablePageRequest) -> DbResult<TablePage> {
+    let s = session.into();
+    let session = s.session;
     sql_only(session)?;
     if !req.object.kind.is_relation() {
         return Err(DbError::invalid("Only tables and views have data."));
@@ -67,7 +95,7 @@ pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResu
             "Pages past row {MAX_CLIENT_OFFSET} are not available here; narrow the rows with a filter."
         )));
     }
-    let structure = session.structure(&req.object).await?;
+    let structure = s.structure(&req.object).await?;
     let q = builder::page_query(dialect, &structure, &req.rows, req.sort.as_ref(), req.offset, limit)?;
     let started = Instant::now();
     let (columns, mut rows) = session.read_query(&req.object.database, &q.sql, &q.params, CellLimits::GRID).await?;
@@ -79,7 +107,13 @@ pub async fn table_page(session: &dyn Session, req: &TablePageRequest) -> DbResu
     Ok(TablePage { columns, rows, offset: req.offset, has_more, duration_ms: elapsed_ms(started) })
 }
 
-pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFilter) -> DbResult<RowCount> {
+pub async fn row_count(
+    session: impl Into<SessionRef<'_>>,
+    object: &ObjectRef,
+    filter: &RowFilter,
+) -> DbResult<RowCount> {
+    let s = session.into();
+    let session = s.session;
     sql_only(session)?;
     let unfiltered =
         builder::validate_filter(session.dialect(), filter.filter.as_deref())?.is_none() && filter.only_typed_filter();
@@ -89,7 +123,7 @@ pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFi
     {
         return Ok(RowCount { count: estimate, exact: false });
     }
-    let structure = session.structure(object).await?;
+    let structure = s.structure(object).await?;
     let q = builder::count_query(session.dialect(), &structure, filter)?;
     let (_, rows) = session.read_query(&object.database, &q.sql, &q.params, CellLimits::GRID).await?;
     let count = rows
@@ -103,14 +137,16 @@ pub async fn row_count(session: &dyn Session, object: &ObjectRef, filter: &RowFi
 
 /// The full value of one cell, matched by the row key. Size-limited by `limits`.
 pub async fn cell_value(
-    session: &dyn Session,
+    session: impl Into<SessionRef<'_>>,
     object: &ObjectRef,
     key: &[crate::edit::ColumnValue],
     column: &str,
     limits: CellLimits,
 ) -> DbResult<crate::value::Cell> {
+    let s = session.into();
+    let session = s.session;
     sql_only(session)?;
-    let structure = session.structure(object).await?;
+    let structure = s.structure(object).await?;
     let q = builder::cell_query(session.dialect(), &structure, key, column)?;
     let (_, mut rows) = session.read_query(&object.database, &q.sql, &q.params, limits).await?;
     if rows.len() != 1 {
@@ -120,25 +156,29 @@ pub async fn cell_value(
 }
 
 pub async fn preview_changes(
-    session: &dyn Session,
+    session: impl Into<SessionRef<'_>>,
     object: &ObjectRef,
     changes: &[RowChange],
     full_row: bool,
 ) -> DbResult<String> {
+    let s = session.into();
+    let session = s.session;
     sql_only(session)?;
-    let structure = edit_structure(session, object, full_row).await?;
+    let structure = edit_structure(s, object, full_row).await?;
     builder::preview_changes(session.dialect(), &structure, changes)
 }
 
 /// Applies grid changes in one transaction; any failure saves nothing.
 pub async fn apply_changes(
-    session: &dyn Session,
+    session: impl Into<SessionRef<'_>>,
     object: &ObjectRef,
     changes: &[RowChange],
     full_row: bool,
 ) -> DbResult<ApplyReport> {
+    let s = session.into();
+    let session = s.session;
     sql_only(session)?;
-    let structure = edit_structure(session, object, full_row).await?;
+    let structure = edit_structure(s, object, full_row).await?;
     let statements = builder::change_statements(session.dialect(), &structure, changes)?;
     let started = Instant::now();
     session.run_in_transaction(&object.database, &mut statements.into_iter().map(Ok)).await?;
@@ -154,13 +194,15 @@ pub async fn apply_changes(
 }
 
 pub async fn export(
-    session: &dyn Session,
+    session: impl Into<SessionRef<'_>>,
     source: &ExportSource,
     format: ExportFormat,
     options: &ExportOptions,
     path: &Path,
     control: &TransferControl,
 ) -> DbResult<ExportReport> {
+    let s = session.into();
+    let session = s.session;
     let fallback_table = ObjectRef::new(NodeKind::Table, "", None, "exported_rows");
     let (database, sql, params, table) = match source {
         ExportSource::Rows { columns, rows } => {
@@ -190,7 +232,7 @@ pub async fn export(
             (request.object.database.clone(), store.find_statement(request)?, Vec::new(), request.object.clone())
         }
         ExportSource::Table { object, rows, sort } => {
-            let structure = session.structure(object).await?;
+            let structure = s.structure(object).await?;
             let q = builder::table_select(session.dialect(), &structure, rows, sort.as_ref())?;
             (object.database.clone(), q.sql, q.params, object.clone())
         }
@@ -303,18 +345,20 @@ pub struct ImportMapping {
 /// batches. `commit_rows` splits the import into several transactions; the
 /// report says how many rows were committed when a later one fails.
 pub async fn import(
-    session: &dyn Session,
+    session: impl Into<SessionRef<'_>>,
     object: &ObjectRef,
     source: &ImportSource,
     mapping: &[ImportMapping],
     options: &ImportOptions,
     control: &TransferControl,
 ) -> DbResult<ImportReport> {
+    let s = session.into();
+    let session = s.session;
     let started = Instant::now();
     if mapping.is_empty() {
         return Err(DbError::invalid("Map at least one column."));
     }
-    let structure = session.structure(object).await?;
+    let structure = s.structure(object).await?;
     if structure.object.kind != NodeKind::Table {
         return Err(DbError::invalid("Rows can only be imported into tables."));
     }

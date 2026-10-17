@@ -2,6 +2,7 @@
 //! counters, notifications, query plans and explicit transactions
 //! (`…/query/v2/tx`, `…/tx/{id}`, `…/tx/{id}/commit`, `DELETE …/tx/{id}`).
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use dq_core::config::SslMode;
 use dq_core::redact::redact_known;
 use dq_core::{DbError, DbResult, ErrorKind};
 use futures_util::StreamExt;
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
 
 /// The typed JSON format: every value is `{ "$type": …, "_value": … }`.
@@ -71,6 +73,8 @@ pub struct Reply {
     pub profiled: bool,
     /// Set when the query opened a transaction.
     pub transaction: Option<Transaction>,
+    /// The result had more rows than were kept (see [`Client::run_limited`]).
+    pub more: bool,
 }
 
 impl Reply {
@@ -206,6 +210,12 @@ impl Client {
     /// Runs one statement: auto-commit, or in `query.transaction`. `open_transaction`
     /// starts a new explicit transaction with this statement.
     pub async fn run(&self, query: &Query<'_>, open_transaction: bool) -> DbResult<Reply> {
+        self.run_limited(query, open_transaction, usize::MAX).await
+    }
+
+    /// [`Client::run`] keeping only the first `max_rows` rows: the rest are
+    /// skipped while parsing, and [`Reply::more`] is set when there were any.
+    pub async fn run_limited(&self, query: &Query<'_>, open_transaction: bool, max_rows: usize) -> DbResult<Reply> {
         let mut body = json!({ "statement": query.statement, "includeCounters": true });
         if !query.parameters.is_empty() {
             body["parameters"] = Value::Object(query.parameters.clone());
@@ -230,8 +240,9 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned)
             .or_else(|| affinity.map(str::to_owned));
-        let (_, body) = self.read(response).await?;
-        let mut reply = parse_reply(&body);
+        let (_, body, more) = self.read_rows(response, max_rows).await?;
+        let mut reply = parse_reply(body);
+        reply.more = more;
         if let Some(tx) = &mut reply.transaction {
             tx.database = query.transaction.map_or_else(|| query.database.to_owned(), |t| t.database.clone());
             tx.affinity = new_affinity;
@@ -248,7 +259,7 @@ impl Client {
             .await
             .map_err(|e| self.network(&e))?;
         let (_, body) = self.read(response).await?;
-        Ok(parse_reply(&body))
+        Ok(parse_reply(body))
     }
 
     pub async fn rollback(&self, tx: &Transaction) -> DbResult<()> {
@@ -263,6 +274,15 @@ impl Client {
 
     /// Reads a response with a size limit and turns `errors` into a [`DbError`].
     async fn read(&self, response: reqwest::Response) -> DbResult<(reqwest::StatusCode, Value)> {
+        self.read_rows(response, usize::MAX).await.map(|(status, body, _)| (status, body))
+    }
+
+    /// [`Client::read`] keeping at most `max_rows` rows of `data.values`; true when there were more.
+    async fn read_rows(
+        &self,
+        response: reqwest::Response,
+        max_rows: usize,
+    ) -> DbResult<(reqwest::StatusCode, Value, bool)> {
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(DbError::new(ErrorKind::Auth, "The user name or password was not accepted.")
@@ -279,10 +299,10 @@ impl Client {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let body: Value = if bytes.is_empty() {
-            Value::Null
+        let (body, more) = if bytes.is_empty() {
+            (Value::Null, false)
         } else {
-            serde_json::from_slice(&bytes).map_err(|_| {
+            parse_body(&bytes, max_rows).map_err(|_| {
                 DbError::new(
                     ErrorKind::Server,
                     format!("Neo4j answered HTTP {status} with a body that is not JSON. Is this the HTTP port?"),
@@ -297,7 +317,7 @@ impl Client {
         if !status.is_success() {
             return Err(DbError::new(ErrorKind::Server, format!("Neo4j answered HTTP {status}.")));
         }
-        Ok((status, body))
+        Ok((status, body, more))
     }
 
     fn secret(&self, text: &str) -> String {
@@ -356,18 +376,117 @@ fn url_segment(s: &str) -> String {
         .collect()
 }
 
-pub fn parse_reply(body: &Value) -> Reply {
+/// A reply body keeping the first `max_rows` rows of `data.values`, and whether
+/// there were more. Later rows are skipped by the parser without building values.
+fn parse_body(bytes: &[u8], max_rows: usize) -> serde_json::Result<(Value, bool)> {
+    let mut more = false;
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    match (Body { max_rows, more: &mut more, data: false }).deserialize(&mut de).and_then(|v| de.end().map(|()| v)) {
+        Ok(body) => Ok((body, more)),
+        // Not an object: keep it whole, as any JSON body was before.
+        Err(_) => serde_json::from_slice(bytes).map(|body| (body, false)),
+    }
+}
+
+/// The reply object (or its `data` member when `data` is set); `data.values` goes to [`Rows`].
+struct Body<'a> {
+    max_rows: usize,
+    more: &'a mut bool,
+    data: bool,
+}
+
+impl<'de> DeserializeSeed<'de> for Body<'_> {
+    type Value = Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Body<'_> {
+    type Value = Value;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a Query API reply object")
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let mut out = Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            let value = match (self.data, key.as_str()) {
+                (false, "data") => {
+                    map.next_value_seed(Body { max_rows: self.max_rows, more: &mut *self.more, data: true })?
+                }
+                (true, "values") => map.next_value_seed(Rows { max_rows: self.max_rows, more: &mut *self.more })?,
+                _ => map.next_value()?,
+            };
+            out.insert(key, value);
+        }
+        Ok(Value::Object(out))
+    }
+}
+
+/// `data.values`: the first `max_rows` rows; the rest are read past.
+struct Rows<'a> {
+    max_rows: usize,
+    more: &'a mut bool,
+}
+
+impl<'de> DeserializeSeed<'de> for Rows<'_> {
+    type Value = Value;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Rows<'_> {
+    type Value = Value;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an array of rows")
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        let mut rows = Vec::new();
+        while rows.len() < self.max_rows {
+            match seq.next_element::<Value>()? {
+                Some(row) => rows.push(row),
+                None => return Ok(Value::Array(rows)),
+            }
+        }
+        while seq.next_element::<IgnoredAny>()?.is_some() {
+            *self.more = true;
+        }
+        Ok(Value::Array(rows))
+    }
+}
+
+pub fn parse_reply(mut body: Value) -> Reply {
     let data = body.get("data");
     let fields = data
         .and_then(|d| d.get("fields"))
         .and_then(Value::as_array)
         .map(|f| f.iter().filter_map(Value::as_str).map(str::to_owned).collect())
         .unwrap_or_default();
-    let values = data
-        .and_then(|d| d.get("values"))
-        .and_then(Value::as_array)
-        .map(|rows| rows.iter().map(|r| r.as_array().cloned().unwrap_or_default()).collect())
-        .unwrap_or_default();
+    let values = match body.get_mut("data").and_then(|d| d.get_mut("values")).map(Value::take) {
+        Some(Value::Array(rows)) => rows
+            .into_iter()
+            .map(|r| match r {
+                Value::Array(cells) => cells,
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let notifications = body
         .get("notifications")
         .and_then(Value::as_array)
@@ -400,6 +519,7 @@ pub fn parse_reply(body: &Value) -> Reply {
         plan,
         profiled,
         transaction,
+        more: false,
     }
 }
 
@@ -415,14 +535,28 @@ mod tests {
             "notifications": [{ "severity": "WARNING", "title": "Cartesian product", "description": "Slow." }],
             "transaction": { "id": "abc", "expires": "x" }
         });
-        let r = parse_reply(&body);
+        let r = parse_reply(body);
         assert_eq!(r.fields, ["a"]);
         assert_eq!(r.affected(), Some(6));
         assert_eq!(r.counters_summary().as_deref(), Some("2 nodes created, 4 properties set"));
         assert_eq!(r.notifications, ["WARNING: Cartesian product Slow."]);
         assert_eq!(r.transaction.unwrap().id, "abc");
-        let read = parse_reply(&json!({ "counters": { "containsUpdates": false } }));
+        let read = parse_reply(json!({ "counters": { "containsUpdates": false } }));
         assert_eq!(read.affected(), None);
         assert_eq!(url_segment("my db/x"), "my%20db%2Fx");
+    }
+
+    #[test]
+    fn bodies_keep_the_first_rows() {
+        let text = br#"{"data":{"fields":["n"],"values":[[1],[{"a":[2]}],[3]]},"bookmarks":["b"]}"#;
+        let (body, more) = parse_body(text, 2).unwrap();
+        assert!(more);
+        let r = parse_reply(body);
+        assert_eq!(r.values, [vec![json!(1)], vec![json!({"a": [2]})]]);
+        assert_eq!(r.fields, ["n"]);
+        let (body, more) = parse_body(text, 3).unwrap();
+        assert!(!more && body["bookmarks"] == json!(["b"]));
+        assert_eq!(parse_body(b"[1]", 1).unwrap(), (json!([1]), false));
+        assert!(parse_body(br#"{"data":{"values":[[1],[2"#, 1).is_err());
     }
 }

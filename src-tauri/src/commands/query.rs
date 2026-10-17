@@ -244,6 +244,10 @@ pub async fn run_sql(
             break;
         }
     }
+    // Also when the statement failed: some engines keep part of a failed DDL statement.
+    if statements[..outcomes.len()].iter().any(|s| s.kind.may_change_structure()) {
+        open.structures.invalidate(None);
+    }
     if let Some(last) = outcomes.last_mut() {
         last.can_fetch_more = last.result.as_ref().is_some_and(|r| r.has_more);
     }
@@ -293,6 +297,10 @@ pub async fn transaction(state: State<'_, AppState>, session_id: String, action:
         _ => TxStatus::Auto,
     };
     open.set_tx_status(next);
+    // Schema changes made in the transaction become visible (or are undone).
+    if next == TxStatus::Auto {
+        open.structures.invalidate(None);
+    }
     result.map(|_| next)
 }
 

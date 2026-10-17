@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Icon, Menu, Skeleton, Spinner, Tabs, type MenuEntry, type TabItem } from '@/components/ui';
 import { DataGrid, type GridColumn, type GridRow } from '@/features/grid/DataGrid';
 import { exportData } from '@/features/transfer/exportData';
-import { copyText, serializeRows, type CopyFormat } from '@/lib/clipboard';
+import { copyText, serializeRowsChunked, type CopyFormat } from '@/lib/clipboard';
 import { formatCount, formatDuration, formatTimer } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { keyBadges } from '@/lib/objects';
@@ -74,10 +74,24 @@ function ResultGrid({ result }: { result: ResultSet }) {
 function ResultActions({ result, index }: { result: ResultSet; index: number }) {
   const toast = useUi((s) => s.toast);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  const [copying, setCopying] = useState(false);
   const headers = result.columns.map((c) => c.name);
 
-  const copyAll = (format: CopyFormat) =>
-    void copyText(serializeRows(headers, result.rows, format)).then(() => toast(`${formatCount(result.rows.length)} rows copied as ${format.toUpperCase()}`));
+  /** Large results serialise in chunks between event-loop turns, so the window stays responsive. */
+  const copyAll = async (format: CopyFormat) => {
+    const count = formatCount(result.rows.length);
+    setCopying(true);
+    if (result.rows.length > 20_000) toast(`Copying ${count} rows…`);
+    try {
+      // Started within the click; the text follows when it is ready.
+      await copyText(serializeRowsChunked(headers, result.rows, format));
+      toast(`${count} rows copied as ${format.toUpperCase()}`);
+    } catch (e) {
+      useUi.getState().toastError(e);
+    } finally {
+      setCopying(false);
+    }
+  };
 
   const open = (e: React.MouseEvent, items: MenuEntry[]) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -89,11 +103,12 @@ function ResultActions({ result, index }: { result: ResultSet; index: number }) 
     <div className={styles.tabActions}>
       <Button
         size="xs"
+        busy={copying}
         onClick={(e) =>
           open(e, [
-            { label: 'Copy as TSV', onSelect: () => copyAll('tsv') },
-            { label: 'Copy as CSV', onSelect: () => copyAll('csv') },
-            { label: 'Copy as JSON', onSelect: () => copyAll('json') },
+            { label: 'Copy as TSV', onSelect: () => void copyAll('tsv') },
+            { label: 'Copy as CSV', onSelect: () => void copyAll('csv') },
+            { label: 'Copy as JSON', onSelect: () => void copyAll('json') },
           ])
         }
       >

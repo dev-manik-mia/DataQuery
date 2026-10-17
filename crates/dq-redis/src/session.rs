@@ -2,7 +2,8 @@
 //!
 //! The editor and the console share one query connection, so `SELECT`,
 //! `MULTI` and blocking commands behave like `redis-cli`. The key browser,
-//! monitoring and exports use catalog connections, one per database.
+//! monitoring and exports use catalog connections, one per database. Atomic
+//! writes take a connection of their own, kept between uses.
 //! Cancel and timeouts end the query connection with `CLIENT KILL` (which
 //! also stops blocking commands) and open a new one.
 
@@ -12,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
+use dq_core::adapter::{BatchFn, ConnectParams, IdleConnection, Params, Session, StatementIter, check_affected};
 use dq_core::config::SslMode;
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult, TlsInfo};
@@ -44,6 +45,8 @@ pub struct RedisSession {
     /// Rows of the last editor result not shown yet.
     pending: SyncMutex<Vec<Row>>,
     catalog: SyncMutex<HashMap<u32, MultiplexedConnection>>,
+    /// The connection for atomic writes between uses, never shared while in use.
+    writer: IdleConnection<MultiplexedConnection>,
 }
 
 pub(crate) struct QueryConn {
@@ -159,6 +162,7 @@ impl RedisSession {
             cancel: Notify::new(),
             pending: SyncMutex::new(Vec::new()),
             catalog: SyncMutex::new(HashMap::new()),
+            writer: IdleConnection::default(),
         })
     }
 
@@ -181,6 +185,20 @@ impl RedisSession {
             c.insert(database, conn.clone());
         }
         Ok(conn)
+    }
+
+    /// A connection for `WATCH`/`MULTI`, whose state is per connection: the
+    /// kept one for `database`, or a new one. Give it back with [`Self::keep_write_conn`].
+    pub(crate) async fn write_conn(&self, database: u32) -> DbResult<MultiplexedConnection> {
+        match self.writer.take(&database.to_string()) {
+            Some(conn) => Ok(conn),
+            None => self.connector.catalog(database).await,
+        }
+    }
+
+    /// Keeps a write connection after a clean finish, for the next write.
+    pub(crate) fn keep_write_conn(&self, database: u32, conn: MultiplexedConnection) {
+        self.writer.put(&database.to_string(), conn);
     }
 
     /// Runs `cmd` on a catalog connection; a broken connection is replaced next time.
@@ -505,9 +523,10 @@ impl Session for RedisSession {
         if bound.is_empty() {
             return Ok(Vec::new());
         }
-        // Atomic pipelines need their own connection: WATCH/MULTI state is per connection.
-        let mut conn = self.connector.catalog(self.database_arg(database)).await?;
+        let database = self.database_arg(database);
+        let mut conn = self.write_conn(database).await?;
         let replies: Vec<Value> = pipe.query_async(&mut conn).await.map_err(map_error)?;
+        self.keep_write_conn(database, conn);
         let mut counts = Vec::with_capacity(replies.len());
         for (statement, reply) in bound.iter().zip(&replies) {
             let n = match reply {
@@ -530,6 +549,7 @@ impl Session for RedisSession {
 
     async fn close(&self) {
         let _ = self.cancel().await;
+        self.writer.clear();
     }
 }
 

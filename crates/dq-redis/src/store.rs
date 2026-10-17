@@ -172,7 +172,7 @@ impl RedisSession {
         })
     }
 
-    /// A dedicated connection for `WATCH`/`MULTI`, which are per connection.
+    /// Runs `pipe` after `WATCH`ing `key` and checking its item at `index`.
     async fn watched<T>(
         &self,
         database: u32,
@@ -182,7 +182,7 @@ impl RedisSession {
         pipe: redis::Pipeline,
         then: impl FnOnce(Value) -> DbResult<T>,
     ) -> DbResult<T> {
-        let mut conn = self.connector.catalog(database).await?;
+        let mut conn = self.write_conn(database).await?;
         redis::cmd("WATCH").arg(key).query_async::<()>(&mut conn).await.map_err(map_error)?;
         let current: Option<Vec<u8>> =
             redis::cmd("LINDEX").arg(key).arg(index).query_async(&mut conn).await.map_err(map_error)?;
@@ -191,6 +191,8 @@ impl RedisSession {
             return Err(e);
         }
         let reply: Value = pipe.query_async(&mut conn).await.map_err(map_error)?;
+        // `EXEC` ended the `WATCH`.
+        self.keep_write_conn(database, conn);
         then(reply)
     }
 }

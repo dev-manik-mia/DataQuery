@@ -128,11 +128,13 @@ const redisMode = StreamLanguage.define<{ first: boolean }>({
   },
 });
 
+const REDIS_OPTIONS: Completion[] = REDIS_COMMANDS.map((c) => ({ label: c, type: 'keyword' }));
+
 const redisSource: CompletionSource = (context) => {
   const word = context.matchBefore(/^\s*[A-Za-z.]*$/);
   if (!word || (word.from === word.to && !context.explicit)) return null;
   const from = word.from + (word.text.length - word.text.trimStart().length);
-  return { from, options: REDIS_COMMANDS.map((c) => ({ label: c, type: 'keyword' })), validFor: /^[A-Za-z.]*$/ };
+  return { from, options: REDIS_OPTIONS, validFor: /^[A-Za-z.]*$/ };
 };
 
 /** Shell methods offered after `db.<collection>.`. */
@@ -142,25 +144,37 @@ const MONGO_METHODS = [
   'findOneAndDelete', 'createIndex', 'dropIndex', 'getIndexes', 'drop', 'renameCollection', 'stats',
 ];
 
+const MONGO_METHOD_OPTIONS: Completion[] = MONGO_METHODS.map((m) => ({ label: m, type: 'method', apply: `${m}()` }));
+
+/** Sources are built once per input (schema model or snippet list), not on every completion query. */
+const mongoSources = new WeakMap<SchemaModel, CompletionSource>();
+let mongoWithoutModel: CompletionSource | null = null;
+const snippetSources = new WeakMap<Snippet[], CompletionSource>();
+
 /** `db.` completes collection names (and `getCollection`); `db.<name>.` completes shell methods. */
 function mongoSource(model: SchemaModel | null): CompletionSource {
+  const cached = model ? mongoSources.get(model) : mongoWithoutModel;
+  if (cached) return cached;
   const collections = (model?.tables ?? []).map((t) => t.object.name);
-  return (context) => {
+  const options: Completion[] = [
+    ...collections.filter((c) => /^[A-Za-z_$][\w$]*$/.test(c)).map((c) => ({ label: c, type: 'class' })),
+    ...collections.filter((c) => !/^[A-Za-z_$][\w$]*$/.test(c)).map((c) => ({ label: c, type: 'class', apply: `getCollection(${JSON.stringify(c)})` })),
+    { label: 'getCollection', type: 'function', apply: 'getCollection("")' },
+    { label: 'runCommand', type: 'function', apply: 'runCommand({ })' },
+  ];
+  const source: CompletionSource = (context) => {
     const method = context.matchBefore(/db\.[\w$]+\.\w*/);
     if (method) {
       const from = method.from + method.text.lastIndexOf('.') + 1;
-      return { from, options: MONGO_METHODS.map((m) => ({ label: m, type: 'method', apply: `${m}()` })), validFor: /^\w*$/ };
+      return { from, options: MONGO_METHOD_OPTIONS, validFor: /^\w*$/ };
     }
     const db = context.matchBefore(/db\.\w*/);
     if (!db) return null;
-    const options: Completion[] = [
-      ...collections.filter((c) => /^[A-Za-z_$][\w$]*$/.test(c)).map((c) => ({ label: c, type: 'class' })),
-      ...collections.filter((c) => !/^[A-Za-z_$][\w$]*$/.test(c)).map((c) => ({ label: c, type: 'class', apply: `getCollection(${JSON.stringify(c)})` })),
-      { label: 'getCollection', type: 'function', apply: 'getCollection("")' },
-      { label: 'runCommand', type: 'function', apply: 'runCommand({ })' },
-    ];
     return { from: db.from + 3, options, validFor: /^\w*$/ };
   };
+  if (model) mongoSources.set(model, source);
+  else mongoWithoutModel = source;
+  return source;
 }
 
 /**
@@ -185,24 +199,33 @@ export function completionSchema(model: SchemaModel | null): SQLNamespace | unde
 
 /** Snippets complete by their prefix; `${1:name}` fields are tab stops. */
 export function snippetSource(snippets: Snippet[]): CompletionSource {
+  const cached = snippetSources.get(snippets);
+  if (cached) return cached;
   const options = snippets.map((s) => snippetCompletion(s.body, { label: s.prefix, detail: s.name, type: 'text', boost: -1 }));
-  return (context) => {
+  const source: CompletionSource = (context) => {
     const word = context.matchBefore(/[\w-]+/);
     if (!word || (word.from === word.to && !context.explicit)) return null;
     return { from: word.from, options, validFor: /^[\w-]*$/ };
   };
+  snippetSources.set(snippets, source);
+  return source;
 }
 
 /** CodeMirror language for a dialect, with schema-aware and snippet completion. */
 export function sqlLanguage(flavor: SqlFlavor, model: SchemaModel | null = null, snippets: Snippet[] = []) {
+  // Built here, not in the languageData callback, which runs on every completion query.
+  const snippetData = { autocomplete: snippetSource(snippets) };
   if (flavor === 'query_dsl') {
-    return [devToolsMode, EditorState.languageData.of(() => [{ autocomplete: devToolsSource }, { autocomplete: snippetSource(snippets) }])];
+    const data = [{ autocomplete: devToolsSource }, snippetData];
+    return [devToolsMode, EditorState.languageData.of(() => data)];
   }
   if (flavor === 'redis') {
-    return [redisMode, EditorState.languageData.of(() => [{ autocomplete: redisSource }, { autocomplete: snippetSource(snippets) }])];
+    const data = [{ autocomplete: redisSource }, snippetData];
+    return [redisMode, EditorState.languageData.of(() => data)];
   }
   if (flavor === 'mongodb') {
-    return [javascript(), EditorState.languageData.of(() => [{ autocomplete: mongoSource(model) }, { autocomplete: snippetSource(snippets) }])];
+    const data = [{ autocomplete: mongoSource(model) }, snippetData];
+    return [javascript(), EditorState.languageData.of(() => data)];
   }
   const language = sql({
     dialect: DIALECTS[flavor],
@@ -210,5 +233,6 @@ export function sqlLanguage(flavor: SqlFlavor, model: SchemaModel | null = null,
     defaultSchema: defaultSchema(flavor) ?? undefined,
     upperCaseKeywords: true,
   });
-  return [language, EditorState.languageData.of(() => [{ autocomplete: snippetSource(snippets) }])];
+  const data = [snippetData];
+  return [language, EditorState.languageData.of(() => data)];
 }

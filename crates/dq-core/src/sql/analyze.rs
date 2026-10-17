@@ -90,6 +90,25 @@ pub struct StatementInfo {
     pub param_count: u32,
 }
 
+impl StatementKind {
+    /// The statement may change a table's columns or keys, or end a
+    /// transaction that did. Anything not known to leave them alone counts.
+    pub fn may_change_structure(self) -> bool {
+        !matches!(
+            self,
+            Self::Select
+                | Self::Insert
+                | Self::Update
+                | Self::Delete
+                | Self::Merge
+                | Self::Set
+                | Self::Show
+                | Self::Explain
+                | Self::Use
+        )
+    }
+}
+
 impl StatementInfo {
     pub fn text<'a>(&self, src: &'a str) -> &'a str {
         &src[self.byte_start..self.byte_end]
@@ -890,5 +909,15 @@ mod tests {
         assert_eq!(analyze(sql, CH).unwrap().param_count, 2);
         assert_eq!(named_params(sql, CH), ["a", "b"]);
         assert_eq!(transaction_effect("BEGIN TRANSACTION", SqlFlavor::Duckdb), TxEffect::Begin);
+    }
+
+    #[test]
+    fn structure_changes_include_ddl_commits_and_unknown_statements() {
+        for sql in ["ALTER TABLE t ADD c int", "DROP TABLE t", "CREATE INDEX i ON t (a)", "COMMIT", "VACUUM t"] {
+            assert!(one(sql).kind.may_change_structure(), "{sql}");
+        }
+        for sql in ["SELECT 1", "INSERT INTO t VALUES (1)", "UPDATE t SET a = 1 WHERE b = 2", "SHOW search_path"] {
+            assert!(!one(sql).kind.may_change_structure(), "{sql}");
+        }
     }
 }

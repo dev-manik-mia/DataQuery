@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use dq_core::adapter::{ConnectParams, DatabaseAdapter, Session};
 use dq_core::config::{ConnConfig, SslMode};
-use dq_core::edit::{ColumnValue, RowChange};
+use dq_core::edit::{BoundStatement, ColumnValue, RowChange};
 use dq_core::engine::Engine;
 use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::ops;
@@ -787,4 +787,47 @@ async fn schema_changes_diff_and_migrations() {
         ("2026_01_01_add_orders", Some("2"))
     );
     run_all(&*s, "DROP DATABASE it_diff_a; DROP DATABASE it_diff_b").await;
+}
+
+/// Runs `sql` in one transaction on a write connection.
+async fn transact(s: &dyn Session, sql: &[String]) -> DbResult<Vec<u64>> {
+    let mut bound = sql.iter().map(|q| Ok(BoundStatement { sql: q.clone(), params: Vec::new(), expect_rows: None }));
+    s.run_in_transaction(DB, &mut bound).await
+}
+
+#[tokio::test]
+async fn write_connections_are_pooled_and_reset_after_errors() {
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    let t = scratch(&*s, "it_writer", "(id int PRIMARY KEY, conn bigint, note text)").await;
+    let insert = |id: u32| format!("INSERT INTO {DB}.it_writer VALUES ({id}, CONNECTION_ID(), NULL)");
+    for id in 1..=4 {
+        transact(&*s, &[insert(id)]).await.unwrap();
+    }
+    // A duplicate key rolls back the whole transaction; the next one still works.
+    assert!(transact(&*s, &[insert(5), insert(1)]).await.is_err());
+    transact(&*s, &[insert(6)]).await.unwrap();
+    let mut failing = [
+        Ok(BoundStatement { sql: insert(7), params: Vec::new(), expect_rows: None }),
+        Err(dq_core::DbError::invalid("stop")),
+    ]
+    .into_iter();
+    assert!(s.run_in_transaction(DB, &mut failing).await.is_err());
+    transact(&*s, &[insert(8)]).await.unwrap();
+    // Two grid saves in a row.
+    let cv = |c: &str, v: &str| ColumnValue { column: c.into(), value: Some(v.into()) };
+    for note in ["a", "b"] {
+        let change = RowChange::Update { key: vec![cv("id", "1")], values: vec![cv("note", note)] };
+        ops::apply_changes(&*s, &t, &[change], false).await.unwrap();
+    }
+    let r = s.execute("SELECT id, conn, note FROM it_writer ORDER BY id", &[], OPTS).await.unwrap();
+    let rows: Vec<Vec<String>> = r.rows.iter().map(|r| r.iter().map(text).collect()).collect();
+    let ids: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(ids, ["1", "2", "3", "4", "6", "8"]);
+    assert_eq!(rows[0][2], "b");
+    let mut conns: Vec<&str> = rows[..4].iter().map(|r| r[1].as_str()).collect();
+    conns.sort_unstable();
+    conns.dedup();
+    assert!(conns.len() < 4, "pooled connections are reused: {conns:?}");
+    s.execute("DROP TABLE it_writer", &[], OPTS).await.unwrap();
 }
