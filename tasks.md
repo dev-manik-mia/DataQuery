@@ -249,6 +249,13 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T23.5 Elasticsearch Documents view edits: insert (`POST _doc`), replace (`PUT _doc/<id>`), delete, each `refresh=wait_for`; document keys carry the concrete index; read-only profiles refuse.
 - [x] T23.6 Capability matrix: "—" with the reason for what the database itself does not offer; "Planned" only for Snowflake monitoring (needs a real account to verify) and Cassandra/ScyllaDB schema diff (composite partition keys and clustering order need CQL-specific create statements).
 
+## 24. Release 0.2.1: engine logos, DuckDB monitoring, CQL schema diff
+
+- [x] T24.1 Engine logos: `EngineMark` draws each engine's brand glyph on its brand color (`src/components/ui/engineIcons.ts`; Simple Icons CC0, Devicon MIT for SQL Server and DynamoDB, the Valkey and Dragonfly project marks, Oracle as its capsule "O"); the monogram stays as the fallback. The website's engine grid uses the same glyphs from `assets/engines.svg`.
+- [x] T24.2 DuckDB monitoring: the embedded engine's one process is the query editor connection — its running statement and duration come from the query worker, and Cancel interrupts it (Terminate explains there is no connection to end); settings from `duckdb_settings()`; table sizes from `duckdb_tables()` row estimates and each table's persistent storage blocks.
+- [x] T24.3 Cassandra/ScyllaDB schema diff: the diff carries each table's partition and clustering keys (`DiffTable`), so new tables get `PRIMARY KEY ((a, b), c) WITH CLUSTERING ORDER BY (…)` and static columns (`ddl::cql_create_table`, also used by the create-table form); columns and secondary indexes are added and dropped; a different primary key or column type is a warning (CQL cannot change them). User-defined types are not compared and must exist in the target keyspace. Round trip tested on Cassandra 5 and ScyllaDB.
+- [x] T24.4 The fallback CQL DDL (servers without `DESCRIBE`) no longer puts `DESC` inside `PRIMARY KEY (…)`.
+
 ---
 
 ## Verification

@@ -1551,7 +1551,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "dataquery"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dq-cassandra",
  "dq-clickhouse",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "dq-cassandra"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1902,7 +1902,7 @@ dependencies = [
 
 [[package]]
 name = "dq-clickhouse"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "dq-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "csv",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "dq-duckdb"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "dq-core",
@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "dq-dynamodb"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "dq-elasticsearch"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "dq-mongodb"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "dq-mysql"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "dq-core",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "dq-neo4j"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2031,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "dq-oracle"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "dq-core",
@@ -2044,7 +2044,7 @@ dependencies = [
 
 [[package]]
 name = "dq-postgres"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2066,7 +2066,7 @@ dependencies = [
 
 [[package]]
 name = "dq-redis"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "dq-core",
@@ -2079,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "dq-snowflake"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2098,7 +2098,7 @@ dependencies = [
 
 [[package]]
 name = "dq-sqlite"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "dq-core",
@@ -2110,7 +2110,7 @@ dependencies = [
 
 [[package]]
 name = "dq-sqlserver"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2128,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "dq-ssh"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dq-core",
  "dq-postgres",
@@ -2140,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "dq-store"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dq-core",
  "keyring",

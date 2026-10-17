@@ -18,7 +18,8 @@ import styles from './Schema.module.css';
 function SidePicker({ label, value, onChange }: { label: string; value: DiffSide; onChange: (v: DiffSide) => void }) {
   const connections = useConnections((s) => s.connections);
   const connection = connections.find((c) => c.id === value.connection_id);
-  const schemas = connection && hasSchemas(flavorOf(connection.config.engine));
+  const flavor = connection && flavorOf(connection.config.engine);
+  const schemas = flavor && hasSchemas(flavor);
   return (
     <Card title={label}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -31,7 +32,7 @@ function SidePicker({ label, value, onChange }: { label: string; value: DiffSide
           }}
           options={[{ value: '', label: 'Choose…' }, ...connections.map((c) => ({ value: c.id, label: `${c.name} (${c.environment})` }))]}
         />
-        <TextField label="Database" mono value={value.database} onChange={(e) => onChange({ ...value, database: e.target.value })} />
+        <TextField label={flavor === 'cql' ? 'Keyspace' : 'Database'} mono value={value.database} onChange={(e) => onChange({ ...value, database: e.target.value })} />
         {schemas && <TextField label="Schema" mono value={value.schema ?? ''} onChange={(e) => onChange({ ...value, schema: e.target.value || null })} />}
       </div>
     </Card>

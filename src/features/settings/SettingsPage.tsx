@@ -464,8 +464,6 @@ type CapabilityKey = keyof Capabilities;
 /** Capabilities still to come for an engine that otherwise ships. */
 const PLANNED: Partial<Record<Engine, CapabilityKey[]>> = {
   snowflake: ['monitoring'],
-  cassandra: ['schema_diff'],
-  scylladb: ['schema_diff'],
 };
 
 const NO_SERVER = 'An embedded database file: there are no other sessions to watch.';
@@ -478,7 +476,6 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
     grid_edit: 'ClickHouse has no row-level updates or unique keys that identify one row.',
     transactions: 'ClickHouse has no multi-statement transactions.',
   },
-  duckdb: { monitoring: NO_SERVER },
   sqlite: { monitoring: NO_SERVER },
   redis: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   valkey: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
