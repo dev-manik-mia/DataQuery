@@ -587,22 +587,8 @@ function About() {
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
         <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
-        <Row title="Tested platforms" help="Developed and tested on macOS (Apple silicon). Integration tests run against PostgreSQL 17, CockroachDB 25.2, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle 23ai Free, ClickHouse 25.8, DuckDB 1.5, SQLite 3, MongoDB 8.0 (replica set), Redis 8, Valkey 8, Dragonfly 1.34, Cassandra 5.0, ScyllaDB 2025.1 and an OpenSSH bastion; Snowflake against the fakesnow emulator and DynamoDB against DynamoDB Local only. Oracle needs Oracle Instant Client on this computer. Windows and Linux builds compile from the same code but have not been run." />
       </Card>
       <UpdatesCard />
-      <Card title={`Release notes · ${info?.version ?? ''}`} flush>
-        <ul className={styles.notes}>
-          <li>SQLite engine: database files and :memory:, attached databases, triggers, query plans, edits, import/export and schema diff. Schema diff for ClickHouse; document editing for Elasticsearch.</li>
-          <li>Table view: a visual filter builder (column, operator, value; match all or any), automatic update checks with optional background install, and new connections start with SSL off.</li>
-          <li>Connections: SSH tunnels with jump hosts and host-key checks, CA and client certificates, read-only profiles, keepalive/retry/idle/pool options, cloud IAM tokens, export/import without secrets.</li>
-          <li>Explorer: indexes, sequences, triggers, functions and procedures; sizes; INSERT/UPDATE/DELETE templates; dependencies.</li>
-          <li>Editor: schema-aware autocomplete, snippets, bookmarks, parameters, EXPLAIN plans, transaction controls, command palette, custom shortcuts, split panes and multiple windows.</li>
-          <li>Grid: full-value viewer, JSON editor, hex viewer, hide/pin columns, column search, foreign-key navigation, paste, bulk edit, undo, masking.</li>
-          <li>Schema: create/alter/drop forms with SQL preview, indexes and constraints, ER diagram, schema diff, framework migrations.</li>
-          <li>Import/export: XLSX and SQL INSERT export, JSON import, encodings and NULL options, per-row validation, commit size, progress and cancel.</li>
-          <li>Monitoring, an opt-in AI assistant, and signed updates.</li>
-        </ul>
-      </Card>
     </>
   );
 }

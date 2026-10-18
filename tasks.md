@@ -278,6 +278,10 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 - [x] T26.5 MongoDB Documents view continues after the last `_id` (default order is now `_id` order; other sorts stay offset-based with an `_id` tiebreaker, since MongoDB array and missing-field ordering makes field seeks inexact). Neo4j continues after the last sort key for sorted pages (follows Cypher's cross-type ordering); unsorted pages keep `SKIP`, which measured faster than an `elementId` seek.
 - [x] T26.6 Neo4j editor keeps at most 100,000 rows while parsing (the rest is skipped without building values), caps plain read queries server-side, and says when rows were dropped; label counts and samples run 8 at a time. MongoDB search lists collections 16 databases at a time.
 
+## 27. Release 0.2.4
+
+- [x] T27.1 About page: removed the "Tested platforms" note (Windows and Linux builds have since been run on real machines) and the static release-notes list; About shows version, platform, licence and updates.
+
 ---
 
 ## Verification

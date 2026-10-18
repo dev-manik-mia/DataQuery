@@ -177,14 +177,6 @@
   font-size: var(--text-ui);
 }
 
-.notes {
-  margin: 0;
-  padding: 0 var(--space-4) var(--space-4) 32px;
-  font-size: var(--text-ui);
-  line-height: 1.7;
-  color: var(--ink-2);
-}
-
 .keymap {
   display: flex;
   flex-direction: column;
