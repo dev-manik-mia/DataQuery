@@ -7,6 +7,7 @@
 
 pub mod adapter;
 pub mod config;
+pub mod data_compare;
 pub mod diff;
 pub mod document;
 pub mod edit;

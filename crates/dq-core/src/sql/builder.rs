@@ -263,6 +263,39 @@ pub fn cell_query(
     Ok(BoundQuery { sql: d.paginate(&sql, false, 0, 2), params: p.values })
 }
 
+/// Select of `columns` ordered by the first `keys` of them for data compare:
+/// text keys sort by code point ([`Dialect::sort_key`]) and NULL keys first,
+/// the order the compare merges rows in.
+pub fn compare_select(
+    d: &dyn Dialect,
+    structure: &TableStructure,
+    columns: &[String],
+    keys: usize,
+    rows: &RowFilter,
+) -> DbResult<BoundQuery> {
+    let cols: Vec<ColumnInfo> = columns.iter().map(|c| column(structure, c).cloned()).collect::<DbResult<_>>()?;
+    if keys == 0 || keys > cols.len() {
+        return Err(DbError::invalid("Choose at least one key column."));
+    }
+    let mut p = Params { dialect: d, inline: false, values: Vec::new() };
+    let where_ = where_clause(&mut p, structure, rows)?;
+    let mut order = Vec::with_capacity(keys);
+    for c in &cols[..keys] {
+        let q = d.quote_ident(&c.name);
+        if c.nullable {
+            order.push(format!("CASE WHEN {q} IS NULL THEN 0 ELSE 1 END"));
+        }
+        order.push(d.sort_key(&q, &c.data_type));
+    }
+    let sql = format!(
+        "SELECT {} FROM {}{where_} ORDER BY {}",
+        select_list(d, &cols),
+        d.quoted_name(&structure.object),
+        order.join(", ")
+    );
+    Ok(BoundQuery { sql, params: p.values })
+}
+
 pub fn count_query(d: &dyn Dialect, structure: &TableStructure, rows: &RowFilter) -> DbResult<BoundQuery> {
     let mut p = Params { dialect: d, inline: false, values: Vec::new() };
     let where_ = where_clause(&mut p, structure, rows)?;
@@ -532,14 +565,21 @@ pub fn change_statements(
     changes: &[RowChange],
 ) -> DbResult<Vec<BoundStatement>> {
     ensure_editable(structure, changes)?;
-    changes
-        .iter()
-        .map(|change| {
-            let mut p = Params { dialect: d, inline: false, values: Vec::new() };
-            let (sql, expect_rows) = build_one(&mut p, structure, change)?;
-            Ok(BoundStatement { sql, params: p.values, expect_rows })
-        })
-        .collect()
+    changes.iter().map(|change| change_statement(d, structure, change, false)).collect()
+}
+
+/// One change as a statement that must affect exactly one row: with
+/// parameters, or with `inline` literals for review (never executed).
+/// The caller checks that the structure has a row identity.
+pub fn change_statement(
+    d: &dyn Dialect,
+    structure: &TableStructure,
+    change: &RowChange,
+    inline: bool,
+) -> DbResult<BoundStatement> {
+    let mut p = Params { dialect: d, inline, values: Vec::new() };
+    let (sql, expect_rows) = build_one(&mut p, structure, change)?;
+    Ok(BoundStatement { sql, params: p.values, expect_rows })
 }
 
 /// Human-readable SQL for "Preview SQL". Not executed.
@@ -547,8 +587,7 @@ pub fn preview_changes(d: &dyn Dialect, structure: &TableStructure, changes: &[R
     ensure_editable(structure, changes)?;
     let mut out = String::new();
     for change in changes {
-        let mut p = Params { dialect: d, inline: true, values: Vec::new() };
-        out.push_str(&build_one(&mut p, structure, change)?.0);
+        out.push_str(&change_statement(d, structure, change, true)?.sql);
         out.push_str(";\n");
     }
     Ok(out)
@@ -561,8 +600,29 @@ pub fn insert_batch(
     columns: &[String],
     rows: &[Vec<Option<String>>],
 ) -> DbResult<BoundStatement> {
+    insert_rows(d, structure, columns, rows, false)
+}
+
+/// [`insert_batch`] with inline literals, for SQL shown or saved for review.
+pub fn insert_batch_sql(
+    d: &dyn Dialect,
+    structure: &TableStructure,
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+) -> DbResult<String> {
+    Ok(insert_rows(d, structure, columns, rows, true)?.sql)
+}
+
+fn insert_rows(
+    d: &dyn Dialect,
+    structure: &TableStructure,
+    columns: &[String],
+    rows: &[Vec<Option<String>>],
+    inline: bool,
+) -> DbResult<BoundStatement> {
     let cols: Vec<&ColumnInfo> = columns.iter().map(|c| column(structure, c)).collect::<DbResult<_>>()?;
-    let mut p = Params { dialect: d, inline: false, values: Vec::with_capacity(cols.len() * rows.len()) };
+    let capacity = if inline { 0 } else { cols.len() * rows.len() };
+    let mut p = Params { dialect: d, inline, values: Vec::with_capacity(capacity) };
     let mut tuples = Vec::with_capacity(rows.len());
     for row in rows {
         if row.len() != cols.len() {

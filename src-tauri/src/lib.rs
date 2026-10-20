@@ -36,6 +36,7 @@ pub fn run() {
             let store = Store::open(&data_dir.join("dataquery.db")).map_err(|e| e.message)?;
             let known_hosts = dq_ssh::KnownHosts::new(data_dir.join("known_hosts"));
             app.manage(AppState::new(store, Arc::new(KeyringSecrets), known_hosts));
+            app.manage(commands::data_compare::DataCompares::default());
             app.set_menu(menu(app.handle())?)?;
             spawn_idle_reaper(app.handle().clone());
             Ok(())
@@ -93,6 +94,12 @@ pub fn run() {
             commands::schema::apply_schema_changes,
             commands::schema::schema_diff,
             commands::schema::framework_migrations,
+            commands::data_compare::data_compare_plan,
+            commands::data_compare::data_compare,
+            commands::data_compare::data_compare_sql,
+            commands::data_compare::data_compare_save,
+            commands::data_compare::data_compare_apply,
+            commands::data_compare::data_compare_discard,
             commands::table::table_structure,
             commands::table::table_ddl,
             commands::table::table_page,

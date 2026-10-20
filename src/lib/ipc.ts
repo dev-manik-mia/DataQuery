@@ -19,6 +19,10 @@ import type { ConnectionDraft } from '@/bindings/ConnectionDraft';
 import type { ConnectionImportReport } from '@/bindings/ConnectionImportReport';
 import type { ConnectionList } from '@/bindings/ConnectionList';
 import type { Dependencies } from '@/bindings/Dependencies';
+import type { CompareTable } from '@/bindings/CompareTable';
+import type { ComparePlan } from '@/bindings/ComparePlan';
+import type { DataCompareOptions } from '@/bindings/DataCompareOptions';
+import type { DataCompareResult } from '@/bindings/DataCompareResult';
 import type { DiffSide } from '@/bindings/DiffSide';
 import type { DocIndex } from '@/bindings/DocIndex';
 import type { DocumentChange } from '@/bindings/DocumentChange';
@@ -73,6 +77,7 @@ import type { Snippet } from '@/bindings/Snippet';
 import type { SnippetDraft } from '@/bindings/SnippetDraft';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { StatementInfo } from '@/bindings/StatementInfo';
+import type { SyncKinds } from '@/bindings/SyncKinds';
 import type { TablePage } from '@/bindings/TablePage';
 import type { TablePageRequest } from '@/bindings/TablePageRequest';
 import type { TableStructure } from '@/bindings/TableStructure';
@@ -210,6 +215,18 @@ export const api = {
   schemaDiff: (source: DiffSide, target: DiffSide) => call<SchemaDiff>('schema_diff', { source, target }),
   frameworkMigrations: ({ sessionId }: Sid, database: string, schema: string | null) =>
     call<FrameworkMigrations[]>('framework_migrations', { sessionId, database, schema }),
+
+  // data compare
+  dataComparePlan: (source: CompareTable, target: CompareTable, options: DataCompareOptions | null) =>
+    call<ComparePlan>('data_compare_plan', { source, target, options }),
+  dataCompare: (source: CompareTable, target: CompareTable, options: DataCompareOptions, jobId: string) =>
+    call<DataCompareResult>('data_compare', { source, target, options, jobId }),
+  /** `null` when the script is too large to show; save it to a file instead. */
+  dataCompareSql: (compareId: string, kinds: SyncKinds) => call<string | null>('data_compare_sql', { compareId, kinds }),
+  dataCompareSave: (compareId: string, kinds: SyncKinds, path: string) => call<number>('data_compare_save', { compareId, kinds, path }),
+  dataCompareApply: (compareId: string, kinds: SyncKinds, jobId: string, confirmation: Confirmation | null) =>
+    call<Guarded<ApplyReport>>('data_compare_apply', { compareId, kinds, jobId, confirmation }),
+  dataCompareDiscard: (compareId: string) => call<void>('data_compare_discard', { compareId }),
 
   // monitoring
   monitorSnapshot: ({ sessionId }: Sid, longRunningSecs: number) => call<MonitorSnapshot>('monitor_snapshot', { sessionId, longRunningSecs }),

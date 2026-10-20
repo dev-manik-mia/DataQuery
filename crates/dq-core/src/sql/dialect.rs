@@ -192,6 +192,19 @@ pub trait Dialect: Send + Sync {
         format!("INSERT INTO {table} DEFAULT VALUES")
     }
 
+    /// `ORDER BY` expression that sorts a column of `data_type` the way data
+    /// compare merges rows: text by code point (binary collation), everything
+    /// else natively. Engines whose default collation is linguistic override it.
+    fn sort_key(&self, quoted_column: &str, _data_type: &str) -> String {
+        quoted_column.to_owned()
+    }
+
+    /// Date and time types carry no zone, so zoned values are written as UTC
+    /// wall-clock time.
+    fn naive_temporals(&self) -> bool {
+        false
+    }
+
     /// Fully quoted `schema.table` (Postgres), `` `db`.`table` `` (MySQL) or
     /// `db.schema.table` where [`Dialect::qualifies_database`].
     fn quoted_name(&self, object: &ObjectRef) -> String {
@@ -271,6 +284,10 @@ impl Dialect for PostgresDialect {
     fn binary_literal(&self, hex: &str) -> String {
         format!("'\\x{hex}'::bytea")
     }
+
+    fn sort_key(&self, quoted_column: &str, data_type: &str) -> String {
+        if text_like(data_type) { format!("{quoted_column} COLLATE \"C\"") } else { quoted_column.to_owned() }
+    }
 }
 
 impl Dialect for MysqlDialect {
@@ -330,11 +347,45 @@ impl Dialect for MysqlDialect {
     fn insert_defaults(&self, table: &str, _first_column: Option<&str>) -> String {
         format!("INSERT INTO {table} () VALUES ()")
     }
+
+    fn sort_key(&self, quoted_column: &str, data_type: &str) -> String {
+        // Default collations ignore case; the UTF-8 bytes sort by code point.
+        if text_like(data_type) { format!("CAST({quoted_column} AS BINARY)") } else { quoted_column.to_owned() }
+    }
+
+    fn naive_temporals(&self) -> bool {
+        true
+    }
 }
 
 /// Base name of a type, lower-cased: `nvarchar(50)` → `nvarchar`.
 fn base_type(data_type: &str) -> String {
     data_type.split(['(', '[']).next().unwrap_or(data_type).trim().to_ascii_lowercase()
+}
+
+/// Character types, whose sort order depends on a collation.
+fn text_like(data_type: &str) -> bool {
+    const TEXT: &[&str] = &[
+        "text",
+        "char",
+        "character",
+        "varchar",
+        "character varying",
+        "nchar",
+        "nvarchar",
+        "ntext",
+        "varchar2",
+        "nvarchar2",
+        "citext",
+        "tinytext",
+        "mediumtext",
+        "longtext",
+        "enum",
+        "set",
+        "name",
+        "bpchar",
+    ];
+    TEXT.contains(&base_type(data_type).as_str())
 }
 
 impl Dialect for SqlServerDialect {
@@ -421,6 +472,14 @@ impl Dialect for SqlServerDialect {
 
     fn max_insert_rows(&self) -> usize {
         1_000
+    }
+
+    fn sort_key(&self, quoted_column: &str, data_type: &str) -> String {
+        if text_like(data_type) {
+            format!("{quoted_column} COLLATE Latin1_General_BIN2")
+        } else {
+            quoted_column.to_owned()
+        }
     }
 }
 
@@ -525,6 +584,14 @@ impl Dialect for OracleDialect {
         match first_column {
             Some(c) => format!("INSERT INTO {table} ({c}) VALUES (DEFAULT)"),
             None => format!("INSERT INTO {table} DEFAULT VALUES"),
+        }
+    }
+
+    fn sort_key(&self, quoted_column: &str, data_type: &str) -> String {
+        if text_like(data_type) {
+            format!("NLSSORT({quoted_column}, 'NLS_SORT=BINARY')")
+        } else {
+            quoted_column.to_owned()
         }
     }
 }
@@ -718,6 +785,11 @@ impl Dialect for SqliteDialect {
     /// `SQLITE_MAX_VARIABLE_NUMBER` since 3.32.
     fn max_params(&self) -> usize {
         32_766
+    }
+
+    /// A column may declare `COLLATE NOCASE`; any value sorts by bytes with `BINARY`.
+    fn sort_key(&self, quoted_column: &str, _data_type: &str) -> String {
+        format!("{quoted_column} COLLATE BINARY")
     }
 }
 

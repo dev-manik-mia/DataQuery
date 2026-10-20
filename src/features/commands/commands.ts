@@ -1,5 +1,6 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 
+import { dataCompareAvailable, openDataCompare } from '@/features/datacompare/entry';
 import { t } from '@/i18n';
 import { uid } from '@/lib/id';
 import { useSettings } from '@/stores/settings';
@@ -108,6 +109,7 @@ export function appCommands(): AppCommand[] {
     { id: 'nav.connections', title: t('nav.connections'), group: 'Navigate', available: true, run: () => ui.navigate({ name: 'home' }) },
     { id: 'nav.history', title: t('nav.history'), group: 'Navigate', available: true, run: () => ui.navigate({ name: 'history' }) },
     { id: 'nav.schemaDiff', title: t('nav.schemaDiff'), group: 'Navigate', available: true, run: () => ui.navigate({ name: 'diff' }) },
+    { id: 'nav.dataCompare', title: t('nav.dataCompare'), group: 'Navigate', available: dataCompareAvailable(), run: () => openDataCompare() },
     { id: 'nav.monitor', title: t('nav.monitoring'), group: 'Navigate', available: Boolean(caps?.monitoring), run: () => (ui.navigate({ name: 'workspace' }), ws.openMonitorTab()) },
     { id: 'nav.workspace', title: `Back to ${session?.connection.name ?? 'workspace'}`, group: 'Navigate', available: Boolean(session) && !inWorkspace, run: () => ui.navigate({ name: 'workspace' }) },
     { id: 'conn.reconnect', title: t('action.reconnect'), group: 'Connection', available: Boolean(session), run: () => void ws.reconnect() },
