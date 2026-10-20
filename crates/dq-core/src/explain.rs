@@ -70,6 +70,7 @@ impl ExplainDialect {
             | SqlFlavor::Sqlite
             | SqlFlavor::Snowflake
             | SqlFlavor::Bigquery
+            | SqlFlavor::Vertica
             | SqlFlavor::Mongodb
             | SqlFlavor::Partiql
             | SqlFlavor::Redis

@@ -72,6 +72,7 @@ const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   sqlserver: 'Sessions from sys.dm_exec_sessions',
   oracle: 'Sessions from V$SESSION',
   clickhouse: 'Running queries from system.processes',
+  vertica: 'Sessions from v_monitor.sessions',
   duckdb: 'The query editor connection (DuckDB runs inside DataQuery)',
   mongodb: 'Operations from currentOp',
   cassandra: 'Client connections from system_views.clients',

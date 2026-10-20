@@ -69,8 +69,10 @@ impl Lexer<'_> {
     fn next_kind(&mut self) -> TokenKind {
         let c = self.bytes[self.pos];
         let flavor = self.flavor;
+        let vertica = flavor == SqlFlavor::Vertica;
+        // Vertica lexes like PostgreSQL (`E''` strings, dollar quotes) but binds `?`.
         let (pg, my, ms, ora) = (
-            flavor.postgres_like(),
+            flavor.postgres_like() || vertica,
             flavor == SqlFlavor::Mysql,
             flavor == SqlFlavor::Sqlserver,
             flavor == SqlFlavor::Oracle,
@@ -225,7 +227,7 @@ impl Lexer<'_> {
                 self.q_quote(2)
             }
             b'$' if pg || (sf && self.peek(1) == Some(b'$')) => self.dollar(),
-            b'?' if my || duck || sf || partiql => self.single(TokenKind::Param),
+            b'?' if my || duck || sf || partiql || vertica => self.single(TokenKind::Param),
             b'@' if ms => self.at_sign(),
             b':' if (ora || sf) && self.peek(1).is_some_and(|c| c.is_ascii_digit()) => {
                 self.pos += 1;

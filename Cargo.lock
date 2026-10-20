@@ -1574,6 +1574,7 @@ dependencies = [
  "dq-sqlserver",
  "dq-ssh",
  "dq-store",
+ "dq-vertica",
  "ed25519-dalek",
  "futures-util",
  "notify",
@@ -1955,6 +1956,7 @@ dependencies = [
  "regex",
  "rust_xlsxwriter",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "tempfile",
@@ -1962,6 +1964,7 @@ dependencies = [
  "tokio",
  "ts-rs",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2084,14 +2087,12 @@ dependencies = [
  "futures-util",
  "postgres-protocol",
  "rustls",
- "rustls-native-certs",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
  "tracing",
- "webpki-roots",
 ]
 
 [[package]]
@@ -2202,6 +2203,23 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "dq-vertica"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dq-core",
+ "md-5",
+ "rustls",
+ "serde_json",
+ "sha2 0.11.1",
+ "socket2",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

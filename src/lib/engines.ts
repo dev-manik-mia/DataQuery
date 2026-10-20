@@ -25,6 +25,8 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'snowflake';
     case 'bigquery':
       return 'bigquery';
+    case 'vertica':
+      return 'vertica';
     case 'mongodb':
       return 'mongodb';
     case 'dynamodb':
@@ -54,6 +56,7 @@ export function hasSchemas(flavor: SqlFlavor): boolean {
 export function defaultSchema(flavor: SqlFlavor, user?: string): string | null {
   switch (flavor) {
     case 'postgres':
+    case 'vertica':
       return 'public';
     case 'sqlserver':
       return 'dbo';
@@ -214,6 +217,9 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: '', username: 'elastic' };
     case 'neo4j':
       return { database: 'neo4j', username: 'neo4j' };
+    case 'vertica':
+      // A cluster serves one database; an empty name connects to it.
+      return { database: '', username: 'dbadmin' };
     default:
       return { database: '', username: '' };
   }

@@ -27,6 +27,8 @@ pub enum SqlFlavor {
     Snowflake,
     /// `BigQuery` `GoogleSQL` and its scripting statements.
     Bigquery,
+    /// Vertica SQL: `PostgreSQL`-like quoting with `?` parameters.
+    Vertica,
     /// `MongoDB` shell statements: `db.orders.find({ … })`, `show collections`, `use app`.
     Mongodb,
     /// `PartiQL` as `DynamoDB` runs it: `SELECT * FROM "orders" WHERE "pk" = ?`.
@@ -108,7 +110,8 @@ pub trait Dialect: Send + Sync {
             | SqlFlavor::Oracle
             | SqlFlavor::Duckdb
             | SqlFlavor::Snowflake
-            | SqlFlavor::Bigquery => object.schema.as_deref(),
+            | SqlFlavor::Bigquery
+            | SqlFlavor::Vertica => object.schema.as_deref(),
         }
         .filter(|c| !c.is_empty())
     }
@@ -158,6 +161,12 @@ pub trait Dialect: Send + Sync {
     /// `OVERRIDING SYSTEM VALUE` and `setval` moves the sequence past them.
     fn identity_sequences(&self) -> bool {
         true
+    }
+
+    /// The identity clause stands in for the column's type and takes no
+    /// default (Vertica's `id IDENTITY(1,1)`).
+    fn identity_replaces_type(&self) -> bool {
+        false
     }
 
     /// A failed statement aborts the open transaction until `ROLLBACK`.
@@ -250,6 +259,7 @@ pub struct SqliteDialect;
 pub struct D1Dialect;
 pub struct SnowflakeDialect;
 pub struct BigQueryDialect;
+pub struct VerticaDialect;
 pub struct MongoDialect;
 pub struct PartiqlDialect;
 pub struct RedisDialect;
@@ -1130,6 +1140,78 @@ impl Dialect for BigQueryDialect {
     }
 }
 
+/// Vertica's spatial and complex types: no equality with a text value.
+fn vertica_text_only(data_type: &str) -> bool {
+    let base = base_type(data_type);
+    matches!(base.as_str(), "geometry" | "geography" | "map" | "long varbinary")
+        || ["array", "set", "row"].iter().any(|p| base.starts_with(p))
+}
+
+impl Dialect for VerticaDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Vertica
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        PostgresDialect.quote_ident(ident)
+    }
+
+    /// Names are compared without regard to case, so only the characters matter.
+    fn needs_quotes(&self, ident: &str) -> bool {
+        let mut chars = ident.chars();
+        let simple = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        !simple || is_reserved(ident, VERTICA_RESERVED)
+    }
+
+    /// Standard-conforming strings: only quotes are doubled.
+    fn quote_literal(&self, value: &str) -> String {
+        PostgresDialect.quote_literal(value)
+    }
+
+    /// The server describes each `?` with the type its context needs (also in
+    /// multi-row `VALUES`) and converts the text value with that type's rules.
+    fn placeholder(&self, _index: usize, _column_type: &str) -> String {
+        "?".into()
+    }
+
+    /// `VARCHAR` without a length is `VARCHAR(80)`; this is the longest one.
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        format!("CAST({quoted_column} AS VARCHAR(65000))")
+    }
+
+    fn text_expr(&self, quoted_column: &str, data_type: &str) -> String {
+        match base_type(data_type).as_str() {
+            "geometry" | "geography" => format!("ST_AsText({quoted_column})"),
+            _ => self.cast_to_text(quoted_column),
+        }
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        !vertica_text_only(data_type)
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("{} ILIKE {placeholder} ESCAPE '\\'", self.cast_to_text(quoted_column))
+    }
+
+    fn template_placeholder(&self, _n: usize) -> String {
+        "?".into()
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        Some(" IDENTITY(1,1)")
+    }
+
+    fn identity_replaces_type(&self) -> bool {
+        true
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        format!("HEX_TO_BINARY('{hex}')")
+    }
+}
+
 /// `MongoDB` shell syntax. Names are JSON strings (`db.getCollection("a.b")`);
 /// the SQL builders are never used for it, so the SQL-only methods return
 /// harmless shell text.
@@ -1585,6 +1667,7 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Sqlite => &SqliteDialect,
         SqlFlavor::Snowflake => &SnowflakeDialect,
         SqlFlavor::Bigquery => &BigQueryDialect,
+        SqlFlavor::Vertica => &VerticaDialect,
         SqlFlavor::Mongodb => &MongoDialect,
         SqlFlavor::Partiql => &PartiqlDialect,
         SqlFlavor::Redis => &RedisDialect,
@@ -2179,6 +2262,98 @@ const SNOWFLAKE_RESERVED: &[&str] = &[
     "with",
 ];
 
+/// Vertica reserved words.
+const VERTICA_RESERVED: &[&str] = &[
+    "all",
+    "analyse",
+    "analyze",
+    "and",
+    "any",
+    "array",
+    "as",
+    "asc",
+    "binary",
+    "both",
+    "case",
+    "cast",
+    "check",
+    "column",
+    "constraint",
+    "correlation",
+    "create",
+    "current_database",
+    "current_date",
+    "current_schema",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "default",
+    "deferrable",
+    "desc",
+    "distinct",
+    "else",
+    "encoded",
+    "end",
+    "except",
+    "false",
+    "for",
+    "foreign",
+    "from",
+    "grant",
+    "group",
+    "grouped",
+    "having",
+    "in",
+    "initially",
+    "intersect",
+    "interval",
+    "intervalym",
+    "into",
+    "join",
+    "ksafe",
+    "leading",
+    "limit",
+    "localtime",
+    "localtimestamp",
+    "match",
+    "minus",
+    "not",
+    "null",
+    "offset",
+    "on",
+    "only",
+    "or",
+    "order",
+    "pinned",
+    "placing",
+    "primary",
+    "projection",
+    "references",
+    "schema",
+    "segmented",
+    "select",
+    "session_user",
+    "some",
+    "sysdate",
+    "table",
+    "then",
+    "timeseries",
+    "to",
+    "trailing",
+    "true",
+    "unbounded",
+    "union",
+    "unique",
+    "unsegmented",
+    "user",
+    "using",
+    "when",
+    "where",
+    "window",
+    "with",
+    "within",
+];
+
 const ORACLE_RESERVED: &[&str] = &[
     "access",
     "add",
@@ -2576,5 +2751,18 @@ mod tests {
             d.multi_insert("T", "A", &["(:1)".into(), "(:2)".into()]),
             "INSERT ALL INTO T (A) VALUES (:1) INTO T (A) VALUES (:2) SELECT 1 FROM DUAL"
         );
+    }
+
+    #[test]
+    fn vertica_quoting_and_literals() {
+        let d = VerticaDialect;
+        assert_eq!(d.display_ident("Orders"), "Orders");
+        assert_eq!(d.display_ident("projection"), "\"projection\"");
+        assert_eq!(d.quoted_name(&obj("vdb", Some("public"), "a\"b")), "\"public\".\"a\"\"b\"");
+        assert_eq!(d.placeholder(2, "numeric(12,2)"), "?");
+        assert_eq!(d.binary_literal("00ff"), "HEX_TO_BINARY('00ff')");
+        assert_eq!(d.text_expr("\"g\"", "GEOMETRY(1000)"), "ST_AsText(\"g\")");
+        assert!(!d.comparable("Array[int]") && d.comparable("varchar(20)"));
+        assert_eq!(d.multi_insert("t", "a", &["(?)".into(), "(?)".into()]), "INSERT INTO t (a) VALUES (?), (?)");
     }
 }

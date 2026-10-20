@@ -517,6 +517,7 @@ const NO_BACKUP: Partial<Record<Engine, string>> = {
   duckdb: 'Copy the database file, or run EXPORT DATABASE in the editor.',
   snowflake: 'Snowflake keeps history with Time Travel and zero-copy clones; there is no dump tool.',
   bigquery: 'BigQuery keeps 7 days of Time Travel; copy tables with snapshots or clones, or export to Cloud Storage. There is no dump tool.',
+  vertica: `Backups (vbr, on the cluster's nodes) ${SERVER_SIDE}`,
   redis: SNAPSHOTS,
   valkey: SNAPSHOTS,
   dragonfly: SNAPSHOTS,

@@ -23,13 +23,15 @@
     "db:up": "docker compose -p dataquery up -d",
     "db:up:wide": "docker compose -p dataquery --profile wide up -d cassandra scylla",
     "db:up:search": "docker compose -p dataquery --profile search up -d elasticsearch neo4j",
+    "db:up:vertica": "docker compose -p dataquery --profile vertica up -d vertica",
     "test:integration:wide": "DATAQUERY_TEST_CASSANDRA=localhost:59042 DATAQUERY_TEST_SCYLLA=localhost:59043 cargo test -p dq-cassandra --test cassandra",
     "test:integration:search": "DATAQUERY_TEST_ELASTICSEARCH=localhost:59200 DATAQUERY_TEST_NEO4J=localhost:57474 cargo test -p dq-elasticsearch -p dq-neo4j",
     "db:up:libsql": "docker compose -p dataquery --profile libsql up -d libsql",
     "test:integration:libsql": "DATAQUERY_TEST_LIBSQL=http://localhost:58080 DATAQUERY_TEST_LIBSQL_TOKEN=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3MDAwMDAwMDB9.VxCkNNdLE85vovpPKumlDXbLYFbMcbjragQM4ByCNDwyDufwJm2RvhK-LwvYGF02vS3bAEwCxKV1seyYjD6_Dw cargo test -p dq-sqlite-http",
     "db:up:bigquery": "docker compose -p dataquery --profile bigquery up -d bigquery",
     "test:integration:bigquery": "DATAQUERY_TEST_BIGQUERY=http://localhost:59050 cargo test -p dq-bigquery --test bigquery -- --test-threads=1",
-    "db:down": "docker compose -p dataquery --profile wide --profile search --profile libsql --profile bigquery down -v"
+    "test:integration:vertica": "DATAQUERY_TEST_VERTICA=localhost:55443 cargo test -p dq-vertica --test vertica",
+    "db:down": "docker compose -p dataquery --profile wide --profile search --profile libsql --profile bigquery --profile vertica down -v"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",

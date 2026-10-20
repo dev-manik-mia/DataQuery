@@ -247,6 +247,26 @@ services:
     command: ["--project=dataquery-test", "--port=9050"]
     ports: ["59050:9050"]
 
+  # Vertica 25.4 Community Edition (26.1 and later dropped the CE license). The image
+  # ships no database: the init script creates `vdb` (about two minutes) with users
+  # dbadmin / dataquery and dataquery / dataquery123. Needs about 2 GB of memory.
+  vertica:
+    profiles: ["vertica"]
+    image: opentext/vertica-k8s:25.4.0-0-multiarch
+    user: "998:996"
+    environment:
+      VERTICA_DB: vdb
+      VERTICA_PASSWORD: dataquery
+    entrypoint: ["/bin/bash", "/seed/vertica-init.sh"]
+    ports: ["55443:5433"]
+    volumes:
+      - ./docker/vertica-init.sh:/seed/vertica-init.sh:ro
+      - ./docker/vertica-seed.sql:/seed/vertica-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/.seeded"]
+      interval: 5s
+      retries: 60
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

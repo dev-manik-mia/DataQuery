@@ -25,6 +25,7 @@ impl Registry {
             (Engine::D1, Arc::new(dq_sqlite_http::D1Adapter)),
             (Engine::Snowflake, Arc::new(dq_snowflake::SnowflakeAdapter)),
             (Engine::Bigquery, Arc::new(dq_bigquery::BigqueryAdapter)),
+            (Engine::Vertica, Arc::new(dq_vertica::VerticaAdapter)),
             (Engine::Mongodb, Arc::new(dq_mongodb::MongodbAdapter)),
             (Engine::Dynamodb, Arc::new(dq_dynamodb::DynamodbAdapter)),
             (Engine::Redis, Arc::new(dq_redis::RedisAdapter::REDIS)),

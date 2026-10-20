@@ -53,6 +53,8 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   sqlite: SQLite,
   snowflake: StandardSQL,
   bigquery: BIGQUERY,
+  // Double-quoted names, E'' strings and dollar quotes, like PostgreSQL.
+  vertica: PostgreSQL,
   // Not SQL: MongoDB uses the JavaScript mode below.
   mongodb: StandardSQL,
   partiql: StandardSQL,
