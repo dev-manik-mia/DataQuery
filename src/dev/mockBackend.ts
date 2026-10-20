@@ -16,7 +16,7 @@ type Args = Record<string, unknown>;
 const caps = { explorer: true, query_editor: true, grid_edit: true, import_export: true, cancel: true, ddl: true, schemas: true, materialized_views: true, explain: true, monitoring: true, transactions: true, schema_diff: true, backup: true };
 const none = { ...caps, explorer: false, query_editor: false, grid_edit: false, import_export: false, cancel: false, ddl: false };
 /** Engines with backup and restore (`dq_core::backup::BackupFamily::of`). */
-const BACKUP = new Set(['postgres', 'greenplum', 'mysql', 'mariadb', 'sqlite', 'mongodb']);
+const BACKUP = new Set(['postgres', 'greenplum', 'mysql', 'mariadb', 'singlestore', 'sqlite', 'mongodb']);
 /** Capabilities each adapter lacks, as the Rust adapters report them. */
 const GAPS: Record<string, (keyof typeof caps)[]> = {
   clickhouse: ['grid_edit', 'transactions'],
@@ -51,6 +51,7 @@ const ENGINES: EngineInfo[] = [
   engine('postgres', 'PostgreSQL', 'Pg', 250, 'relational', 'SQL', 5432, '5432 · SQL · v12–17', 'MVP', true),
   engine('mysql', 'MySQL', 'My', 220, 'relational', 'SQL', 3306, '3306 · SQL · v5.7–8.4', 'P0', true),
   engine('mariadb', 'MariaDB', 'Ma', 60, 'relational', 'SQL', 3306, '3306 · SQL · v10.6–11', 'P0', true),
+  engine('singlestore', 'SingleStore', 'S2', 290, 'analytical', 'SQL', 3306, '3306 · MySQL wire · v8–9', 'P2', true),
   engine('sqlite', 'SQLite', 'Sl', 200, 'relational', 'SQL', null, 'local file · SQL', 'P0', true),
   engine('libsql', 'libSQL', 'Ls', 170, 'relational', 'SQL', 443, 'HTTPS · SQLite (Hrana)', 'P2', true),
   engine('d1', 'Cloudflare D1', 'D1', 45, 'relational', 'SQL', 443, 'Cloudflare API · SQLite', 'P2', true),

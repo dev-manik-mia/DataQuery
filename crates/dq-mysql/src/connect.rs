@@ -22,25 +22,72 @@ pub enum Role {
     Write,
 }
 
-/// Server family, detected from `VERSION()`. They differ in a few session variables.
+/// Server family, detected from `VERSION()` and `@@version_comment`. Their
+/// differences are answered here rather than by branches across the adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flavor {
     Mysql,
     Mariadb,
+    /// SingleStore (formerly MemSQL) reports a MySQL `VERSION()`; its own
+    /// version is `@@memsql_version`.
+    Singlestore,
 }
 
 impl Flavor {
-    fn detect(version: &str) -> Self {
-        if version.to_ascii_lowercase().contains("mariadb") { Self::Mariadb } else { Self::Mysql }
+    fn detect(version: &str, comment: &str) -> Self {
+        let comment = comment.to_ascii_lowercase();
+        if comment.contains("singlestore") || comment.contains("memsql") {
+            Self::Singlestore
+        } else if version.to_ascii_lowercase().contains("mariadb") {
+            Self::Mariadb
+        } else {
+            Self::Mysql
+        }
+    }
+
+    /// Product name shown before the version number.
+    pub fn product(self) -> &'static str {
+        match self {
+            Self::Mysql => "MySQL",
+            Self::Mariadb => "MariaDB",
+            Self::Singlestore => "SingleStore",
+        }
     }
 
     /// Statement that sets the per-statement time limit; `0` disables it.
     /// MySQL's limit applies to `SELECT` only; MariaDB's to every statement.
-    pub fn timeout_statement(self, secs: u32) -> String {
+    /// SingleStore accepts `max_execution_time` but ignores it, so its
+    /// sessions time statements out themselves with `KILL QUERY`.
+    pub fn timeout_statement(self, secs: u32) -> Option<String> {
         match self {
-            Self::Mysql => format!("SET SESSION max_execution_time = {}", u64::from(secs) * 1000),
-            Self::Mariadb => format!("SET SESSION max_statement_time = {secs}"),
+            Self::Mysql => Some(format!("SET SESSION max_execution_time = {}", u64::from(secs) * 1000)),
+            Self::Mariadb => Some(format!("SET SESSION max_statement_time = {secs}")),
+            Self::Singlestore => None,
         }
+    }
+
+    /// The server enforces `SET SESSION TRANSACTION READ ONLY`. SingleStore
+    /// accepts it and still writes, so its sessions refuse writing statements.
+    pub fn enforces_read_only(self) -> bool {
+        self != Self::Singlestore
+    }
+
+    /// Databases that belong to the server, as an SQL list; hidden unless current.
+    pub fn system_databases(self) -> &'static str {
+        match self {
+            Self::Mysql | Self::Mariadb => "('information_schema','mysql','performance_schema','sys')",
+            Self::Singlestore => "('information_schema','memsql','cluster')",
+        }
+    }
+
+    /// SingleStore parses `FOREIGN KEY` clauses but neither stores nor enforces
+    /// them, and has no triggers or sequences: those catalog reads are skipped.
+    pub fn has_foreign_keys(self) -> bool {
+        self != Self::Singlestore
+    }
+
+    pub fn has_triggers(self) -> bool {
+        self != Self::Singlestore
     }
 }
 
@@ -144,7 +191,7 @@ const READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
 
 /// Session settings for read-only catalog connections.
 pub fn catalog_setup(flavor: Flavor) -> Vec<String> {
-    vec![READ_ONLY.to_owned(), flavor.timeout_statement(60)]
+    std::iter::once(READ_ONLY.to_owned()).chain(flavor.timeout_statement(60)).collect()
 }
 
 /// How long a pooled connection may idle before it is closed. With the
@@ -198,7 +245,7 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
     let mut conn = open(params, Role::Query, Vec::new()).await?;
     let err = |e: mysql_async::Error| map_error(&e, params.password());
     let row: mysql_async::Row = conn
-        .query_first("SELECT VERSION(), CURRENT_USER(), DATABASE(), @@global.read_only")
+        .query_first("SELECT VERSION(), CURRENT_USER(), DATABASE(), @@global.read_only, @@version_comment")
         .await
         .map_err(err)?
         .ok_or_else(|| DbError::internal("the server returned no version"))?;
@@ -206,16 +253,16 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
         conn.query_first("SHOW SESSION STATUS LIKE 'Ssl_version'").await.map_err(err)?;
     let tls_version = tls.and_then(|r| text(&r, 1)).filter(|v| !v.is_empty());
 
-    let version = text(&row, 0).unwrap_or_default();
-    let flavor = Flavor::detect(&version);
+    let mut version = text(&row, 0).unwrap_or_default();
+    let flavor = Flavor::detect(&version, &text(&row, 4).unwrap_or_default());
+    if flavor == Flavor::Singlestore {
+        let own: Option<String> = conn.query_first("SELECT @@memsql_version").await.map_err(err)?;
+        version = own.unwrap_or(version);
+    }
     let number = version.split('-').next().unwrap_or(&version);
-    let product = match flavor {
-        Flavor::Mysql => "MySQL",
-        Flavor::Mariadb => "MariaDB",
-    };
     let info = ServerInfo {
         engine: config.engine,
-        version: format!("{product} {number}"),
+        version: format!("{} {number}", flavor.product()),
         latency_ms: started.elapsed().as_millis() as u64,
         tls: tls_version.map(|v| TlsInfo {
             version: Some(v),
@@ -227,4 +274,24 @@ pub async fn open_query(params: &ConnectParams) -> DbResult<Opened> {
         read_only: config.read_only || text(&row, 3).is_some_and(|v| v == "1"),
     };
     Ok(Opened { conn, info, flavor })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flavor_from_version_and_comment() {
+        assert_eq!(Flavor::detect("8.4.3", "MySQL Community Server - GPL"), Flavor::Mysql);
+        assert_eq!(Flavor::detect("11.4.2-MariaDB-ubu2404", "mariadb.org binary distribution"), Flavor::Mariadb);
+        let s2 = "SingleStoreDB source distribution (compatible; MySQL Enterprise & MySQL Commercial)";
+        assert_eq!(Flavor::detect("5.7.32", s2), Flavor::Singlestore);
+        assert_eq!(Flavor::Singlestore.timeout_statement(5), None);
+        assert_eq!(
+            Flavor::detect("5.5.58", "MemSQL source distribution (compatible; MySQL Enterprise)"),
+            Flavor::Singlestore
+        );
+        assert!(Flavor::Singlestore.system_databases().contains("'memsql'"));
+        assert!(!Flavor::Singlestore.has_foreign_keys() && Flavor::Mysql.has_foreign_keys());
+    }
 }

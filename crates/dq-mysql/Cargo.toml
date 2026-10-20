@@ -1,6 +1,6 @@
 [package]
 name = "dq-mysql"
-description = "MySQL and MariaDB adapter for DataQuery."
+description = "MySQL, MariaDB and SingleStore adapter for DataQuery."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

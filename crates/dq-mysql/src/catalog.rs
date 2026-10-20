@@ -14,11 +14,9 @@ use dq_core::{DbError, DbResult};
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row};
 
+use crate::connect::Flavor;
 use crate::error::map_error;
 use crate::values::text;
-
-/// Databases that belong to the server, hidden unless they are the current one.
-const SYSTEM_DATABASES: &str = "('information_schema','mysql','performance_schema','sys')";
 
 fn my(e: mysql_async::Error) -> DbError {
     map_error(&e, None)
@@ -42,12 +40,14 @@ fn kind_of(table_type: &str) -> NodeKind {
     }
 }
 
-pub async fn databases(conn: &mut Conn, current: &str) -> DbResult<Vec<Node>> {
+/// Databases; the server's own are hidden unless they are the current one.
+pub async fn databases(conn: &mut Conn, flavor: Flavor, current: &str) -> DbResult<Vec<Node>> {
+    let system = flavor.system_databases();
     let sql = format!(
         "SELECT s.SCHEMA_NAME, \
                 (SELECT COUNT(*) FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = s.SCHEMA_NAME) \
          FROM information_schema.SCHEMATA s \
-         WHERE s.SCHEMA_NAME NOT IN {SYSTEM_DATABASES} OR s.SCHEMA_NAME = ? \
+         WHERE s.SCHEMA_NAME NOT IN {system} OR s.SCHEMA_NAME = ? \
          ORDER BY s.SCHEMA_NAME"
     );
     let rows: Vec<Row> = conn.exec(sql, (current,)).await.map_err(my)?;
@@ -63,7 +63,19 @@ pub async fn databases(conn: &mut Conn, current: &str) -> DbResult<Vec<Node>> {
         .collect())
 }
 
-const RELATION_COLUMNS: &str = "TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS, TABLE_COMMENT";
+/// Columns read by [`relation_node`]. SingleStore prefixes the comment with
+/// the table's storage (`columnstore` or `rowstore`, and `reference` for
+/// tables copied to every node rather than sharded).
+fn relation_columns(flavor: Flavor) -> &'static str {
+    match flavor {
+        Flavor::Mysql | Flavor::Mariadb => "TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS, TABLE_COMMENT",
+        Flavor::Singlestore => {
+            "TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_ROWS, \
+             CONCAT_WS(' · ', REPLACE(LOWER(STORAGE_TYPE), 'inmemory_', ''), \
+                       IF(DISTRIBUTED = 0, 'reference', NULL), NULLIF(TABLE_COMMENT, ''))"
+        }
+    }
+}
 
 fn relation_node(row: &Row) -> Node {
     let table_type = text(row, 2).unwrap_or_default();
@@ -79,10 +91,11 @@ fn relation_node(row: &Row) -> Node {
     node
 }
 
-pub async fn relations(conn: &mut Conn, database: &str) -> DbResult<Vec<Node>> {
+pub async fn relations(conn: &mut Conn, flavor: Flavor, database: &str) -> DbResult<Vec<Node>> {
     let sql = format!(
-        "SELECT {RELATION_COLUMNS} FROM information_schema.TABLES \
-         WHERE TABLE_SCHEMA = ? AND TABLE_TYPE <> 'SEQUENCE' ORDER BY TABLE_TYPE LIKE '%VIEW', TABLE_NAME"
+        "SELECT {} FROM information_schema.TABLES \
+         WHERE TABLE_SCHEMA = ? AND TABLE_TYPE <> 'SEQUENCE' ORDER BY TABLE_TYPE LIKE '%VIEW', TABLE_NAME",
+        relation_columns(flavor)
     );
     let rows: Vec<Row> = conn.exec(sql, (database,)).await.map_err(my)?;
     let mut nodes: Vec<Node> = rows.iter().map(relation_node).collect();
@@ -107,7 +120,7 @@ pub async fn relations(conn: &mut Conn, database: &str) -> DbResult<Vec<Node>> {
 }
 
 /// Indexes and triggers of a table.
-pub async fn table_children(conn: &mut Conn, table: &ObjectRef) -> DbResult<Vec<Node>> {
+pub async fn table_children(conn: &mut Conn, flavor: Flavor, table: &ObjectRef) -> DbResult<Vec<Node>> {
     let child = |kind, name: String| {
         Node::leaf(ObjectRef::new(kind, table.database.clone(), None, name).with_parent(&table.name))
     };
@@ -119,14 +132,8 @@ pub async fn table_children(conn: &mut Conn, table: &ObjectRef) -> DbResult<Vec<
         )
         .await
         .map_err(my)?;
-    let triggers: Vec<Row> = conn
-        .exec(
-            "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ? \
-             ORDER BY ACTION_ORDER, TRIGGER_NAME",
-            (&table.database, &table.name),
-        )
-        .await
-        .map_err(my)?;
+    let triggers =
+        if flavor.has_triggers() { trigger_rows(conn, table, "ACTION_ORDER, TRIGGER_NAME").await? } else { Vec::new() };
     Ok(indexes
         .iter()
         .map(|r| child(NodeKind::Index, text(r, 0).unwrap_or_default()))
@@ -166,12 +173,14 @@ pub async fn group_children(conn: &mut Conn, group: &ObjectRef) -> DbResult<Vec<
         .collect())
 }
 
-pub async fn search(conn: &mut Conn, query: &str, limit: u32) -> DbResult<Vec<Node>> {
+pub async fn search(conn: &mut Conn, flavor: Flavor, query: &str, limit: u32) -> DbResult<Vec<Node>> {
     let pattern = format!("%{}%", query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
     let sql = format!(
-        "SELECT {RELATION_COLUMNS} FROM information_schema.TABLES \
-         WHERE LOWER(TABLE_NAME) LIKE LOWER(?) AND TABLE_SCHEMA NOT IN {SYSTEM_DATABASES} \
-         ORDER BY CHAR_LENGTH(TABLE_NAME), TABLE_NAME LIMIT ?"
+        "SELECT {} FROM information_schema.TABLES \
+         WHERE LOWER(TABLE_NAME) LIKE LOWER(?) AND TABLE_SCHEMA NOT IN {} \
+         ORDER BY CHAR_LENGTH(TABLE_NAME), TABLE_NAME LIMIT ?",
+        relation_columns(flavor),
+        flavor.system_databases()
     );
     let rows: Vec<Row> = conn.exec(sql, (pattern, limit)).await.map_err(my)?;
     Ok(rows.iter().map(relation_node).collect())
@@ -212,9 +221,9 @@ pub async fn row_estimate(conn: &mut Conn, object: &ObjectRef) -> DbResult<Optio
     Ok(relation(conn, object).await?.estimate)
 }
 
-pub async fn structure(conn: &mut Conn, object: &ObjectRef, mariadb: bool) -> DbResult<TableStructure> {
+pub async fn structure(conn: &mut Conn, flavor: Flavor, object: &ObjectRef) -> DbResult<TableStructure> {
     let rel = relation(conn, object).await?;
-    let columns = columns(conn, object, mariadb).await?;
+    let columns = columns(conn, object, flavor == Flavor::Mariadb).await?;
     let mut constraints = key_constraints(conn, object).await?;
     constraints.extend(check_constraints(conn, object).await);
     let index_columns = index_columns(conn, object).await?;
@@ -225,7 +234,7 @@ pub async fn structure(conn: &mut Conn, object: &ObjectRef, mariadb: bool) -> Db
         index.size_bytes = sizes.iter().find(|(n, _)| *n == index.name).map(|(_, b)| *b);
     }
     let foreign_keys =
-        foreign_keys(conn, "k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?", (&object.database, &object.name)).await?;
+        foreign_keys(conn, flavor, "k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?", (&object.database, &object.name)).await?;
     Ok(TableStructure {
         object: ObjectRef { kind: rel.kind, ..object.clone() },
         columns,
@@ -342,7 +351,8 @@ async fn key_constraints(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<Co
               AND rc.TABLE_NAME = tc.TABLE_NAME \
              WHERE tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ? \
                AND tc.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY') \
-             ORDER BY FIELD(tc.CONSTRAINT_TYPE, 'PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY'), tc.CONSTRAINT_NAME, \
+             ORDER BY tc.CONSTRAINT_NAME <> 'PRIMARY', FIELD(tc.CONSTRAINT_TYPE, 'PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY'), \
+                      tc.CONSTRAINT_NAME, \
                       k.ORDINAL_POSITION",
             (&object.database, &object.name),
         )
@@ -361,6 +371,8 @@ async fn key_constraints(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<Co
         let first = group[0];
         let (kind, definition) = match text(first, 1).as_deref() {
             Some("PRIMARY KEY") => (ConstraintKind::PrimaryKey, format!("PRIMARY KEY ({})", list(2))),
+            // SingleStore reports a columnstore's primary key as UNIQUE named PRIMARY.
+            Some("UNIQUE") if name == "PRIMARY" => (ConstraintKind::PrimaryKey, format!("PRIMARY KEY ({})", list(2))),
             Some("UNIQUE") => (ConstraintKind::Unique, format!("UNIQUE ({})", list(2))),
             _ => {
                 let target = ObjectRef::new(
@@ -421,11 +433,13 @@ struct IndexColumn {
     method: String,
 }
 
+/// SingleStore also lists each table's shard key, as `SHARD` rows; it is
+/// part of the table definition, not an index.
 async fn index_columns(conn: &mut Conn, object: &ObjectRef) -> DbResult<Vec<IndexColumn>> {
     let rows: Vec<Row> = conn
         .exec(
             "SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SUB_PART, COLLATION, INDEX_TYPE \
-             FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+             FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_TYPE <> 'SHARD' \
              ORDER BY INDEX_NAME <> 'PRIMARY', INDEX_NAME, SEQ_IN_INDEX",
             (&object.database, &object.name),
         )
@@ -471,6 +485,9 @@ fn indexes(object: &ObjectRef, columns: &[IndexColumn]) -> Vec<IndexInfo> {
             let primary = first.index == "PRIMARY";
             let definition = if primary {
                 format!("PRIMARY KEY ({keys})")
+            } else if first.method == "CLUSTERED COLUMNSTORE" {
+                // A SingleStore columnstore's sort order, fixed when the table is created.
+                format!("SORT KEY {} ({keys})", d.display_ident(&first.index))
             } else {
                 let kind = match first.method.as_str() {
                     "FULLTEXT" => "FULLTEXT ",
@@ -479,7 +496,8 @@ fn indexes(object: &ObjectRef, columns: &[IndexColumn]) -> Vec<IndexInfo> {
                     _ => "",
                 };
                 // BTREE is the default; FULLTEXT and SPATIAL are named in `kind`.
-                let using = if first.method == "HASH" { " USING HASH" } else { "" };
+                // SingleStore names columnstore hash indexes `COLUMNSTORE HASH`.
+                let using = if first.method.ends_with("HASH") { " USING HASH" } else { "" };
                 format!(
                     "CREATE {kind}INDEX {} ON {} ({keys}){using}",
                     d.display_ident(&first.index),
@@ -535,12 +553,16 @@ fn fk_rule(rule: Option<String>) -> Option<String> {
     rule.filter(|r| r != "RESTRICT" && r != "NO ACTION")
 }
 
-/// Foreign keys matching `predicate` over `k` (`KEY_COLUMN_USAGE`).
+/// Foreign keys matching `predicate` over `k` (`KEY_COLUMN_USAGE`); none where the server has none.
 async fn foreign_keys(
     conn: &mut Conn,
+    flavor: Flavor,
     predicate: &str,
     params: impl Into<mysql_async::Params> + Send,
 ) -> DbResult<Vec<ForeignKey>> {
+    if !flavor.has_foreign_keys() {
+        return Ok(Vec::new());
+    }
     let rows: Vec<Row> = conn
         .exec(
             format!(
@@ -577,16 +599,16 @@ async fn foreign_keys(
 }
 
 /// Foreign keys, view sources and triggers around a table or view.
-pub async fn dependencies(conn: &mut Conn, object: &ObjectRef) -> DbResult<Dependencies> {
+pub async fn dependencies(conn: &mut Conn, flavor: Flavor, object: &ObjectRef) -> DbResult<Dependencies> {
     if !object.kind.is_relation() {
         return Ok(Dependencies::default());
     }
     let key = (&object.database, &object.name);
     let mut deps = Dependencies::default();
-    for fk in foreign_keys(conn, "k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?", key).await? {
+    for fk in foreign_keys(conn, flavor, "k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ?", key).await? {
         deps.uses.push(Dependency { object: fk.target, relation: format!("foreign key {}", fk.name) });
     }
-    for fk in foreign_keys(conn, "k.REFERENCED_TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME = ?", key).await? {
+    for fk in foreign_keys(conn, flavor, "k.REFERENCED_TABLE_SCHEMA = ? AND k.REFERENCED_TABLE_NAME = ?", key).await? {
         deps.used_by.push(Dependency { object: fk.source, relation: format!("foreign key {}", fk.name) });
     }
     // VIEW_TABLE_USAGE exists on MySQL 8.0.13+; other servers simply show no view edges.
@@ -616,24 +638,31 @@ pub async fn dependencies(conn: &mut Conn, object: &ObjectRef) -> DbResult<Depen
         let o = ObjectRef::new(NodeKind::View, text(r, 0).unwrap_or_default(), None, text(r, 1).unwrap_or_default());
         deps.used_by.push(Dependency { object: o, relation: "view".into() });
     }
-    let triggers: Vec<Row> = conn
-        .exec(
-            "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ? \
-             ORDER BY TRIGGER_NAME",
-            key,
-        )
-        .await
-        .map_err(my)?;
-    for r in &triggers {
-        let o = ObjectRef::new(NodeKind::Trigger, object.database.clone(), None, text(r, 0).unwrap_or_default())
-            .with_parent(&object.name);
-        deps.used_by.push(Dependency { object: o, relation: "trigger".into() });
+    if flavor.has_triggers() {
+        for r in &trigger_rows(conn, object, "TRIGGER_NAME").await? {
+            let o = ObjectRef::new(NodeKind::Trigger, object.database.clone(), None, text(r, 0).unwrap_or_default())
+                .with_parent(&object.name);
+            deps.used_by.push(Dependency { object: o, relation: "trigger".into() });
+        }
     }
     Ok(deps)
 }
 
+/// Triggers on `table`, sorted by `order`.
+async fn trigger_rows(conn: &mut Conn, table: &ObjectRef, order: &str) -> DbResult<Vec<Row>> {
+    conn.exec(
+        format!(
+            "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS \
+             WHERE EVENT_OBJECT_SCHEMA = ? AND EVENT_OBJECT_TABLE = ? ORDER BY {order}"
+        ),
+        (&table.database, &table.name),
+    )
+    .await
+    .map_err(my)
+}
+
 /// Tables, columns and foreign keys of a database.
-pub async fn schema_model(conn: &mut Conn, database: &str) -> DbResult<SchemaModel> {
+pub async fn schema_model(conn: &mut Conn, flavor: Flavor, database: &str) -> DbResult<SchemaModel> {
     let rows: Vec<Row> = conn
         .exec(
             "SELECT c.TABLE_NAME, t.TABLE_TYPE, c.COLUMN_NAME, c.COLUMN_TYPE, c.IS_NULLABLE, c.COLUMN_KEY \
@@ -663,7 +692,7 @@ pub async fn schema_model(conn: &mut Conn, database: &str) -> DbResult<SchemaMod
     }
     model.truncated = model.tables.len() > SchemaModel::MAX_TABLES || rows.len() >= SchemaModel::MAX_COLUMNS;
     model.tables.truncate(SchemaModel::MAX_TABLES);
-    model.foreign_keys = foreign_keys(conn, "k.TABLE_SCHEMA = ?", (database,)).await?;
+    model.foreign_keys = foreign_keys(conn, flavor, "k.TABLE_SCHEMA = ?", (database,)).await?;
     Ok(model)
 }
 

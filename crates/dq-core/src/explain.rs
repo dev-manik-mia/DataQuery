@@ -52,6 +52,8 @@ pub enum ExplainDialect {
     Redshift,
     Mysql,
     Mariadb,
+    /// `EXPLAIN JSON`; measured plans come from `PROFILE` and then `SHOW PROFILE JSON`.
+    Singlestore,
 }
 
 impl ExplainDialect {
@@ -62,6 +64,7 @@ impl ExplainDialect {
             SqlFlavor::Postgres if version.starts_with("Amazon Redshift") => Some(Self::Redshift),
             SqlFlavor::Postgres => Some(Self::Postgres),
             SqlFlavor::Mysql if version.starts_with("MariaDB") => Some(Self::Mariadb),
+            SqlFlavor::Mysql if version.starts_with("SingleStore") => Some(Self::Singlestore),
             SqlFlavor::Mysql => Some(Self::Mysql),
             SqlFlavor::Sqlserver
             | SqlFlavor::Oracle
@@ -99,7 +102,15 @@ impl ExplainDialect {
             // MySQL measures only in its TREE format.
             (Self::Mysql, true) => format!("EXPLAIN ANALYZE {sql}"),
             (Self::Mariadb, true) => format!("ANALYZE FORMAT=JSON {sql}"),
+            (Self::Singlestore, false) => format!("EXPLAIN JSON {sql}"),
+            (Self::Singlestore, true) => format!("PROFILE {sql}"),
         }
+    }
+
+    /// A statement on the same connection that returns the plan, when
+    /// [`Self::statement`] itself returns the query's rows instead.
+    pub fn plan_statement(self, analyze: bool) -> Option<&'static str> {
+        (self == Self::Singlestore && analyze).then_some("SHOW PROFILE JSON")
     }
 
     pub fn parse(self, raw: String, analyzed: bool) -> DbResult<ExplainResult> {
@@ -125,7 +136,7 @@ impl ExplainDialect {
                     analyzed,
                 }
             }
-            Self::Cockroach | Self::Redshift | Self::Mysql | Self::Mariadb => ExplainResult {
+            Self::Cockroach | Self::Redshift | Self::Mysql | Self::Mariadb | Self::Singlestore => ExplainResult {
                 plan: Some(generic_node("query", &json)),
                 planning_ms: None,
                 execution_ms: None,
@@ -415,6 +426,13 @@ mod tests {
         assert_eq!(ExplainDialect::Mysql.statement("select 1", true), "EXPLAIN ANALYZE select 1");
         assert_eq!(ExplainDialect::Mariadb.statement("select 1", true), "ANALYZE FORMAT=JSON select 1");
         assert_eq!(ExplainDialect::new(SqlFlavor::Mysql, "MariaDB 11.4.2"), Some(ExplainDialect::Mariadb));
+        let s2 = ExplainDialect::new(SqlFlavor::Mysql, "SingleStore 8.9.3").unwrap();
+        assert_eq!((s2.statement("select 1", false), s2.plan_statement(false)), ("EXPLAIN JSON select 1".into(), None));
+        assert_eq!(
+            (s2.statement("select 1", true), s2.plan_statement(true)),
+            ("PROFILE select 1".into(), Some("SHOW PROFILE JSON"))
+        );
+        assert_eq!(ExplainDialect::Mysql.plan_statement(true), None);
         assert_eq!(ExplainDialect::new(SqlFlavor::Postgres, "CockroachDB 25.2.1"), Some(ExplainDialect::Cockroach));
         assert_eq!(ExplainDialect::new(SqlFlavor::Sqlserver, "SQL Server 2022"), None);
         let redshift = ExplainDialect::new(SqlFlavor::Postgres, "Amazon Redshift 1.0.12103").unwrap();

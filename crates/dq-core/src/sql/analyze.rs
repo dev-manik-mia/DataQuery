@@ -336,7 +336,7 @@ impl Block {
             }
             return;
         }
-        if flavor != SqlFlavor::Sqlserver {
+        if flavor != SqlFlavor::Sqlserver && flavor != SqlFlavor::Mysql {
             return;
         }
         let next = tokens[i + 1..]
@@ -344,6 +344,10 @@ impl Block {
             .find(|t| !t.is_trivia())
             .filter(|t| t.kind == TokenKind::Word)
             .map(|t| t.text(src).to_ascii_uppercase());
+        if flavor == SqlFlavor::Mysql {
+            self.observe_compound(tokens[..i].iter().rev().find(|t| !t.is_trivia()).map(|t| t.text(src)), &word, next);
+            return;
+        }
         match word.as_str() {
             "BEGIN"
                 if !matches!(
@@ -361,6 +365,30 @@ impl Block {
 }
 
 impl Block {
+    /// MySQL `CREATE PROCEDURE | FUNCTION | TRIGGER | EVENT … BEGIN stmt; …; END`
+    /// and `SingleStore`'s `… AS BEGIN … END`. `CASE … END [CASE]` nests; `END IF`,
+    /// `END LOOP`, `END WHILE` and `END REPEAT` close no `BEGIN`.
+    fn observe_compound(&mut self, previous: Option<&str>, word: &str, next: Option<String>) {
+        let kind = self
+            .head
+            .iter()
+            .skip(1)
+            .find(|w| !matches!(w.as_str(), "OR" | "REPLACE" | "DEFINER" | "CURRENT_USER" | "AGGREGATE"));
+        let compound = self.head.first().is_some_and(|w| w == "CREATE")
+            && kind.is_some_and(|w| matches!(w.as_str(), "PROCEDURE" | "FUNCTION" | "TRIGGER" | "EVENT"));
+        if !compound {
+            return;
+        }
+        match word {
+            "CASE" if previous.is_some_and(|p| p.eq_ignore_ascii_case("END")) => {}
+            "BEGIN" | "CASE" => self.depth += 1,
+            "END" if !matches!(next.as_deref(), Some("IF" | "LOOP" | "WHILE" | "REPEAT")) => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
     /// Snowflake Scripting: `DECLARE … BEGIN … END` and `BEGIN … END` blocks.
     /// `BEGIN` alone or with `TRANSACTION` / `WORK` / `NAME` starts a transaction instead.
     fn observe_scripting(&mut self, src: &str, tokens: &[Token], i: usize, word: &str) {
@@ -811,6 +839,21 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0].text(src), "select 1");
         assert_eq!(parts[1].text(src), "select ';'");
+    }
+
+    #[test]
+    fn mysql_and_singlestore_routine_bodies() {
+        let src = "CREATE PROCEDURE p() BEGIN\n  IF 1 THEN SELECT 1; END IF;\n  CASE x WHEN 1 THEN SELECT 2; END CASE;\n  SELECT CASE WHEN a THEN 1 END;\nEND;\n\
+                   CREATE OR REPLACE FUNCTION f(a INT) RETURNS INT AS BEGIN RETURN a * 2; END;\n\
+                   CREATE TABLE event (id INT);\nBEGIN;\nCREATE FUNCTION g() RETURNS INT RETURN 1;\nSELECT 1";
+        let parts: Vec<_> = split_statements(src, MY).iter().map(|p| p.text(src).to_owned()).collect();
+        assert_eq!(parts.len(), 6, "{parts:?}");
+        assert!(parts[0].starts_with("CREATE PROCEDURE") && parts[0].ends_with("END"), "{parts:?}");
+        assert!(parts[1].ends_with("RETURN a * 2; END"), "{parts:?}");
+        assert_eq!(
+            &parts[2..],
+            ["CREATE TABLE event (id INT)", "BEGIN", "CREATE FUNCTION g() RETURNS INT RETURN 1", "SELECT 1"]
+        );
     }
 
     #[test]

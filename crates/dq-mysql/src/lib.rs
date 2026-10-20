@@ -1,4 +1,4 @@
-//! MySQL (5.7–8.4) and MariaDB (10.6–11) adapter for DataQuery.
+//! MySQL (5.7–8.4), MariaDB (10.6–11) and SingleStore (8–9) adapter for DataQuery.
 //!
 //! MySQL has no schemas: a database is the container for tables and views, so
 //! the explorer goes database → tables / views.
@@ -21,7 +21,7 @@ use dq_core::result::ServerInfo;
 
 pub use session::MySession;
 
-/// One adapter serves both engines; the server family is detected on connect.
+/// One adapter serves the MySQL-protocol engines; the server family is detected on connect.
 #[derive(Debug, Clone, Copy)]
 pub struct MysqlAdapter {
     engine: Engine,
@@ -30,6 +30,7 @@ pub struct MysqlAdapter {
 impl MysqlAdapter {
     pub const MYSQL: Self = Self { engine: Engine::Mysql };
     pub const MARIADB: Self = Self { engine: Engine::Mariadb };
+    pub const SINGLESTORE: Self = Self { engine: Engine::Singlestore };
 
     pub const CAPABILITIES: Capabilities = Capabilities {
         explorer: true,

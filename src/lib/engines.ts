@@ -8,6 +8,7 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
   switch (engine) {
     case 'mysql':
     case 'mariadb':
+    case 'singlestore':
       return 'mysql';
     case 'sqlserver':
       return 'sqlserver';
@@ -191,6 +192,7 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: 'postgres', username: 'postgres' };
     case 'mysql':
     case 'mariadb':
+    case 'singlestore':
       return { database: '', username: 'root' };
     case 'cockroachdb':
       return { database: 'defaultdb', username: 'root' };
