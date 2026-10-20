@@ -22,6 +22,7 @@ import {
 } from '@/components/ui';
 import { exportConnections, importConnections } from '@/features/connections/transfer';
 import { ImportAppsDialog } from '@/features/connections/ImportAppsDialog';
+import { connectionAddress } from '@/lib/engines';
 import { formatCount, formatDuration, formatRelative, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
@@ -141,7 +142,7 @@ export function ConnectionsHome() {
 
         {failed && connectError && (
           <div>
-            <ErrorAlert error={connectError} title={`Could not connect to ${failed.config.host}:${failed.config.port}`} />
+            <ErrorAlert error={connectError} title={`Could not connect to ${connectionAddress(failed.config)}`} />
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <Button size="sm" onClick={() => void open(failed)}>
                 Try again
@@ -212,13 +213,13 @@ export function ConnectionsHome() {
                             <Icon name="star" filled={c.favorite} />
                           </button>
                           {engine ? <EngineMark engine={engine} /> : <span />}
-                          <span className={`${styles.name} ellipsis`} title={`${c.name} · ${c.config.host}:${c.config.port}${c.config.database ? `/${c.config.database}` : ''}`}>
+                          <span className={`${styles.name} ellipsis`} title={`${c.name} · ${connectionAddress(c.config)}`}>
                             {c.name}
                           </span>
                           <span>
                             <EnvironmentChip environment={c.environment} />
                           </span>
-                          <span className={`${styles.address} ellipsis`}>{`${c.config.host}:${c.config.port}${c.config.database ? `/${c.config.database}` : ''}`}</span>
+                          <span className={`${styles.address} ellipsis`}>{connectionAddress(c.config)}</span>
                           <span className={styles.lastUsed}>{formatRelative(c.last_used_at)}</span>
                           <span className={styles.connect}>
                             {connectingId === c.id ? (

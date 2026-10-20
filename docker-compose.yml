@@ -240,6 +240,13 @@ services:
       SQLD_AUTH_JWT_KEY: pgDGrptawVYE-009MvmoJaTmQi5uCtQH6iq5kRiDF0Q
     ports: ["58080:8080"]
 
+  # BigQuery emulator (REST API v2 on ZetaSQL and SQLite), without authentication.
+  bigquery:
+    profiles: ["bigquery"]
+    image: ghcr.io/goccy/bigquery-emulator:0.8.1
+    command: ["--project=dataquery-test", "--port=9050"]
+    ports: ["59050:9050"]
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

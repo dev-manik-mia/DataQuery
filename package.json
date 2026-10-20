@@ -27,7 +27,9 @@
     "test:integration:search": "DATAQUERY_TEST_ELASTICSEARCH=localhost:59200 DATAQUERY_TEST_NEO4J=localhost:57474 cargo test -p dq-elasticsearch -p dq-neo4j",
     "db:up:libsql": "docker compose -p dataquery --profile libsql up -d libsql",
     "test:integration:libsql": "DATAQUERY_TEST_LIBSQL=http://localhost:58080 DATAQUERY_TEST_LIBSQL_TOKEN=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3MDAwMDAwMDB9.VxCkNNdLE85vovpPKumlDXbLYFbMcbjragQM4ByCNDwyDufwJm2RvhK-LwvYGF02vS3bAEwCxKV1seyYjD6_Dw cargo test -p dq-sqlite-http",
-    "db:down": "docker compose -p dataquery --profile wide --profile search --profile libsql down -v"
+    "db:up:bigquery": "docker compose -p dataquery --profile bigquery up -d bigquery",
+    "test:integration:bigquery": "DATAQUERY_TEST_BIGQUERY=http://localhost:59050 cargo test -p dq-bigquery --test bigquery -- --test-threads=1",
+    "db:down": "docker compose -p dataquery --profile wide --profile search --profile libsql --profile bigquery down -v"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",

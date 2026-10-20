@@ -162,6 +162,7 @@ pub fn prepare(
         SqlFlavor::Duckdb => "DuckDB SQL",
         SqlFlavor::Sqlite => "SQLite",
         SqlFlavor::Snowflake => "Snowflake SQL",
+        SqlFlavor::Bigquery => "BigQuery GoogleSQL (backtick `project.dataset.table` names)",
         SqlFlavor::Mongodb => "MongoDB shell (mongosh) syntax, e.g. db.orders.find({ … })",
         SqlFlavor::Partiql => "DynamoDB PartiQL",
         SqlFlavor::Redis => "Redis commands (one per line, redis-cli syntax)",

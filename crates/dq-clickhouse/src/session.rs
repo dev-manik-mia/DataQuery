@@ -14,7 +14,7 @@ use dq_core::explain::{ExplainDialect, ExplainResult};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
-use dq_core::sql::{ClickhouseDialect, Dialect, SqlFlavor, StatementKind, analyze, command_tag, named_params};
+use dq_core::sql::{ClickhouseDialect, Dialect, SqlFlavor, StatementKind, analyze, bind_named, command_tag};
 use dq_core::value::{Cell, CellLimits};
 use dq_core::{DbError, DbResult, ErrorKind};
 use tokio::sync::Mutex;
@@ -44,21 +44,7 @@ struct Cursor {
 /// Binds values to `{name:Type}` parameters: `p1`, `p2`, … by number (as
 /// generated SQL names them), any other names in order of first appearance.
 pub fn bind(sql: &str, values: Params<'_>) -> DbResult<Vec<(String, Option<String>)>> {
-    let names = named_params(sql, SqlFlavor::Clickhouse);
-    if names.len() != values.len() {
-        return Err(DbError::invalid(format!(
-            "The statement has {} parameter(s) but {} value(s) were given.",
-            names.len(),
-            values.len()
-        )));
-    }
-    let numbered = |n: &String| {
-        n.strip_prefix('p').and_then(|d| d.parse::<usize>().ok()).filter(|i| (1..=values.len()).contains(i))
-    };
-    if names.iter().all(|n| numbered(n).is_some()) {
-        return Ok(names.iter().map(|n| (n.clone(), values[numbered(n).unwrap_or(1) - 1].clone())).collect());
-    }
-    Ok(names.into_iter().zip(values.iter().cloned()).collect())
+    bind_named(sql, SqlFlavor::Clickhouse, values)
 }
 
 /// Reads up to `limit` rows, then one more to learn whether more exist.

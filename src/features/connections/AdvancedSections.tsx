@@ -45,8 +45,22 @@ const DYNAMODB_AUTH_OPTIONS: { value: AuthKind; label: string }[] = [
   { value: 'aws_iam', label: 'AWS CLI profile (SSO, assumed roles)' },
 ];
 
+/** BigQuery takes OAuth tokens: from a key file, or from the Google Cloud CLI (renewed while connected). */
+const BIGQUERY_AUTH_OPTIONS: { value: AuthKind; label: string }[] = [
+  { value: 'password', label: 'Service account key (JSON file)' },
+  { value: 'gcp_iam', label: 'Google Cloud CLI (gcloud auth login)' },
+];
+
+/** Engines whose credentials are not a password, with how each option works. */
+const ENGINE_AUTH: Partial<Record<Engine, { options: { value: AuthKind; label: string }[]; cliHint: string }>> = {
+  dynamodb: { options: DYNAMODB_AUTH_OPTIONS, cliHint: 'Credentials come from `aws configure export-credentials` on every connect. They are never stored.' },
+  bigquery: { options: BIGQUERY_AUTH_OPTIONS, cliHint: 'Tokens come from `gcloud auth print-access-token` and are renewed while connected. They are never stored.' },
+};
+
+const CLI_TOKEN_HINT = 'A short-lived token is requested from the provider CLI on every connect and used as the password. It is never stored. TLS is required.';
+
 function authOptions(engine: Engine) {
-  return engine === 'dynamodb' ? DYNAMODB_AUTH_OPTIONS : AUTH_OPTIONS;
+  return ENGINE_AUTH[engine]?.options ?? AUTH_OPTIONS;
 }
 
 export function authSummary(auth: AuthMethod, engine: Engine): string {
@@ -67,13 +81,7 @@ export function AuthFields({ auth, engine, onChange }: { auth: AuthMethod; engin
         value={auth.method}
         onChange={(e) => select(e.target.value as AuthKind)}
         options={authOptions(engine)}
-        hint={
-          auth.method === 'password'
-            ? undefined
-            : dynamodb
-              ? 'Credentials come from `aws configure export-credentials` on every connect. They are never stored.'
-              : 'A short-lived token is requested from the provider CLI on every connect and used as the password. It is never stored. TLS is required.'
-        }
+        hint={auth.method === 'password' ? undefined : (ENGINE_AUTH[engine]?.cliHint ?? CLI_TOKEN_HINT)}
       />
       {auth.method === 'aws_iam' && (
         <>

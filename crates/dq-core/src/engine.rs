@@ -19,6 +19,7 @@ pub enum Engine {
     Clickhouse,
     Duckdb,
     Snowflake,
+    Bigquery,
     Redis,
     Valkey,
     Dragonfly,
@@ -280,6 +281,18 @@ const SPECS: &[Spec] = &[
         P::P2,
     ),
     spec(
+        Engine::Bigquery,
+        "BigQuery",
+        "Bq",
+        235,
+        G::Analytical,
+        "GoogleSQL",
+        None,
+        "HTTPS · GoogleSQL",
+        "Google Cloud warehouse · REST API v2",
+        P::P2,
+    ),
+    spec(
         Engine::Redis,
         "Redis",
         "Rd",
@@ -449,11 +462,11 @@ impl Engine {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
     }
 
-    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`), a
-    /// mock of the documented API (Cloudflare D1) or unit tests (Redshift cannot run
-    /// locally), never a real account; the engine picker labels them "Beta".
+    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`,
+    /// `bigquery-emulator`), a mock of the documented API (Cloudflare D1) or unit tests
+    /// (Redshift cannot run locally), never a real account; the engine picker labels them "Beta".
     pub fn is_beta(self) -> bool {
-        matches!(self, Self::Snowflake | Self::Dynamodb | Self::D1 | Self::Redshift)
+        matches!(self, Self::Snowflake | Self::Dynamodb | Self::D1 | Self::Redshift | Self::Bigquery)
     }
 
     /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.

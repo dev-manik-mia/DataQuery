@@ -2,48 +2,18 @@
 //! handle credential chains, SSO and MFA; DataQuery only runs them and uses the
 //! token as the password for this connection attempt. Tokens are never stored.
 
-use std::path::PathBuf;
-use std::time::Duration;
-
+use dq_core::DbResult;
 use dq_core::config::{AuthMethod, ConnConfig};
 use dq_core::engine::Engine;
-use dq_core::programs;
-use dq_core::{DbError, DbResult, ErrorKind};
-
-const CLI_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// The CLI `name` on `PATH`, in the usual install directories or in the Google Cloud SDK.
-fn find_cli(name: &str) -> Option<PathBuf> {
-    let sdk = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("google-cloud-sdk/bin"));
-    programs::find(&programs::search_path(sdk), name)
-}
-
-async fn run(cli: &str, args: &[&str], install_hint: &str) -> DbResult<String> {
-    let path = find_cli(cli).ok_or_else(|| {
-        DbError::new(ErrorKind::Auth, format!("The `{cli}` command was not found.")).with_action(Some(install_hint))
-    })?;
-    let output = tokio::time::timeout(CLI_TIMEOUT, programs::command(&path).args(args).output())
-        .await
-        .map_err(|_| DbError::new(ErrorKind::Timeout, format!("`{cli}` did not answer within 60 seconds.")))?
-        .map_err(|e| DbError::new(ErrorKind::Auth, format!("Cannot run `{cli}`: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let first = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("no error output");
-        return Err(DbError::new(ErrorKind::Auth, format!("`{cli}` failed: {first}"))
-            .with_action(Some(format!("Sign in with the {cli} CLI, then connect again."))));
-    }
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if token.is_empty() {
-        return Err(DbError::new(ErrorKind::Auth, format!("`{cli}` returned no token.")));
-    }
-    Ok(token)
-}
+use dq_core::programs::cloud_cli_token as run;
 
 /// The password to use for `config`: a fresh token for cloud IAM, else `saved`.
 pub async fn password(config: &ConnConfig, saved: Option<String>) -> DbResult<Option<String>> {
     let port = config.port.to_string();
     Ok(Some(match &config.auth {
         AuthMethod::Password => return Ok(saved),
+        // BigQuery sessions outlive a token: the adapter runs `gcloud` itself and refreshes.
+        AuthMethod::GcpIam if config.engine == Engine::Bigquery => return Ok(None),
         // DynamoDB signs every request itself: it needs the profile's credentials,
         // passed to the adapter as the CLI's credential-process JSON.
         AuthMethod::AwsIam { profile, .. } if config.engine == Engine::Dynamodb => {

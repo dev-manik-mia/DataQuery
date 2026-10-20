@@ -22,6 +22,7 @@ dq-sqlite = { path = "crates/dq-sqlite" }
 dq-sqlite-http = { path = "crates/dq-sqlite-http" }
 dq-clickhouse = { path = "crates/dq-clickhouse" }
 dq-snowflake = { path = "crates/dq-snowflake" }
+dq-bigquery = { path = "crates/dq-bigquery" }
 dq-mongodb = { path = "crates/dq-mongodb" }
 dq-dynamodb = { path = "crates/dq-dynamodb" }
 dq-redis = { path = "crates/dq-redis" }

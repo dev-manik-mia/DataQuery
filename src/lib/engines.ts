@@ -23,6 +23,8 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
       return 'sqlite';
     case 'snowflake':
       return 'snowflake';
+    case 'bigquery':
+      return 'bigquery';
     case 'mongodb':
       return 'mongodb';
     case 'dynamodb':
@@ -81,6 +83,9 @@ export function placeholderLabel(flavor: SqlFlavor, n: number): string {
     case 'clickhouse':
       // Named `{name:Type}` parameters take values in order of first appearance.
       return `{…} #${n}`;
+    case 'bigquery':
+      // `@name` parameters in order of first appearance, or positional `?`.
+      return `@… #${n}`;
     default:
       return `?${n}`;
   }
@@ -94,7 +99,20 @@ export function databaseLabel(engine: Engine): string {
   if (engine === 'redis' || engine === 'valkey' || engine === 'dragonfly') return 'Database number';
   if (engine === 'cassandra' || engine === 'scylladb') return 'Keyspace';
   if (engine === 'd1') return 'Database ID or name';
+  if (engine === 'bigquery') return 'Project ID';
   return 'Database';
+}
+
+/** Engines reached through a cloud API with their own credentials: no host, port, user, password, TLS files or SSH. */
+const API_ENGINES: Engine[] = ['bigquery'];
+
+export function connectsByApi(engine: Engine): boolean {
+  return API_ENGINES.includes(engine);
+}
+
+/** `host:port/database`, or just the database (file, cloud project) where there is no host. */
+export function connectionAddress(config: Pick<ConnConfig, 'host' | 'port' | 'database'>): string {
+  return config.host ? `${config.host}:${config.port}${config.database ? `/${config.database}` : ''}` : config.database;
 }
 
 /** Label, hint and placeholder of the host field. */
@@ -156,7 +174,7 @@ export function credentialLabels(engine: Engine): { username: string; password: 
  * and Cloudflare D1 are cloud services with public certificates, so they keep full verification.
  */
 export function defaultSslMode(engine: Engine): SslMode {
-  return ['snowflake', 'redshift', 'libsql', 'd1'].includes(engine) ? 'verify-full' : 'disable';
+  return ['snowflake', 'redshift', 'libsql', 'd1'].includes(engine) || connectsByApi(engine) ? 'verify-full' : 'disable';
 }
 
 /** Engines that offer cloud IAM sign-in (provider CLI tokens) besides a password. */
@@ -269,6 +287,7 @@ export function sslModeLabel(engine: Engine, mode: SslMode): string {
       return ORACLE_SSL_LABELS[mode];
     case 'clickhouse':
     case 'snowflake':
+    case 'bigquery':
     case 'partiql':
     case 'query_dsl':
       return HTTPS_SSL_LABELS[mode];
