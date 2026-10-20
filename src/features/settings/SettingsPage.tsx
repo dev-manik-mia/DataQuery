@@ -504,6 +504,7 @@ const NO_BACKUP: Partial<Record<Engine, string>> = {
   clickhouse: `Backups (the BACKUP statement, to server disks or object storage) ${SERVER_SIDE}`,
   duckdb: 'Copy the database file, or run EXPORT DATABASE in the editor.',
   snowflake: 'Snowflake keeps history with Time Travel and zero-copy clones; there is no dump tool.',
+  vertica: `Backups (vbr, on the cluster's nodes) ${SERVER_SIDE}`,
   redis: SNAPSHOTS,
   valkey: SNAPSHOTS,
   dragonfly: SNAPSHOTS,

@@ -75,6 +75,7 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
         }
         SqlFlavor::Sqlite => Some("SQLite has no TRUNCATE: every row is deleted with DELETE."),
         SqlFlavor::Cql => Some("Every node of the cluster must be up."),
+        SqlFlavor::Vertica => Some("TRUNCATE commits the open transaction at once."),
         SqlFlavor::Clickhouse | SqlFlavor::Snowflake | SqlFlavor::Duckdb | SqlFlavor::Oracle | SqlFlavor::Postgres => {
             None
         }
@@ -105,6 +106,9 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
         SqlFlavor::Snowflake => {
             ActionSupport::yes(Some("With rows: a zero-copy CLONE. Structure only: CREATE TABLE … LIKE."))
         }
+        SqlFlavor::Vertica => ActionSupport::yes(Some(
+            "Copies columns, defaults, constraints and projections (CREATE TABLE … LIKE … INCLUDING PROJECTIONS).",
+        )),
         SqlFlavor::Sqlite | SqlFlavor::Duckdb => ActionSupport::yes(Some(
             "Copies the table definition (columns, keys, constraints, defaults). Indexes and triggers are not copied.",
         )),
@@ -320,6 +324,13 @@ pub(super) fn duplicate(
         }
         SqlFlavor::Snowflake => {
             vec![format!("CREATE TABLE {copy} {} {source}", if with_data { "CLONE" } else { "LIKE" })]
+        }
+        SqlFlavor::Vertica => {
+            let mut out = vec![format!("CREATE TABLE {copy} LIKE {source} INCLUDING PROJECTIONS")];
+            if with_data {
+                out.push(format!("INSERT INTO {copy} SELECT * FROM {source}"));
+            }
+            out
         }
         SqlFlavor::Sqlite | SqlFlavor::Duckdb => {
             let definition =

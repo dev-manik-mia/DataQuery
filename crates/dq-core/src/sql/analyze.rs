@@ -156,6 +156,14 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             }
             _ => TxEffect::None,
         },
+        SqlFlavor::Vertica => match word(0) {
+            "BEGIN" | "START" => TxEffect::Begin,
+            "ROLLBACK" if word(1) == "TO" => TxEffect::RollbackToSavepoint,
+            // DDL commits the open transaction.
+            "COMMIT" | "ROLLBACK" | "END" | "ABORT" | "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "GRANT" | "REVOKE"
+            | "COMMENT" => TxEffect::End,
+            _ => TxEffect::None,
+        },
         SqlFlavor::Cypher => match word(0) {
             "BEGIN" => TxEffect::Begin,
             "COMMIT" | "ROLLBACK" => TxEffect::End,
@@ -400,6 +408,7 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
         | SqlFlavor::Duckdb
         | SqlFlavor::Sqlite
         | SqlFlavor::Snowflake
+        | SqlFlavor::Vertica
         | SqlFlavor::Mongodb
         | SqlFlavor::Partiql
         | SqlFlavor::Redis
@@ -909,6 +918,18 @@ mod tests {
         assert_eq!(analyze(sql, CH).unwrap().param_count, 2);
         assert_eq!(named_params(sql, CH), ["a", "b"]);
         assert_eq!(transaction_effect("BEGIN TRANSACTION", SqlFlavor::Duckdb), TxEffect::Begin);
+    }
+
+    #[test]
+    fn vertica_parameters_strings_and_ddl_commits() {
+        const VT: SqlFlavor = SqlFlavor::Vertica;
+        let info = analyze("SELECT ?, E'it\\'s ?', $$ ; ? $$ FROM t WHERE a = ?", VT).unwrap();
+        assert_eq!(info.param_count, 2);
+        assert_eq!(texts("SELECT $$;$$; SELECT 2", VT), vec!["SELECT $$;$$", "SELECT 2"]);
+        assert_eq!(transaction_effect("BEGIN", VT), TxEffect::Begin);
+        assert_eq!(transaction_effect("TRUNCATE TABLE t", VT), TxEffect::End);
+        assert_eq!(transaction_effect("ROLLBACK TO SAVEPOINT s", VT), TxEffect::RollbackToSavepoint);
+        assert_eq!(transaction_effect("INSERT INTO t VALUES (1)", VT), TxEffect::None);
     }
 
     #[test]

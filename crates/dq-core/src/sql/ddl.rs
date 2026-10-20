@@ -165,7 +165,9 @@ impl SchemaChange {
                 matches!(flavor, SqlFlavor::Mysql | SqlFlavor::Sqlserver | SqlFlavor::Clickhouse)
                     && (data_type.is_some() || nullable.is_some())
             }
-            Self::DuplicateTable { .. } => !matches!(flavor, SqlFlavor::Clickhouse | SqlFlavor::Snowflake),
+            Self::DuplicateTable { .. } => {
+                !matches!(flavor, SqlFlavor::Clickhouse | SqlFlavor::Snowflake | SqlFlavor::Vertica)
+            }
             _ => false,
         }
     }
@@ -272,15 +274,25 @@ fn column_def(d: &dyn Dialect, c: &ColumnDef) -> DbResult<String> {
         return Err(DbError::unsupported("Cassandra columns have no defaults."));
     }
     let data_type = if clickhouse { clickhouse_type(&data_type, c.nullable) } else { data_type };
-    let mut out = format!("{} {data_type}", d.quote_ident(&c.name));
+    let mut out = d.quote_ident(&c.name);
+    let default = c.default.as_deref().filter(|d| !d.trim().is_empty());
     if c.identity {
         let identity = d
             .identity_clause()
             .ok_or_else(|| DbError::unsupported("This engine has no identity columns; use a sequence or a default."))?;
-        out.push_str(identity);
+        if d.identity_replaces_type() {
+            if default.is_some() {
+                return Err(DbError::unsupported("An identity column numbers itself; it cannot have a default."));
+            }
+            out.push_str(identity);
+        } else {
+            let _ = write!(out, " {data_type}{identity}");
+        }
+    } else {
+        let _ = write!(out, " {data_type}");
     }
     // Oracle needs DEFAULT before constraints; every engine accepts that order.
-    if let Some(default) = c.default.as_deref().filter(|d| !d.trim().is_empty()) {
+    if let Some(default) = default {
         let _ = write!(out, " DEFAULT {}", expression(d, default, "default")?);
     }
     // ClickHouse spells it with `Nullable(…)`; CQL has no NOT NULL (key columns are never null).
@@ -423,12 +435,13 @@ fn alter_column(
             }
             out
         }
-        SqlFlavor::Duckdb => {
-            // One change per statement: DuckDB alters a column one property at a time.
+        SqlFlavor::Duckdb | SqlFlavor::Vertica => {
+            // One change per statement: DuckDB and Vertica alter a column one property at a time.
             let mut out = Vec::new();
             if let Some(t) = data_type {
                 let t = validate_type(d, t)?;
-                out.push(alter(format!("ALTER COLUMN {col} TYPE {t}")));
+                let set_type = if d.flavor() == SqlFlavor::Vertica { "SET DATA TYPE" } else { "TYPE" };
+                out.push(alter(format!("ALTER COLUMN {col} {set_type} {t}")));
             }
             if let Some(n) = nullable {
                 out.push(alter(format!("ALTER COLUMN {col} {} NOT NULL", if n { "DROP" } else { "SET" })));
@@ -584,7 +597,9 @@ pub fn statements_with(
                 _ => "TABLE",
             };
             let cascade = match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Duckdb | SqlFlavor::Snowflake if *cascade => " CASCADE",
+                SqlFlavor::Postgres | SqlFlavor::Duckdb | SqlFlavor::Snowflake | SqlFlavor::Vertica if *cascade => {
+                    " CASCADE"
+                }
                 SqlFlavor::Oracle if *cascade && what == "TABLE" => " CASCADE CONSTRAINTS",
                 _ => "",
             };
@@ -593,7 +608,11 @@ pub fn statements_with(
         SchemaChange::RenameTable { table: t, new_name } => {
             name(new_name, "The new name")?;
             match flavor {
-                SqlFlavor::Postgres | SqlFlavor::Oracle | SqlFlavor::Duckdb | SqlFlavor::Sqlite => {
+                SqlFlavor::Postgres
+                | SqlFlavor::Oracle
+                | SqlFlavor::Duckdb
+                | SqlFlavor::Sqlite
+                | SqlFlavor::Vertica => {
                     vec![alter(format!("RENAME TO {}", d.quote_ident(new_name)))]
                 }
                 // An unqualified new name would move the table to the current schema.
@@ -627,6 +646,7 @@ pub fn statements_with(
                 | SqlFlavor::Duckdb
                 | SqlFlavor::Sqlite
                 | SqlFlavor::Snowflake
+                | SqlFlavor::Vertica
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
                 | SqlFlavor::Redis
@@ -656,10 +676,10 @@ pub fn statements_with(
             alter_column(d, t, column, data_type.as_deref(), *nullable, default.as_ref(), structure)?
         }
         SchemaChange::CreateIndex { .. } | SchemaChange::DropIndex { .. }
-            if matches!(flavor, SqlFlavor::Clickhouse | SqlFlavor::Snowflake) =>
+            if matches!(flavor, SqlFlavor::Clickhouse | SqlFlavor::Snowflake | SqlFlavor::Vertica) =>
         {
             return Err(DbError::unsupported(
-                "This engine has no ordinary indexes (ClickHouse sorts by its ORDER BY key; Snowflake clusters automatically).",
+                "This engine has no ordinary indexes (ClickHouse sorts by its ORDER BY key; Snowflake clusters automatically; Vertica sorts and segments its projections).",
             ));
         }
         SchemaChange::AddForeignKey { .. } | SchemaChange::AddUnique { .. } if flavor == SqlFlavor::Clickhouse => {
@@ -699,6 +719,7 @@ pub fn statements_with(
                 SqlFlavor::Mysql
                 | SqlFlavor::Sqlserver
                 | SqlFlavor::Clickhouse
+                | SqlFlavor::Vertica
                 | SqlFlavor::Mongodb
                 | SqlFlavor::Partiql
                 | SqlFlavor::Redis
@@ -716,6 +737,11 @@ pub fn statements_with(
             }
             if flavor == SqlFlavor::Oracle && on_update.as_deref().is_some_and(|u| !u.trim().is_empty()) {
                 return Err(DbError::unsupported("Oracle foreign keys have no ON UPDATE action."));
+            }
+            if flavor == SqlFlavor::Vertica
+                && [on_delete, on_update].iter().any(|a| a.as_deref().is_some_and(|a| !a.trim().is_empty()))
+            {
+                return Err(DbError::unsupported("Vertica foreign keys have no ON DELETE or ON UPDATE actions."));
             }
             vec![alter(format!(
                 "ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}){}{}",
@@ -1101,6 +1127,50 @@ mod tests {
         assert_eq!(
             statements(&SnowflakeDialect, &rename, None).unwrap(),
             ["ALTER TABLE \"DB\".\"PUBLIC\".\"ORDERS\" RENAME TO \"DB\".\"PUBLIC\".\"BILLS\""]
+        );
+    }
+
+    #[test]
+    fn vertica_changes() {
+        use crate::sql::dialect::VerticaDialect;
+        let d = VerticaDialect;
+        let t = ObjectRef::new(NodeKind::Table, "vdb", Some("public".into()), "orders");
+        let create = SchemaChange::CreateTable {
+            table: t.clone(),
+            columns: vec![
+                ColumnDef { nullable: false, identity: true, ..col("id", "INT") },
+                col("note", "VARCHAR(20)"),
+            ],
+            primary_key: vec!["id".into()],
+        };
+        assert_eq!(
+            statements(&d, &create, None).unwrap(),
+            [
+                "CREATE TABLE \"public\".\"orders\" (\n  \"id\" IDENTITY(1,1) NOT NULL,\n  \"note\" VARCHAR(20),\n  PRIMARY KEY (\"id\")\n)"
+            ]
+        );
+        let alter = SchemaChange::AlterColumn {
+            table: t.clone(),
+            column: "note".into(),
+            data_type: Some("VARCHAR(40)".into()),
+            nullable: Some(false),
+            default: Some(DefaultChange::Drop),
+        };
+        assert_eq!(
+            statements(&d, &alter, None).unwrap(),
+            [
+                "ALTER TABLE \"public\".\"orders\" ALTER COLUMN \"note\" SET DATA TYPE VARCHAR(40)",
+                "ALTER TABLE \"public\".\"orders\" ALTER COLUMN \"note\" SET NOT NULL",
+                "ALTER TABLE \"public\".\"orders\" ALTER COLUMN \"note\" DROP DEFAULT",
+            ]
+        );
+        let index = SchemaChange::CreateIndex { table: t.clone(), name: "i".into(), columns: vec![], unique: false };
+        assert_eq!(statements(&d, &index, None).unwrap_err().kind, crate::ErrorKind::Unsupported);
+        let copy = SchemaChange::DuplicateTable { table: t, new_name: "orders_copy".into(), with_data: true };
+        assert!(!copy.needs_structure(SqlFlavor::Vertica));
+        assert_eq!(
+            statements(&d, &copy, None).unwrap()[0],
+            "CREATE TABLE \"public\".\"orders_copy\" LIKE \"public\".\"orders\" INCLUDING PROJECTIONS"
         );
     }
 

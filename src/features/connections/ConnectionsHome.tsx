@@ -155,7 +155,7 @@ export function ConnectionsHome() {
 
         {loaded && connections.length === 0 ? (
           <EmptyState title="No connections yet">
-            Add a connection to PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, CockroachDB, ClickHouse, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Dragonfly, Cassandra, ScyllaDB, Elasticsearch, Neo4j or a DuckDB file to start. Passwords are stored in your system keychain.
+            Add a connection to PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, CockroachDB, ClickHouse, Snowflake, Vertica, MongoDB, DynamoDB, Redis, Valkey, Dragonfly, Cassandra, ScyllaDB, Elasticsearch, Neo4j or a DuckDB file to start. Passwords are stored in your system keychain.
             <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center' }}>
               <Button variant="primary" onClick={() => navigate({ name: 'engines' })}>
                 New connection

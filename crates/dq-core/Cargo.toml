@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 rustls.workspace = true
+rustls-native-certs.workspace = true
+webpki-roots.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 csv.workspace = true

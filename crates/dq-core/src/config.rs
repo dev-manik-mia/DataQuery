@@ -485,7 +485,7 @@ fn parse_file_url(input: &str) -> DbResult<Option<ParsedUrl>> {
 
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
-/// `snowflake://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
+/// `snowflake://`, `vertica://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
 /// `valkeys://`, `dragonfly://` and `dragonflys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
 /// `DuckDB` and `SQLite` it is the file; for Redis it is the database number.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
@@ -506,6 +506,7 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "oracle" => Engine::Oracle,
         "clickhouse" => Engine::Clickhouse,
         "snowflake" => Engine::Snowflake,
+        "vertica" => Engine::Vertica,
         "redis" | "rediss" => Engine::Redis,
         "neo4j" | "neo4j+s" | "neo4j+ssc" | "bolt" | "bolt+s" | "bolt+ssc" => Engine::Neo4j,
         "valkey" | "valkeys" => Engine::Valkey,
@@ -764,6 +765,8 @@ mod tests {
         assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Oracle, 1521, "ORCLPDB1"));
         let p = parse_connection_url("cockroachdb://root@crdb.local/defaultdb?sslmode=disable").unwrap();
         assert_eq!((p.config.engine, p.config.port), (Engine::Cockroachdb, 26257));
+        let p = parse_connection_url("vertica://dbadmin@vt.local/VMart?sslmode=require").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Vertica, 5433, "VMart"));
         let p = parse_connection_url("clickhouse://default@ch.local/logs?secure=false").unwrap();
         assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Clickhouse, 8123, SslMode::Disable));
         let p = parse_connection_url("snowflake://ana:pw@myorg-acct/SALES/PUBLIC?warehouse=WH&role=ANALYST").unwrap();

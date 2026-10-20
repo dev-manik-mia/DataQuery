@@ -15,12 +15,10 @@ fallible-iterator = "0.2"
 futures-util.workspace = true
 postgres-protocol.workspace = true
 rustls.workspace = true
-rustls-native-certs.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-postgres-rustls.workspace = true
 tracing.workspace = true
-webpki-roots.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

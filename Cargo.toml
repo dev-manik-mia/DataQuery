@@ -21,6 +21,7 @@ dq-duckdb = { path = "crates/dq-duckdb" }
 dq-sqlite = { path = "crates/dq-sqlite" }
 dq-clickhouse = { path = "crates/dq-clickhouse" }
 dq-snowflake = { path = "crates/dq-snowflake" }
+dq-vertica = { path = "crates/dq-vertica" }
 dq-mongodb = { path = "crates/dq-mongodb" }
 dq-dynamodb = { path = "crates/dq-dynamodb" }
 dq-redis = { path = "crates/dq-redis" }

@@ -38,6 +38,8 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   duckdb: PostgreSQL,
   sqlite: SQLite,
   snowflake: StandardSQL,
+  // Double-quoted names, E'' strings and dollar quotes, like PostgreSQL.
+  vertica: PostgreSQL,
   // Not SQL: MongoDB uses the JavaScript mode below.
   mongodb: StandardSQL,
   partiql: StandardSQL,

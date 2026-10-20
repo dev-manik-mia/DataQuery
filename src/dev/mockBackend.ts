@@ -54,6 +54,7 @@ const ENGINES: EngineInfo[] = [
   engine('clickhouse', 'ClickHouse', 'Ch', 95, 'analytical', 'SQL', 8123, '8123 · SQL', 'P1', true),
   engine('duckdb', 'DuckDB', 'Dk', 85, 'analytical', 'SQL', null, 'local file · SQL', 'P2', true),
   engine('snowflake', 'Snowflake', 'Sf', 210, 'analytical', 'SQL', 443, 'HTTPS · SQL', 'P2', true),
+  engine('vertica', 'Vertica', 'Vt', 125, 'analytical', 'SQL', 5433, '5433 · SQL · v12–26', 'P2', true),
   engine('redis', 'Redis', 'Rd', 25, 'key_value', 'Commands', 6379, '6379 · commands · v6–7', 'P1', true),
   engine('valkey', 'Valkey', 'Vk', 175, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),
   engine('dragonfly', 'Dragonfly', 'Df', 265, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),

@@ -20,6 +20,7 @@ impl Registry {
             (Engine::Duckdb, Arc::new(dq_duckdb::DuckdbAdapter)),
             (Engine::Sqlite, Arc::new(dq_sqlite::SqliteAdapter)),
             (Engine::Snowflake, Arc::new(dq_snowflake::SnowflakeAdapter)),
+            (Engine::Vertica, Arc::new(dq_vertica::VerticaAdapter)),
             (Engine::Mongodb, Arc::new(dq_mongodb::MongodbAdapter)),
             (Engine::Dynamodb, Arc::new(dq_dynamodb::DynamodbAdapter)),
             (Engine::Redis, Arc::new(dq_redis::RedisAdapter::REDIS)),

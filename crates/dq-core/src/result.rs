@@ -108,8 +108,8 @@ impl TextRow {
         self.text(i).and_then(|v| v.split('.').next().and_then(|n| n.trim().parse().ok()))
     }
 
-    /// `1`, `true`, `Y` and `YES` (any case) are true.
+    /// `1`, `t`, `true`, `Y` and `YES` (any case) are true.
     pub fn flag(&self, i: usize) -> bool {
-        self.text(i).is_some_and(|v| matches!(v.to_ascii_uppercase().as_str(), "1" | "TRUE" | "Y" | "YES"))
+        self.text(i).is_some_and(|v| matches!(v.to_ascii_uppercase().as_str(), "1" | "T" | "TRUE" | "Y" | "YES"))
     }
 }

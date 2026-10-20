@@ -306,6 +306,7 @@ fn engine_named(name: &str) -> Option<Engine> {
         ("duckdb", Some(Engine::Duckdb)),
         ("sqlite", Some(Engine::Sqlite)),
         ("snowflake", Some(Engine::Snowflake)),
+        ("vertica", Some(Engine::Vertica)),
         ("valkey", Some(Engine::Valkey)),
         ("dragonfly", Some(Engine::Dragonfly)),
         ("redis", Some(Engine::Redis)),
@@ -499,7 +500,7 @@ mod tests {
         assert_eq!(engine_named("sqlite.xerial"), Some(Engine::Sqlite));
         assert_eq!(engine_named("Redshift"), None);
         assert_eq!(engine_named("LibSQL"), None);
-        assert_eq!(engine_named("Vertica"), None);
+        assert_eq!(engine_named("Vertica"), Some(Engine::Vertica));
     }
 
     #[test]
