@@ -848,3 +848,80 @@ async fn cached_structures_serve_pages_until_invalidated() {
     assert_eq!(ops::table_page(cached, &request).await.unwrap().columns.len(), 2);
     s.execute("DROP TABLE public.it_cached", &[], OPTS).await.unwrap();
 }
+
+#[tokio::test]
+async fn table_actions_truncate_empty_duplicate_and_bulk_drop() {
+    use dq_core::sql::ddl::SchemaChange;
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    run_all(
+        &*s,
+        "DROP VIEW IF EXISTS public.ta_view; \
+         DROP TABLE IF EXISTS public.ta_child, public.ta_parent, public.ta_parent_copy, public.ta_parent_shape; \
+         CREATE TABLE public.ta_parent (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL DEFAULT 'x', \
+           twice bigint GENERATED ALWAYS AS (id * 2) STORED); \
+         CREATE INDEX ta_parent_name_idx ON public.ta_parent (name); \
+         CREATE TABLE public.ta_child (id int PRIMARY KEY, parent_id bigint REFERENCES public.ta_parent (id)); \
+         CREATE VIEW public.ta_view AS SELECT id FROM public.ta_parent; \
+         INSERT INTO public.ta_parent (name) VALUES ('a'), ('b'), ('c'); INSERT INTO public.ta_child VALUES (1, 1)",
+    )
+    .await;
+    let parent = table("public", "ta_parent");
+    let apply = |changes: Vec<SchemaChange>| {
+        let s = s.clone();
+        async move { transact(&*s, &ops::schema_statements(&*s, &changes).await?).await }
+    };
+    let scalar = |sql: &'static str| {
+        let s = s.clone();
+        async move { text(&s.execute(sql, &[], OPTS).await.unwrap().rows[0][0]) }
+    };
+
+    // Duplicate with rows: identity values kept, computed column recomputed, index copied, sequence continued.
+    let copy =
+        SchemaChange::DuplicateTable { table: parent.clone(), new_name: "ta_parent_copy".into(), with_data: true };
+    apply(vec![copy]).await.unwrap();
+    assert_eq!(
+        scalar("SELECT string_agg(id || ':' || name || ':' || twice, ',' ORDER BY id) FROM public.ta_parent_copy")
+            .await,
+        "1:a:2,2:b:4,3:c:6"
+    );
+    assert_eq!(scalar("INSERT INTO public.ta_parent_copy (name) VALUES ('d') RETURNING id").await, "4");
+    let copied = ops::structure(&*s, &table("public", "ta_parent_copy")).await.unwrap();
+    assert!(copied.indexes.iter().any(|i| i.primary) && copied.indexes.len() == 2, "{:?}", copied.indexes);
+    // Structure only.
+    let shape =
+        SchemaChange::DuplicateTable { table: parent.clone(), new_name: "ta_parent_shape".into(), with_data: false };
+    apply(vec![shape]).await.unwrap();
+    assert_eq!(scalar("SELECT count(*) FROM public.ta_parent_shape").await, "0");
+
+    // TRUNCATE is blocked by the child's foreign key until CASCADE; RESTART IDENTITY resets the ids.
+    let truncate = |cascade: bool| SchemaChange::TruncateTable {
+        table: parent.clone(),
+        restart_identity: true,
+        cascade,
+        disable_foreign_keys: false,
+    };
+    assert!(apply(vec![truncate(false)]).await.is_err());
+    apply(vec![truncate(true)]).await.unwrap();
+    assert_eq!(scalar("SELECT count(*) FROM public.ta_child").await, "0");
+    assert_eq!(scalar("INSERT INTO public.ta_parent (name) VALUES ('again') RETURNING id").await, "1");
+
+    // Empty: DELETE of every row, here on two tables at once.
+    let empty = |name: &str| SchemaChange::EmptyTable { table: table("public", name) };
+    apply(vec![empty("ta_parent_copy"), empty("ta_parent_shape")]).await.unwrap();
+    assert_eq!(scalar("SELECT count(*) FROM public.ta_parent_copy").await, "0");
+
+    // A view is not a table to empty; a bulk drop takes tables and views together.
+    let view = ObjectRef { kind: NodeKind::View, ..table("public", "ta_view") };
+    assert!(ops::schema_statements(&*s, &[SchemaChange::EmptyTable { table: view.clone() }]).await.is_err());
+    let drop = |object: ObjectRef| SchemaChange::DropTable { table: object, cascade: false };
+    apply(vec![drop(view), drop(table("public", "ta_parent_copy")), drop(table("public", "ta_parent_shape"))])
+        .await
+        .unwrap();
+    assert_eq!(
+        scalar("SELECT count(*) FROM pg_class WHERE relname IN ('ta_view', 'ta_parent_copy', 'ta_parent_shape')").await,
+        "0"
+    );
+    run_all(&*s, "DROP TABLE public.ta_child, public.ta_parent").await;
+}

@@ -831,3 +831,80 @@ async fn write_connections_are_pooled_and_reset_after_errors() {
     assert!(conns.len() < 4, "pooled connections are reused: {conns:?}");
     s.execute("DROP TABLE it_writer", &[], OPTS).await.unwrap();
 }
+
+#[tokio::test]
+async fn table_actions_truncate_empty_duplicate_and_bulk_drop() {
+    use dq_core::sql::ddl::SchemaChange;
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    run_all(
+        &*s,
+        "DROP TABLE IF EXISTS ta_child, ta_parent, ta_parent_copy, ta_parent_shape; \
+         CREATE TABLE ta_parent (id int AUTO_INCREMENT PRIMARY KEY, name varchar(20) NOT NULL DEFAULT 'x', \
+           upper_name varchar(20) GENERATED ALWAYS AS (UPPER(name)) VIRTUAL, KEY ta_parent_name (name)) ENGINE = InnoDB; \
+         CREATE TABLE ta_child (id int PRIMARY KEY, parent_id int, FOREIGN KEY (parent_id) REFERENCES ta_parent (id)) ENGINE = InnoDB; \
+         INSERT INTO ta_parent (name) VALUES ('a'), ('b'), ('c'); INSERT INTO ta_child VALUES (1, 1)",
+    )
+    .await;
+    let apply = |changes: Vec<SchemaChange>| {
+        let s = s.clone();
+        async move { transact(&*s, &ops::schema_statements(&*s, &changes).await?).await }
+    };
+    let scalar = |sql: &'static str| {
+        let s = s.clone();
+        async move { text(&s.execute(sql, &[], OPTS).await.unwrap().rows[0][0]) }
+    };
+
+    // Duplicate with rows: ids kept, the generated column recomputed, the index copied, AUTO_INCREMENT continued.
+    let copy =
+        SchemaChange::DuplicateTable { table: table("ta_parent"), new_name: "ta_parent_copy".into(), with_data: true };
+    apply(vec![copy]).await.unwrap();
+    assert_eq!(
+        scalar("SELECT GROUP_CONCAT(id, ':', name, ':', upper_name ORDER BY id) FROM ta_parent_copy").await,
+        "1:a:A,2:b:B,3:c:C"
+    );
+    s.execute("INSERT INTO ta_parent_copy (name) VALUES ('d')", &[], OPTS).await.unwrap();
+    assert_eq!(scalar("SELECT MAX(id) FROM ta_parent_copy").await, "4");
+    let copied = ops::structure(&*s, &table("ta_parent_copy")).await.unwrap();
+    assert!(copied.indexes.iter().any(|i| i.name == "ta_parent_name"), "{:?}", copied.indexes);
+    let shape = SchemaChange::DuplicateTable {
+        table: table("ta_parent"),
+        new_name: "ta_parent_shape".into(),
+        with_data: false,
+    };
+    apply(vec![shape]).await.unwrap();
+    assert_eq!(scalar("SELECT COUNT(*) FROM ta_parent_shape").await, "0");
+
+    // InnoDB refuses to truncate a referenced table unless foreign key checks are off.
+    let truncate = |disable_foreign_keys: bool| SchemaChange::TruncateTable {
+        table: table("ta_parent"),
+        restart_identity: false,
+        cascade: false,
+        disable_foreign_keys,
+    };
+    assert!(apply(vec![truncate(false)]).await.is_err());
+    // Empty works where TRUNCATE is blocked: the child's rows go first, in the same run.
+    let empty = |name: &str| SchemaChange::EmptyTable { table: table(name) };
+    apply(vec![empty("ta_child"), empty("ta_parent_copy")]).await.unwrap();
+    assert_eq!(scalar("SELECT COUNT(*) FROM ta_child").await, "0");
+    apply(vec![truncate(true)]).await.unwrap();
+    assert_eq!(scalar("SELECT COUNT(*) FROM ta_parent").await, "0");
+    s.execute("INSERT INTO ta_parent (name) VALUES ('again')", &[], OPTS).await.unwrap();
+    assert_eq!(scalar("SELECT MAX(id) FROM ta_parent").await, "1", "TRUNCATE resets AUTO_INCREMENT");
+    // CASCADE is a PostgreSQL / Oracle option.
+    let cascade = SchemaChange::TruncateTable {
+        table: table("ta_parent"),
+        restart_identity: false,
+        cascade: true,
+        disable_foreign_keys: false,
+    };
+    assert_eq!(ops::schema_statements(&*s, &[cascade]).await.unwrap_err().kind, ErrorKind::Unsupported);
+
+    let drop = |name: &str| SchemaChange::DropTable { table: table(name), cascade: false };
+    apply(vec![drop("ta_parent_copy"), drop("ta_parent_shape"), drop("ta_child"), drop("ta_parent")]).await.unwrap();
+    assert_eq!(
+        scalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'ta\\_parent%'").await,
+        "0"
+    );
+}

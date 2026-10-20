@@ -5,6 +5,7 @@ import type { KeyValueFeatures } from "./KeyValueFeatures";
 import type { SavedConnection } from "./SavedConnection";
 import type { ServerInfo } from "./ServerInfo";
 import type { SqlFlavor } from "./SqlFlavor";
+import type { TableActions } from "./TableActions";
 
 export type SessionInfo = { session_id: string, connection: SavedConnection, server: ServerInfo, capabilities: Capabilities, flavor: SqlFlavor, 
 /**
@@ -22,4 +23,8 @@ tunneled: boolean,
 /**
  * Why the connection is not fully secure, if it is not.
  */
-insecure: string | null, };
+insecure: string | null, 
+/**
+ * Truncate, empty and duplicate support in the explorer.
+ */
+table_actions: TableActions, };

@@ -4,6 +4,7 @@ import type { DbError } from '@/bindings/DbError';
 import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
 import type { SessionInfo } from '@/bindings/SessionInfo';
+import { EMPTY_SELECTION, type TreeSelection } from '@/features/explorer/selection';
 import { toAppError } from '@/lib/errors';
 import { api } from '@/lib/ipc';
 
@@ -19,13 +20,19 @@ interface ExplorerState {
   expanded: Record<string, boolean>;
   loading: Record<string, boolean>;
   errors: Record<string, DbError | undefined>;
+  /** The cursor row. */
   selected: string | null;
+  /** Rows selected with ⌘/Ctrl- and Shift-clicks; the cursor row alone otherwise. */
+  selection: TreeSelection;
   filter: string;
   reset: (session: SessionInfo | null) => void;
   load: (parent: Node | null) => Promise<void>;
   toggle: (node: Node) => void;
   refresh: (node: Node | null) => void;
+  /** Moves the cursor and selects only that row. */
   select: (key: string | null) => void;
+  /** Moves the cursor and keeps a multi-selection. */
+  setSelection: (selection: TreeSelection, cursor: string | null) => void;
   setFilter: (filter: string) => void;
 }
 
@@ -36,10 +43,11 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   loading: {},
   errors: {},
   selected: null,
+  selection: EMPTY_SELECTION,
   filter: '',
 
   reset: (session) => {
-    set({ session, children: {}, expanded: {}, loading: {}, errors: {}, selected: null, filter: '' });
+    set({ session, children: {}, expanded: {}, loading: {}, errors: {}, selected: null, selection: EMPTY_SELECTION, filter: '' });
     if (session) void get().load(null).then(() => autoExpand(session));
   },
 
@@ -73,7 +81,8 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
     void get().load(node);
   },
 
-  select: (selected) => set({ selected }),
+  select: (selected) => set({ selected, selection: selected ? { keys: [selected], anchor: selected } : EMPTY_SELECTION }),
+  setSelection: (selection, selected) => set({ selection, selected }),
   setFilter: (filter) => set({ filter }),
 }));
 

@@ -462,3 +462,37 @@ async fn explain_and_schema_changes() {
     let again = diff(s.dialect(), &snapshot("a").await, &a, &snapshot("b").await, &b).unwrap();
     assert!(again.items.is_empty(), "{:#?}\n{}", again.items, again.sql);
 }
+
+#[tokio::test]
+async fn table_actions_truncate_empty_and_duplicate() {
+    use dq_core::edit::BoundStatement;
+    use dq_core::sql::ddl::SchemaChange;
+
+    let (_dir, _cfg, s) = seeded().await;
+    let apply = |changes: Vec<SchemaChange>| {
+        let s = s.clone();
+        async move {
+            let sql = ops::schema_statements(&*s, &changes).await?;
+            let mut bound =
+                sql.into_iter().map(|q| Ok(BoundStatement { sql: q, params: Vec::new(), expect_rows: None }));
+            s.run_in_transaction("sales", &mut bound).await
+        }
+    };
+    let scalar = |sql: &'static str| {
+        let s = s.clone();
+        async move { text(&s.execute(sql, &[], OPTS).await.unwrap().rows[0][0]) }
+    };
+    let copy = SchemaChange::DuplicateTable { table: table("orders"), new_name: "ta_orders".into(), with_data: true };
+    apply(vec![copy]).await.unwrap();
+    assert_eq!(scalar("SELECT COUNT(*) FROM ta_orders").await, "1200");
+    let bad = s.execute("INSERT INTO ta_orders (customer_id, status, total) VALUES (1, 'lost', 1)", &[], OPTS).await;
+    assert!(bad.is_err(), "the CHECK was copied");
+    let truncate = SchemaChange::TruncateTable {
+        table: table("ta_orders"),
+        restart_identity: false,
+        cascade: false,
+        disable_foreign_keys: false,
+    };
+    apply(vec![truncate, SchemaChange::EmptyTable { table: table("no_pk") }]).await.unwrap();
+    assert_eq!(scalar("SELECT (SELECT COUNT(*) FROM ta_orders) + (SELECT COUNT(*) FROM no_pk)").await, "0");
+}

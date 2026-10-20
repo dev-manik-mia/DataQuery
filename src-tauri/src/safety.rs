@@ -44,6 +44,18 @@ impl Intent {
         }
     }
 
+    /// Reviewed schema changes always write (`SELECT … INTO` reads like a
+    /// query), and removing every row is destructive however the engine spells
+    /// it (`ClickHouse` `DELETE … WHERE 1`).
+    pub fn schema_changes(statements: &[StatementInfo], deletes_rows: bool) -> Self {
+        let mut intent = Self::from_statements(statements);
+        intent.writes = true;
+        if deletes_rows && intent.destructive.is_empty() {
+            intent.destructive.push("Deletes every row of the table.".to_owned());
+        }
+        intent
+    }
+
     pub fn write() -> Self {
         Self { writes: true, destructive: Vec::new() }
     }
@@ -210,6 +222,24 @@ mod tests {
         assert!(check(&c, &s, &intent("select 1"), None).unwrap().is_none());
         let err = check(&c, &s, &intent("update t set a = 1 where id = 1"), None).unwrap_err();
         assert_eq!(err.kind, ErrorKind::Permission);
+    }
+
+    #[test]
+    fn schema_changes_always_write_and_row_removal_is_destructive() {
+        let mut ro = conn(Environment::Development);
+        ro.config.read_only = true;
+        let s = Settings::default();
+        let select_into = split_statements("SELECT * INTO copy FROM t WHERE 1 = 0", SqlFlavor::Postgres);
+        let err = check(&ro, &s, &Intent::schema_changes(&select_into, false), None).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Permission);
+        let where_one = split_statements("DELETE FROM t WHERE 1", SqlFlavor::Postgres);
+        assert_eq!(Intent::from_statements(&where_one).destructive, Vec::<String>::new());
+        let empty = Intent::schema_changes(&where_one, true);
+        assert!(required(&conn(Environment::Development), &s, &empty).unwrap().destructive);
+        assert_eq!(
+            Intent::schema_changes(&split_statements("truncate t", SqlFlavor::Postgres), true).destructive.len(),
+            1
+        );
     }
 
     #[test]
