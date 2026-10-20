@@ -1,12 +1,14 @@
 //! PostgreSQL adapter for DataQuery (versions 12–17, plus wire-compatible
-//! services such as Supabase, Neon and Timescale). It also serves `CockroachDB`,
-//! which speaks the PostgreSQL protocol; the few catalog differences are
-//! handled where they occur (see `connect::Flavor`).
+//! services such as Supabase, Neon and Timescale). It also serves the engines
+//! that speak the PostgreSQL protocol: `CockroachDB`, Greenplum (and Apache
+//! Cloudberry) and Amazon Redshift. Their differences are answered by
+//! `connect::Flavor`; Redshift's own catalog lives in `redshift`.
 
 mod catalog;
 mod connect;
 mod error;
 mod monitor;
+mod redshift;
 mod session;
 mod tls;
 mod users;
@@ -22,7 +24,7 @@ use dq_core::result::ServerInfo;
 
 pub use session::PgSession;
 
-/// One adapter serves both engines; the server family is detected on connect.
+/// One adapter serves every PostgreSQL-protocol engine; the server family is detected on connect.
 #[derive(Debug, Clone, Copy)]
 pub struct PostgresAdapter {
     engine: Engine,
@@ -37,6 +39,8 @@ impl Default for PostgresAdapter {
 impl PostgresAdapter {
     pub const POSTGRES: Self = Self { engine: Engine::Postgres };
     pub const COCKROACH: Self = Self { engine: Engine::Cockroachdb };
+    pub const REDSHIFT: Self = Self { engine: Engine::Redshift };
+    pub const GREENPLUM: Self = Self { engine: Engine::Greenplum };
 
     pub const CAPABILITIES: Capabilities = Capabilities {
         explorer: true,
@@ -70,8 +74,12 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        // CockroachDB rejects pg_dump (see `dq_core::backup::BackupFamily::of`).
-        Capabilities { backup: self.engine == Engine::Postgres, ..Self::CAPABILITIES }
+        // CockroachDB and Redshift reject pg_dump (see `dq_core::backup::BackupFamily::of`).
+        let backup = dq_core::backup::BackupFamily::of(self.engine).is_some();
+        // Redshift's ALTER TABLE cannot change nullability, defaults or most
+        // column types, so most of a schema diff could not be applied.
+        let schema_diff = self.engine != Engine::Redshift;
+        Capabilities { backup, schema_diff, ..Self::CAPABILITIES }
     }
 
     async fn test(&self, params: &ConnectParams) -> DbResult<ServerInfo> {

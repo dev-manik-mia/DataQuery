@@ -179,28 +179,39 @@ fn partial<T: Default>(result: DbResult<T>, what: &str, unavailable: &mut Vec<St
 #[async_trait]
 impl UserAdmin for PgSession {
     fn features(&self) -> UserAdminFeatures {
-        match self.flavor {
+        match self.server.flavor {
             Flavor::Cockroach => UserAdminFeatures::cockroach(),
-            Flavor::Postgres => UserAdminFeatures::postgres(),
+            // Redshift has no user admin (`PgSession::users`).
+            Flavor::Postgres | Flavor::Greenplum | Flavor::Redshift => {
+                let mut features = UserAdminFeatures::postgres();
+                // BYPASSRLS came with PostgreSQL 9.5.
+                if self.server.legacy {
+                    features.flags.retain(|f| *f != RoleFlag::Bypassrls);
+                }
+                features
+            }
         }
     }
 
     async fn accounts(&self) -> DbResult<AccountList> {
         let client = self.catalog_client("").await?;
+        let bypassrls = if self.server.legacy { "false" } else { "r.rolbypassrls" };
         let rows = client
             .query(
-                "SELECT r.rolname::text, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolinherit, \
-                        r.rolreplication, r.rolbypassrls, r.rolconnlimit::int8, r.rolvaliduntil::text, \
-                        ARRAY(SELECT b.rolname::text FROM pg_auth_members m JOIN pg_roles b ON b.oid = m.roleid \
-                              WHERE m.member = r.oid ORDER BY 1), \
-                        r.rolname = current_user \
-                 FROM pg_roles r ORDER BY r.rolname LIKE 'pg\\_%', r.rolname",
+                &format!(
+                    "SELECT r.rolname::text, r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolinherit, \
+                            r.rolreplication, {bypassrls}, r.rolconnlimit::int8, r.rolvaliduntil::text, \
+                            ARRAY(SELECT b.rolname::text FROM pg_auth_members m JOIN pg_roles b ON b.oid = m.roleid \
+                                  WHERE m.member = r.oid ORDER BY 1), \
+                            r.rolname = current_user \
+                     FROM pg_roles r ORDER BY r.rolname LIKE 'pg\\_%', r.rolname"
+                ),
                 &[],
             )
             .await
             .map_err(pg)?;
         let flags = self.features().flags;
-        let cockroach = self.flavor == Flavor::Cockroach;
+        let cockroach = self.server.flavor == Flavor::Cockroach;
         Ok(AccountList {
             accounts: rows.iter().map(|r| account(r, &flags, cockroach)).collect(),
             unavailable: Vec::new(),
@@ -211,7 +222,7 @@ impl UserAdmin for PgSession {
         let client = self.catalog_client(database).await?;
         let role = account.name.as_str();
         let mut unavailable = Vec::new();
-        let (rows, default_privileges) = if self.flavor == Flavor::Cockroach {
+        let (rows, default_privileges) = if self.server.flavor == Flavor::Cockroach {
             (partial(cockroach_grants(&client, role).await, "Grants", &mut unavailable), Vec::new())
         } else {
             (
@@ -229,7 +240,12 @@ impl UserAdmin for PgSession {
         })
     }
 
+    /// Servers built on PostgreSQL 9.x (Greenplum 6) know no SCRAM and hash
+    /// the clear password themselves (md5).
     fn password_secret(&self, password: &str) -> String {
+        if self.server.legacy {
+            return password.to_owned();
+        }
         postgres_protocol::password::scram_sha_256(password.as_bytes())
     }
 

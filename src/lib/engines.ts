@@ -3,7 +3,7 @@ import type { Engine } from '@/bindings/Engine';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { SslMode } from '@/bindings/SslMode';
 
-/** SQL dialect used for highlighting and analysis. CockroachDB speaks PostgreSQL. */
+/** SQL dialect used for highlighting and analysis. CockroachDB, Redshift and Greenplum speak PostgreSQL. */
 export function flavorOf(engine: Engine | undefined): SqlFlavor {
   switch (engine) {
     case 'mysql':
@@ -94,9 +94,17 @@ export function databaseLabel(engine: Engine): string {
   return 'Database';
 }
 
-/** Label and hint of the host field. */
-export function hostField(engine: Engine): { label: string; hint?: string } {
+/** Label, hint and placeholder of the host field. */
+export function hostField(engine: Engine): { label: string; hint?: string; placeholder?: string } {
   switch (engine) {
+    case 'redshift':
+      return {
+        label: 'Endpoint',
+        hint: 'Cluster or Serverless workgroup endpoint, without the port. Sign-in is by user name and password (IAM credentials are not supported).',
+        placeholder: 'examplecluster.abc123xyz789.us-west-2.redshift.amazonaws.com',
+      };
+    case 'greenplum':
+      return { label: 'Coordinator host', hint: 'The coordinator (master) host; segments are reached through it. Also Apache Cloudberry.' };
     case 'snowflake':
       return { label: 'Account', hint: 'Account identifier (myorg-myaccount or xy12345.eu-west-1) or the full host name.' };
     case 'mongodb':
@@ -135,11 +143,16 @@ export function credentialLabels(engine: Engine): { username: string; password: 
 /** Database and user a new connection form starts with. */
 /**
  * SSL mode for a new connection. TLS is off by default so local and internal
- * servers without certificates connect first time; Snowflake is only reachable
- * over HTTPS, so it keeps full verification.
+ * servers without certificates connect first time; Snowflake and Redshift are
+ * cloud services with public certificates, so they keep full verification.
  */
 export function defaultSslMode(engine: Engine): SslMode {
-  return engine === 'snowflake' ? 'verify-full' : 'disable';
+  return engine === 'snowflake' || engine === 'redshift' ? 'verify-full' : 'disable';
+}
+
+/** Engines that offer cloud IAM sign-in (provider CLI tokens) besides a password. */
+export function offersCloudAuth(engine: Engine): boolean {
+  return !['mongodb', 'redshift', 'greenplum'].includes(engine);
 }
 
 export function connectionDefaults(engine: Engine): { database: string; username: string } {
@@ -151,6 +164,10 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: '', username: 'root' };
     case 'cockroachdb':
       return { database: 'defaultdb', username: 'root' };
+    case 'redshift':
+      return { database: 'dev', username: 'awsuser' };
+    case 'greenplum':
+      return { database: 'postgres', username: 'gpadmin' };
     case 'sqlserver':
       return { database: 'master', username: 'sa' };
     case 'oracle':

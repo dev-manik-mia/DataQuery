@@ -16,7 +16,7 @@ import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
 import { Alert, Button, Checkbox, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, offersCloudAuth, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -111,7 +111,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
-    host: config?.host ?? (engine === 'dynamodb' ? '' : 'localhost'),
+    host: config?.host ?? (engine === 'dynamodb' || engine === 'redshift' ? '' : 'localhost'),
     port: String(config?.port ?? defaultPort ?? ''),
     database: config?.database ?? defaults.database,
     username: config?.username ?? defaults.username,
@@ -339,7 +339,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           ) : (
             <>
           <div className={styles.hostRow}>
-            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} onChange={(e) => set('host', e.target.value)} />
+            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} placeholder={host.placeholder} onChange={(e) => set('host', e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
           {!NO_DATABASE_FIELD.includes(engine) && (
@@ -418,7 +418,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           )}
           {!fileBased && (
             <>
-          {engine !== 'mongodb' && (
+          {offersCloudAuth(engine) && (
           <FormSection title="Authentication" summary={authSummary(state.auth, engine)} open={openSections.auth} onToggle={() => toggle('auth')}>
             <AuthFields auth={state.auth} engine={engine} onChange={(a) => set('auth', a)} />
             {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}
