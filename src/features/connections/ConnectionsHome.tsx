@@ -22,7 +22,6 @@ import {
 } from '@/components/ui';
 import { exportConnections, importConnections } from '@/features/connections/transfer';
 import { ImportAppsDialog } from '@/features/connections/ImportAppsDialog';
-import { connectionAddress } from '@/lib/engines';
 import { formatCount, formatDuration, formatRelative, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
@@ -142,7 +141,7 @@ export function ConnectionsHome() {
 
         {failed && connectError && (
           <div>
-            <ErrorAlert error={connectError} title={`Could not connect to ${connectionAddress(failed.config)}`} />
+            <ErrorAlert error={connectError} title={`Could not connect to ${failed.config.host}:${failed.config.port}`} />
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <Button size="sm" onClick={() => void open(failed)}>
                 Try again
@@ -156,7 +155,7 @@ export function ConnectionsHome() {
 
         {loaded && connections.length === 0 ? (
           <EmptyState title="No connections yet">
-            Add a connection to PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, CockroachDB, Amazon Redshift, Greenplum, ClickHouse, Snowflake, Vertica, MongoDB, DynamoDB, Redis, Valkey, Dragonfly, Cassandra, ScyllaDB, Elasticsearch, Neo4j, libSQL (Turso), Cloudflare D1 or a DuckDB file to start. Passwords are stored in your system keychain.
+            Add a connection to PostgreSQL, MySQL, MariaDB, SingleStore, SQL Server, Oracle, CockroachDB, Amazon Redshift, Greenplum, ClickHouse, Snowflake, Vertica, MongoDB, DynamoDB, Redis, Valkey, Dragonfly, Cassandra, ScyllaDB, Elasticsearch, Neo4j, libSQL (Turso), Cloudflare D1 or a DuckDB file to start. Passwords are stored in your system keychain.
             <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center' }}>
               <Button variant="primary" onClick={() => navigate({ name: 'engines' })}>
                 New connection
@@ -213,13 +212,13 @@ export function ConnectionsHome() {
                             <Icon name="star" filled={c.favorite} />
                           </button>
                           {engine ? <EngineMark engine={engine} /> : <span />}
-                          <span className={`${styles.name} ellipsis`} title={`${c.name} · ${connectionAddress(c.config)}`}>
+                          <span className={`${styles.name} ellipsis`} title={`${c.name} · ${c.config.host}:${c.config.port}${c.config.database ? `/${c.config.database}` : ''}`}>
                             {c.name}
                           </span>
                           <span>
                             <EnvironmentChip environment={c.environment} />
                           </span>
-                          <span className={`${styles.address} ellipsis`}>{connectionAddress(c.config)}</span>
+                          <span className={`${styles.address} ellipsis`}>{`${c.config.host}:${c.config.port}${c.config.database ? `/${c.config.database}` : ''}`}</span>
                           <span className={styles.lastUsed}>{formatRelative(c.last_used_at)}</span>
                           <span className={styles.connect}>
                             {connectingId === c.id ? (

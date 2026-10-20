@@ -37,6 +37,7 @@ impl Registry {
             (Engine::Neo4j, Arc::new(dq_neo4j::Neo4jAdapter)),
             (Engine::Mysql, Arc::new(dq_mysql::MysqlAdapter::MYSQL)),
             (Engine::Mariadb, Arc::new(dq_mysql::MysqlAdapter::MARIADB)),
+            (Engine::Singlestore, Arc::new(dq_mysql::MysqlAdapter::SINGLESTORE)),
         ];
         Self(adapters.into_iter().collect())
     }

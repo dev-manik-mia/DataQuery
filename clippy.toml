@@ -1,1 +1,1 @@
-doc-valid-idents = ["DataQuery", "PostgreSQL", "MySQL", "MariaDB", "SQLite", "SQLSTATE", "..", "TypeScript", "CodeMirror"]
+doc-valid-idents = ["DataQuery", "PostgreSQL", "MySQL", "MariaDB", "SingleStore", "MemSQL", "SQLite", "SQLSTATE", "..", "TypeScript", "CodeMirror"]

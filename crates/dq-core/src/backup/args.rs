@@ -13,6 +13,7 @@ use super::tools::ToolVersion;
 use super::{BackupContent, BackupFamily, BackupFormat, BackupOptions, RestoreOptions};
 use crate::adapter::ConnectParams;
 use crate::config::SslMode;
+use crate::engine::Engine;
 use crate::error::{DbError, DbResult};
 
 /// One run of a tool.
@@ -100,13 +101,19 @@ pub(crate) fn backup(
         }
         BackupFamily::Mysql => {
             mysql_option_file(&mut inv, params, version)?;
+            // SingleStore has no `WITH CONSISTENT SNAPSHOT`; its dumps are consistent per table only.
+            let singlestore = params.config.engine == Engine::Singlestore;
+            if singlestore && options.single_transaction {
+                inv.warnings
+                    .push("SingleStore has no consistent snapshot: each table is dumped as of its own moment.".into());
+            }
             inv.arg("--verbose")
                 .path_arg("--result-file=", out)
                 .arg("--default-character-set=utf8mb4")
                 .arg("--hex-blob")
                 // Tablespaces need the PROCESS privilege and rarely belong in a database backup.
                 .arg("--no-tablespaces")
-                .flag(options.single_transaction, "--single-transaction")
+                .flag(options.single_transaction && !singlestore, "--single-transaction")
                 .flag(options.routines, "--routines")
                 .arg(if options.triggers { "--triggers" } else { "--skip-triggers" })
                 .flag(options.events, "--events")

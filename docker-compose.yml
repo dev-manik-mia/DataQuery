@@ -267,6 +267,15 @@ services:
       interval: 5s
       retries: 60
 
+  # SingleStore dev image (root / dataquery, free bundled licence). amd64 only: emulated on Apple silicon.
+  singlestore:
+    profiles: ["singlestore"]
+    image: ghcr.io/singlestore-labs/singlestoredb-dev:0.2.86
+    platform: linux/amd64
+    environment:
+      ROOT_PASSWORD: dataquery
+    ports: ["53308:3306"]
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

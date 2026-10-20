@@ -295,6 +295,8 @@ fn engine_named(name: &str) -> Option<Engine> {
         ("libsql", None),
         ("cockroach", Some(Engine::Cockroachdb)),
         ("mariadb", Some(Engine::Mariadb)),
+        ("singlestore", Some(Engine::Singlestore)),
+        ("memsql", Some(Engine::Singlestore)),
         ("mysql", Some(Engine::Mysql)),
         ("postgre", Some(Engine::Postgres)),
         ("pgsql", Some(Engine::Postgres)),
@@ -496,6 +498,8 @@ mod tests {
         assert_eq!(engine_named("postgres-jdbc"), Some(Engine::Postgres));
         assert_eq!(engine_named("mysql8"), Some(Engine::Mysql));
         assert_eq!(engine_named("MariaDB"), Some(Engine::Mariadb));
+        assert_eq!(engine_named("SingleStore"), Some(Engine::Singlestore));
+        assert_eq!(engine_named("memsql"), Some(Engine::Singlestore));
         assert_eq!(engine_named("MSSQL"), Some(Engine::Sqlserver));
         assert_eq!(engine_named("Mongo"), Some(Engine::Mongodb));
         assert_eq!(engine_named("sqlite.xerial"), Some(Engine::Sqlite));
