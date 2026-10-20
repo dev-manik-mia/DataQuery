@@ -69,8 +69,10 @@ impl Lexer<'_> {
     fn next_kind(&mut self) -> TokenKind {
         let c = self.bytes[self.pos];
         let flavor = self.flavor;
+        let vertica = flavor == SqlFlavor::Vertica;
+        // Vertica lexes like PostgreSQL (`E''` strings, dollar quotes) but binds `?`.
         let (pg, my, ms, ora) = (
-            flavor.postgres_like(),
+            flavor.postgres_like() || vertica,
             flavor == SqlFlavor::Mysql,
             flavor == SqlFlavor::Sqlserver,
             flavor == SqlFlavor::Oracle,
@@ -97,6 +99,35 @@ impl Lexer<'_> {
                 }
                 b'`' => return self.quoted(b'`', false).ident(),
                 b'[' => return self.quoted_until(b']'),
+                _ => {}
+            }
+        }
+        if flavor == SqlFlavor::Bigquery {
+            // `#` comments, `` `name` `` paths, '…' and "…" strings (also triple-quoted and
+            // with r/b prefixes), `?` and `@name` parameters; `@@name` is a system variable.
+            match c {
+                b'#' => return self.line_comment(),
+                b'`' => return self.quoted(b'`', true).ident(),
+                b'\'' | b'"' => return self.bigquery_string(0),
+                b'r' | b'R' | b'b' | b'B' => {
+                    let prefixed = |i: usize| matches!(self.peek(i), Some(b'\'' | b'"'));
+                    let other = |i: usize| matches!(self.peek(i), Some(b'r' | b'R' | b'b' | b'B'));
+                    if prefixed(1) {
+                        return self.bigquery_string(1);
+                    }
+                    if other(1) && !self.peek(1).is_some_and(|n| n.eq_ignore_ascii_case(&c)) && prefixed(2) {
+                        return self.bigquery_string(2);
+                    }
+                }
+                b'?' => return self.single(TokenKind::Param),
+                b'@' if self.peek(1) == Some(b'@') || self.peek(1).is_some_and(is_word_continue) => {
+                    let system = self.peek(1) == Some(b'@');
+                    self.pos += if system { 2 } else { 1 };
+                    while self.peek(0).is_some_and(is_word_continue) {
+                        self.pos += 1;
+                    }
+                    return if system { TokenKind::Word } else { TokenKind::Param };
+                }
                 _ => {}
             }
         }
@@ -196,7 +227,7 @@ impl Lexer<'_> {
                 self.q_quote(2)
             }
             b'$' if pg || (sf && self.peek(1) == Some(b'$')) => self.dollar(),
-            b'?' if my || duck || sf || partiql => self.single(TokenKind::Param),
+            b'?' if my || duck || sf || partiql || vertica => self.single(TokenKind::Param),
             b'@' if ms => self.at_sign(),
             b':' if (ora || sf) && self.peek(1).is_some_and(|c| c.is_ascii_digit()) => {
                 self.pos += 1;
@@ -299,6 +330,28 @@ impl Lexer<'_> {
             .position(|w| w[0] == close && w[1] == b'\'')
             .map_or(self.bytes.len(), |i| body + i + 2);
         self.pos = end;
+        TokenKind::String
+    }
+
+    /// A `GoogleSQL` string after `prefix` bytes of `r`/`b`: `'…'`, `"…"`, `'''…'''` or
+    /// `"""…"""`. A backslash keeps the next byte inside the literal, raw strings included.
+    fn bigquery_string(&mut self, prefix: usize) -> TokenKind {
+        self.pos += prefix;
+        let quote = self.bytes[self.pos];
+        if self.peek(1) != Some(quote) || self.peek(2) != Some(quote) {
+            return self.quoted(quote, true);
+        }
+        self.pos += 3;
+        while let Some(c) = self.peek(0) {
+            if c == b'\\' {
+                self.pos = (self.pos + 2).min(self.bytes.len());
+            } else if c == quote && self.peek(1) == Some(quote) && self.peek(2) == Some(quote) {
+                self.pos += 3;
+                break;
+            } else {
+                self.pos += 1;
+            }
+        }
         TokenKind::String
     }
 
@@ -434,8 +487,27 @@ mod tests {
     }
 
     #[test]
+    fn bigquery_strings_comments_and_params() {
+        const BQ: SqlFlavor = SqlFlavor::Bigquery;
+        let src =
+            "SELECT \"a;b\", 'it\\'s;', '''x;\n'y';''', r'\\d;', b\"\"\";\"\"\", rb'\\x00;' # c;\n -- c;\n/* ; */;";
+        let toks = kinds(src, BQ);
+        assert_eq!(toks.iter().filter(|(k, _)| *k == TokenKind::Semicolon).count(), 1, "{toks:?}");
+        assert!(toks.contains(&(TokenKind::String, "\"a;b\"")));
+        assert!(toks.contains(&(TokenKind::String, "'''x;\n'y';'''")));
+        assert!(toks.contains(&(TokenKind::String, "rb'\\x00;'")));
+        let names = kinds("SELECT * FROM `my-project.sales`.`or\\`ders`, real", BQ);
+        assert!(names.contains(&(TokenKind::QuotedIdent, "`my-project.sales`")));
+        assert!(names.contains(&(TokenKind::QuotedIdent, "`or\\`ders`")));
+        assert!(names.contains(&(TokenKind::Word, "real")));
+        let params = kinds("SELECT @id, ?, @@row_count", BQ);
+        assert!(params.contains(&(TokenKind::Param, "@id")) && params.contains(&(TokenKind::Param, "?")));
+        assert!(params.contains(&(TokenKind::Word, "@@row_count")));
+    }
+
+    #[test]
     fn unterminated_input_does_not_panic() {
-        for src in ["'abc", "\"abc", "$x$ abc", "/* abc", "E'\\", "`abc", "{a:", "$$ x"] {
+        for src in ["'abc", "\"abc", "$x$ abc", "/* abc", "E'\\", "`abc", "{a:", "$$ x", "'''abc", "r'", "b\"\"\"\\"] {
             let _ = tokenize(src, SqlFlavor::Postgres);
             let _ = tokenize(src, SqlFlavor::Mysql);
             let _ = tokenize(src, SqlFlavor::Sqlserver);
@@ -443,6 +515,7 @@ mod tests {
             let _ = tokenize(src, SqlFlavor::Clickhouse);
             let _ = tokenize(src, SqlFlavor::Duckdb);
             let _ = tokenize(src, SqlFlavor::Snowflake);
+            let _ = tokenize(src, SqlFlavor::Bigquery);
         }
     }
 

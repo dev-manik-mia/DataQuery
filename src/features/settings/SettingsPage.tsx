@@ -474,6 +474,14 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
     transactions: 'ClickHouse has no multi-statement transactions.',
   },
   sqlite: { monitoring: NO_SERVER },
+  libsql: { monitoring: 'libSQL over HTTP exposes no server sessions or running statements.' },
+  d1: {
+    monitoring: 'Cloudflare D1 exposes no sessions or running queries; see query metrics in the Cloudflare dashboard.',
+    transactions: 'Each D1 API request is its own transaction: there is no BEGIN … COMMIT. Scripts and grid edits run as one all-or-nothing batch.',
+  },
+  bigquery: {
+    transactions: 'BigQuery transactions run inside one script (BEGIN TRANSACTION … COMMIT TRANSACTION in the editor); there is no interactive session to commit later.',
+  },
   redis: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   valkey: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   dragonfly: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
@@ -486,6 +494,9 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
   cassandra: { transactions: 'Cassandra has no multi-statement transactions, only single-statement lightweight ones.' },
   scylladb: { transactions: 'ScyllaDB has no multi-statement transactions, only single-statement lightweight ones.' },
   elasticsearch: { transactions: 'Elasticsearch has no transactions.', schema_diff: 'Index mappings are not a relational schema.' },
+  redshift: {
+    schema_diff: "Redshift's ALTER TABLE cannot change nullability, defaults or most column types, so a diff could not be applied.",
+  },
   neo4j: {
     grid_edit: 'Graph results have no row identity; change data with Cypher in the editor.',
     schema_diff: 'Graphs have no fixed schema to compare.',
@@ -499,11 +510,14 @@ const CQL_SNAPSHOTS = `Snapshots (nodetool snapshot) ${SERVER_SIDE}`;
 /** Why an engine has no Backup and Restore (`dq_core::backup::BackupFamily::of`). */
 const NO_BACKUP: Partial<Record<Engine, string>> = {
   cockroachdb: 'CockroachDB rejects pg_dump; back up with its BACKUP statement to cloud or nodelocal storage.',
+  redshift: 'Redshift rejects pg_dump; it keeps automated and manual snapshots, and UNLOAD exports tables to S3.',
   sqlserver: `Backups (BACKUP DATABASE … TO DISK) ${SERVER_SIDE}`,
   oracle: `Data Pump dump files (expdp) ${SERVER_SIDE}`,
   clickhouse: `Backups (the BACKUP statement, to server disks or object storage) ${SERVER_SIDE}`,
   duckdb: 'Copy the database file, or run EXPORT DATABASE in the editor.',
   snowflake: 'Snowflake keeps history with Time Travel and zero-copy clones; there is no dump tool.',
+  bigquery: 'BigQuery keeps 7 days of Time Travel; copy tables with snapshots or clones, or export to Cloud Storage. There is no dump tool.',
+  vertica: `Backups (vbr, on the cluster's nodes) ${SERVER_SIDE}`,
   redis: SNAPSHOTS,
   valkey: SNAPSHOTS,
   dragonfly: SNAPSHOTS,
@@ -512,6 +526,8 @@ const NO_BACKUP: Partial<Record<Engine, string>> = {
   scylladb: CQL_SNAPSHOTS,
   elasticsearch: `Snapshot repositories ${SERVER_SIDE}`,
   neo4j: `Dumps (neo4j-admin database dump) ${SERVER_SIDE}`,
+  libsql: 'Turso keeps point-in-time restores (turso db create --from-db … --timestamp); dump to SQL with turso db shell <database> .dump, or export tables here.',
+  d1: 'D1 keeps Time Travel restores (wrangler d1 time-travel); dump to SQL with wrangler d1 export <database> --remote, or export tables here.',
 };
 
 function CapabilityCell({ engine, name, capability, supported, available, priority }: {

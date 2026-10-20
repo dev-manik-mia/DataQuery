@@ -77,6 +77,7 @@ pub fn run() {
             commands::connections::rename_folder,
             commands::connections::delete_folder,
             commands::connections::test_connection,
+            commands::connections::draft_databases,
             commands::connections::trust_host_key,
             commands::connections::export_connections,
             commands::connections::import_connections,

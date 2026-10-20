@@ -16,7 +16,7 @@ import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
 import { Alert, Button, Checkbox, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, connectsByApi, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, libsqlEndpoint, offersCloudAuth, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -51,7 +51,7 @@ const DATABASE_FILTERS: Partial<Record<Engine, { name: string; extensions: strin
 };
 
 /** Engine settings kept in `properties`. */
-const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string; check?: boolean }[]>> = {
+const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string; check?: boolean; required?: boolean }[]>> = {
   snowflake: [
     { key: 'warehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
     { key: 'role', label: 'Role', placeholder: 'default role' },
@@ -63,15 +63,36 @@ const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; pl
     { key: 'read_preference', label: 'Read preference', placeholder: 'primary' },
     { key: 'srv', label: 'DNS seed list (mongodb+srv)', check: true },
   ],
-  dynamodb: [{ key: 'region', label: 'Region', placeholder: 'us-east-1' }],
+  dynamodb: [{ key: 'region', label: 'Region', placeholder: 'us-east-1', required: true }],
+  d1: [{ key: 'account_id', label: 'Account ID', placeholder: '32 characters, from the dashboard URL', required: true }],
+  bigquery: [
+    { key: 'dataset', label: 'Default dataset', placeholder: 'none' },
+    { key: 'location', label: 'Location', placeholder: 'from the datasets (US, EU, …)' },
+    { key: 'endpoint', label: 'API endpoint', placeholder: 'Google Cloud (or an emulator URL)' },
+  ],
   cassandra: [{ key: 'datacenter', label: 'Local datacenter', placeholder: 'any (e.g. dc1)' }],
   scylladb: [{ key: 'datacenter', label: 'Local datacenter', placeholder: 'any (e.g. dc1)' }],
 };
 
+/** What the database field holds, where that needs saying. */
+const DATABASE_HINTS: Partial<Record<Engine, string>> = {
+  oracle: 'The service of the pluggable database, e.g. FREEPDB1 or ORCLPDB1. Needs Oracle Instant Client.',
+  bigquery: 'The project billed for queries, e.g. my-project-123. Other projects you can read appear in the explorer too.',
+};
+
 /** Engines whose server has no single database to pick in the form. */
-const NO_DATABASE_FIELD: Engine[] = ['dynamodb', 'elasticsearch'];
+const NO_DATABASE_FIELD: Engine[] = ['dynamodb', 'elasticsearch', 'libsql'];
+
+/** Engines that authenticate with a token alone, without a username. */
+const TOKEN_ONLY: Engine[] = ['libsql', 'd1'];
+
+/** Engines reached through a fixed cloud API host over HTTPS instead of a host the user enters. */
+const API_HOSTS: Partial<Record<Engine, string>> = { d1: 'api.cloudflare.com' };
 
 const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', 'disable'];
+
+/** Credential files an API engine reads on connect (only the path is saved). */
+const KEY_FILE_FILTERS = [{ name: 'JSON key', extensions: ['json'] }];
 
 const keychainName = isMac ? 'macOS Keychain' : navigator.userAgent.includes('Windows') ? 'Windows Credential Manager' : 'the system keychain';
 
@@ -111,7 +132,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
-    host: config?.host ?? (engine === 'dynamodb' ? '' : 'localhost'),
+    host: config?.host ?? API_HOSTS[engine] ?? (engine === 'dynamodb' || engine === 'redshift' || connectsByApi(engine) ? '' : 'localhost'),
     port: String(config?.port ?? defaultPort ?? ''),
     database: config?.database ?? defaults.database,
     username: config?.username ?? defaults.username,
@@ -137,6 +158,14 @@ function validate(s: FormState, fileBased: boolean, engine: Engine): Errors {
     return errors;
   }
   if (Object.keys(validateOptions(s.options)).length) errors.options = 'Check the connection options.';
+  const timeout = Number(s.timeout);
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 300) errors.timeout = '1–300 seconds';
+  if (connectsByApi(engine)) {
+    if (!s.name.trim()) errors.name = 'Give the connection a name.';
+    if (!/^[a-z0-9.:_-]+$/i.test(s.database.trim())) errors.database = 'Enter the Google Cloud project ID, e.g. my-project-123.';
+    if (s.auth.method === 'password' && !s.properties.key_file && !s.properties.endpoint?.trim()) errors.properties = 'Choose the service account key file, or use the Google Cloud CLI.';
+    return errors;
+  }
   if (s.ssh && [s.ssh.host, ...s.ssh.jumps].some((h) => !h.host || !h.username || h.port < 1 || h.port > 65535 || (h.auth.method === 'private_key' && !h.auth.path))) {
     errors.ssh = 'Every SSH host needs a host, port, user and (for key auth) a key file.';
   }
@@ -146,11 +175,11 @@ function validate(s: FormState, fileBased: boolean, engine: Engine): Errors {
   if (!s.name.trim()) errors.name = 'Give the connection a name.';
   if (!s.host.trim() && engine !== 'dynamodb') errors.host = 'Host is required.';
   if (engine === 'dynamodb' && !/^[a-z0-9-]+$/.test(s.properties.region?.trim() ?? '')) errors.properties = 'Enter the AWS region, e.g. eu-west-1.';
+  if (engine === 'd1' && !/^[0-9a-f]{32}$/i.test(s.properties.account_id?.trim() ?? '')) errors.properties = 'Enter the 32-character account ID from the Cloudflare dashboard.';
+  if (engine === 'd1' && !s.database.trim()) errors.database = 'Enter the database ID or name, or load the list.';
   const port = Number(s.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) errors.port = '1–65535';
   if (!s.username.trim() && credentialLabels(engine).usernameRequired && s.auth.method === 'password') errors.username = `${credentialLabels(engine).username} is required.`;
-  const timeout = Number(s.timeout);
-  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 300) errors.timeout = '1–300 seconds';
   return errors;
 }
 
@@ -163,6 +192,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
   const existing = connections.find((c) => c.id === connectionId);
   const [state, setState] = useState(() => initialState(engine, info?.default_port ?? null, existing, prefill));
   const fileBased = info?.file_based ?? false;
+  const viaApi = connectsByApi(engine);
   const [touched, setTouched] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState<'save' | 'connect' | null>(null);
@@ -182,6 +212,16 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
     setState((s) => ({ ...s, [key]: value }));
     setResult(null);
   };
+  const apiHost = API_HOSTS[engine];
+  /** A pasted libSQL URL fills the host, port, TLS and token fields. */
+  const setHost = (value: string) => {
+    const endpoint = engine === 'libsql' ? libsqlEndpoint(value) : null;
+    if (!endpoint) return set('host', value);
+    setState((s) => ({ ...s, host: endpoint.host, port: String(endpoint.port), sslMode: endpoint.sslMode, password: endpoint.token ?? s.password }));
+    setResult(null);
+  };
+  const [databases, setDatabases] = useState<string[] | null>(null);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
 
   const passwordChange = (): PasswordChange => {
     if (state.password) return { action: 'set', value: state.password };
@@ -227,7 +267,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
       auth: engine === 'dynamodb' && state.auth.method === 'aws_iam' ? { ...state.auth, region: state.properties.region?.trim() ?? '' } : state.auth,
       properties: Object.fromEntries(Object.entries(state.properties).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v)),
     },
-    password: fileBased ? { action: 'clear' } : state.auth.method === 'password' ? passwordChange() : { action: 'clear' },
+    password: fileBased || viaApi ? { action: 'clear' } : state.auth.method === 'password' ? passwordChange() : { action: 'clear' },
     ssh_secrets: hopChanges(),
   });
 
@@ -269,8 +309,24 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
     }
   };
 
+  /** Lists the account's databases with the entered token (Cloudflare D1). */
+  const loadDatabases = async () => {
+    setLoadingDatabases(true);
+    setResult(null);
+    try {
+      setDatabases(await api.draftDatabases(draft()));
+    } catch (e) {
+      setResult({ ok: false, error: toAppError(e).info });
+    } finally {
+      setLoadingDatabases(false);
+    }
+  };
+
   const err = (key: keyof FormState) => (touched ? errors[key] : undefined);
-  const insecure = fileBased ? null : insecureReason({ host: state.host.trim(), ssl_mode: state.sslMode, ssh: state.ssh });
+  const insecure = fileBased || viaApi ? null : insecureReason({ host: state.host.trim(), ssl_mode: state.sslMode, ssh: state.ssh });
+  // What the result alerts name: the file, the API project, or host and port.
+  const server = viaApi ? state.properties.endpoint?.trim() || 'the Google API' : state.host;
+  const failedTitle = fileBased ? `Could not open ${state.database}` : viaApi ? `Could not connect to ${state.database}` : `Could not connect to ${state.host}:${state.port}`;
   const passwordHint = existing?.has_password
     ? state.clearPassword
       ? 'The saved password will be removed when you save.'
@@ -338,20 +394,23 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             />
           ) : (
             <>
+          {!apiHost && !viaApi && (
           <div className={styles.hostRow}>
-            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} onChange={(e) => set('host', e.target.value)} />
+            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} placeholder={host.placeholder} onChange={(e) => setHost(e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
-          {!NO_DATABASE_FIELD.includes(engine) && (
+          )}
+          {!NO_DATABASE_FIELD.includes(engine) && !apiHost && (
             <TextField
               label={databaseLabel(engine)}
               mono
               value={state.database}
-              hint={engine === 'oracle' ? 'The service of the pluggable database, e.g. FREEPDB1 or ORCLPDB1. Needs Oracle Instant Client.' : undefined}
+              error={err('database')}
+              hint={DATABASE_HINTS[engine]}
               onChange={(e) => set('database', e.target.value)}
             />
           )}
-          {state.auth.method === 'password' || engine !== 'dynamodb' ? (
+          {viaApi || TOKEN_ONLY.includes(engine) ? null : state.auth.method === 'password' || engine !== 'dynamodb' ? (
             <TextField
               label={credentials.username}
               mono
@@ -373,12 +432,47 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
                 mono
                 placeholder={p.placeholder}
                 value={state.properties[p.key] ?? ''}
-                error={p.key === 'region' ? err('properties') : undefined}
+                error={p.required ? err('properties') : undefined}
                 onChange={(e) => set('properties', { ...state.properties, [p.key]: e.target.value })}
               />
             ),
           )}
-          {state.auth.method === 'password' && (
+          {apiHost && (
+            <TextField
+              label={databaseLabel(engine)}
+              mono
+              list="dq-account-databases"
+              value={state.database}
+              error={err('database')}
+              placeholder={databases ? 'Pick a database' : undefined}
+              hint={databases ? `${databases.length} database(s) in this account.` : 'Enter the API token below, then load the list, or type the ID.'}
+              onChange={(e) => set('database', e.target.value)}
+              action={
+                <Button busy={loadingDatabases} onClick={() => void loadDatabases()} title="Asks the account which databases the token can open (also checks the token)">
+                  Load databases
+                </Button>
+              }
+            />
+          )}
+          {databases && (
+            <datalist id="dq-account-databases">
+              {databases.map((d) => (
+                <option key={d} value={d} />
+              ))}
+            </datalist>
+          )}
+          {viaApi && state.auth.method === 'password' && (
+            <FileField
+              className={styles.full}
+              label="Service account key"
+              value={state.properties.key_file || null}
+              error={err('properties')}
+              filters={KEY_FILE_FILTERS}
+              hint="A JSON key (or an authorized_user file). Only its path is saved; the file is read on connect and never copied. Leave empty for an emulator endpoint."
+              onChange={(path) => set('properties', { ...state.properties, key_file: path ?? '' })}
+            />
+          )}
+          {state.auth.method === 'password' && !viaApi && (
           <div className={styles.full} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <TextField
               label={credentials.password}
@@ -397,6 +491,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             )}
           </div>
           )}
+          {!apiHost && !viaApi && (
           <SelectField
             label="SSL mode"
             mono
@@ -413,17 +508,20 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
                     : 'Encrypted, but the certificate is not verified.'
             }
           />
+          )}
           <TextField label="Connect timeout" mono inputMode="numeric" suffix="seconds" value={state.timeout} error={err('timeout')} onChange={(e) => set('timeout', e.target.value.replace(/\D/g, ''))} />
             </>
           )}
-          {!fileBased && (
+          {!fileBased && !apiHost && (
             <>
-          {engine !== 'mongodb' && (
+          {offersCloudAuth(engine) && (
           <FormSection title="Authentication" summary={authSummary(state.auth, engine)} open={openSections.auth} onToggle={() => toggle('auth')}>
             <AuthFields auth={state.auth} engine={engine} onChange={(a) => set('auth', a)} />
             {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}
           </FormSection>
           )}
+          {!viaApi && (
+            <>
           <FormSection title="Advanced TLS" summary={tlsSummary(state.tlsFiles)} open={openSections.tls} onToggle={() => toggle('tls')}>
             <TlsFields files={state.tlsFiles} onChange={(f) => set('tlsFiles', f)} />
             {err('tlsFiles') && <span className={`dq-field__error ${styles.full}`}>{err('tlsFiles')}</span>}
@@ -435,6 +533,8 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             )}
             {err('ssh') && <span className={`dq-field__error ${styles.full}`}>{err('ssh')}</span>}
           </FormSection>
+            </>
+          )}
             </>
           )}
           <FormSection title="Connection options" summary={optionsSummary(state.readOnly, state.options)} open={openSections.options} onToggle={() => toggle('options')}>
@@ -457,12 +557,12 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
         {result?.ok && (
           <Alert tone="positive" title={`✓ Connected to ${result.info.version} in ${formatDuration(result.info.latency_ms)}.`}>
             {result.info.tls
-              ? `TLS${result.info.tls.version ? ` ${result.info.tls.version.replace('TLSv', '')}` : ''} · ${result.info.tls.verified ? `certificate verified for ${state.host}` : 'certificate not verified'}`
+              ? `TLS${result.info.tls.version ? ` ${result.info.tls.version.replace('TLSv', '')}` : ''} · ${result.info.tls.verified ? `certificate verified for ${server}` : 'certificate not verified'}`
               : 'Not encrypted (SSL disabled or not offered by the server).'}
             {result.info.read_only && ' · Server is read-only (standby).'}
           </Alert>
         )}
-        {result && !result.ok && <ErrorAlert error={result.error} title={fileBased ? `Could not open ${state.database}` : `Could not connect to ${state.host}:${state.port}`} />}
+        {result && !result.ok && <ErrorAlert error={result.error} title={failedTitle} />}
         {result && !result.ok && <TrustHostKey error={result.error} onTrusted={() => void test()} />}
 
         <div className={styles.formActions}>

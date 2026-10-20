@@ -67,9 +67,12 @@ type Panel = 'activity' | 'locks' | 'sizes' | 'settings';
 const PROCESS_SOURCE: Partial<Record<Engine, string>> = {
   postgres: 'Running queries from pg_stat_activity',
   cockroachdb: 'Sessions from crdb_internal.cluster_sessions',
+  redshift: 'Sessions from stv_sessions, running statements from stv_recents',
+  greenplum: 'Running queries from pg_stat_activity on the coordinator',
   sqlserver: 'Sessions from sys.dm_exec_sessions',
   oracle: 'Sessions from V$SESSION',
   clickhouse: 'Running queries from system.processes',
+  vertica: 'Sessions from v_monitor.sessions',
   duckdb: 'The query editor connection (DuckDB runs inside DataQuery)',
   mongodb: 'Operations from currentOp',
   cassandra: 'Client connections from system_views.clients',
@@ -214,13 +217,18 @@ export function MonitorView({ active: shown }: { active: boolean }) {
                 />
               )}
               {s.replication && (
-                <Tile
-                  label="Replication"
-                  value={
-                    s.replication.lag_secs !== null ? `${s.replication.lag_secs.toFixed(1)} s` : s.replication.role
-                  }
-                  help={`${s.replication.role}${s.replication.role === 'primary' ? ` · ${s.replication.replicas} replica${s.replication.replicas === 1 ? '' : 's'}` : ''}${s.replication.state ? ` · ${s.replication.state}` : ''}`}
-                />
+                s.replication.role === 'coordinator' ? (
+                  // Greenplum: segment health in place of streaming replication.
+                  <Tile label="Segments" value={s.replication.state?.split(' · ')[0] ?? s.replication.role} help={s.replication.state?.split(' · ').slice(1).join(' · ') || undefined} />
+                ) : (
+                  <Tile
+                    label="Replication"
+                    value={
+                      s.replication.lag_secs !== null ? `${s.replication.lag_secs.toFixed(1)} s` : s.replication.role
+                    }
+                    help={`${s.replication.role}${s.replication.role === 'primary' ? ` · ${s.replication.replicas} replica${s.replication.replicas === 1 ? '' : 's'}` : ''}${s.replication.state ? ` · ${s.replication.state}` : ''}`}
+                  />
+                )
               )}
             </div>
             {s.unavailable.length > 0 && (

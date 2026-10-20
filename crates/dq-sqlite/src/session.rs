@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::backup::NativeBackup;
 use dq_core::explain::ExplainResult;
-use dq_core::node::{Node, NodeKind, ObjectRef};
+use dq_core::node::{Node, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
 use dq_core::sql::{Dialect, SqlFlavor, SqliteDialect, command_tag, split_statements};
@@ -21,7 +21,7 @@ use dq_core::{DbError, DbResult, ErrorKind};
 use rusqlite::{Connection, OpenFlags, params_from_iter};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::catalog;
+use crate::catalog::{self, now};
 use crate::error::map_error;
 use crate::values::{self, column_meta};
 use crate::worker::{self, Command, Interrupter};
@@ -233,18 +233,12 @@ impl Session for SqliteSession {
 
     async fn list_children(&self, parent: Option<&ObjectRef>) -> DbResult<Vec<Node>> {
         let parent = parent.cloned();
-        blocking(&self.catalog, move |conn| match parent {
-            None => catalog::databases(conn),
-            Some(p) if p.kind == NodeKind::Database => catalog::relations(conn, &p.name),
-            Some(p) if p.kind == NodeKind::Table => catalog::table_children(conn, &p),
-            Some(_) => Ok(Vec::new()),
-        })
-        .await
+        blocking(&self.catalog, move |conn| now(catalog::children(conn, parent.as_ref()))).await
     }
 
     async fn search(&self, query: &str, limit: u32) -> DbResult<Vec<Node>> {
         let query = query.to_owned();
-        blocking(&self.catalog, move |conn| catalog::search(conn, &query, limit)).await
+        blocking(&self.catalog, move |conn| now(catalog::search(conn, &query, limit))).await
     }
 
     async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
@@ -282,22 +276,22 @@ impl Session for SqliteSession {
 
     async fn structure(&self, object: &ObjectRef) -> DbResult<TableStructure> {
         let object = object.clone();
-        blocking(&self.catalog, move |conn| catalog::structure(conn, &object)).await
+        blocking(&self.catalog, move |conn| now(catalog::structure(conn, &object))).await
     }
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {
         let object = object.clone();
-        blocking(&self.catalog, move |conn| catalog::ddl(conn, &object)).await
+        blocking(&self.catalog, move |conn| now(catalog::ddl(conn, &object))).await
     }
 
     async fn dependencies(&self, object: &ObjectRef) -> DbResult<Dependencies> {
         let object = object.clone();
-        blocking(&self.catalog, move |conn| catalog::dependencies(conn, &object)).await
+        blocking(&self.catalog, move |conn| now(catalog::dependencies(conn, &object))).await
     }
 
     async fn schema_model(&self, database: &str, _schema: Option<&str>) -> DbResult<SchemaModel> {
         let database = if database.is_empty() { self.info.database.clone() } else { database.to_owned() };
-        blocking(&self.catalog, move |conn| catalog::schema_model(conn, &database)).await
+        blocking(&self.catalog, move |conn| now(catalog::schema_model(conn, &database))).await
     }
 
     async fn read_query(
@@ -332,7 +326,7 @@ impl Session for SqliteSession {
 
     async fn row_estimate(&self, object: &ObjectRef) -> DbResult<Option<i64>> {
         let object = object.clone();
-        blocking(&self.catalog, move |conn| Ok(catalog::row_estimate(conn, &object))).await
+        blocking(&self.catalog, move |conn| Ok(now(catalog::row_estimate(conn, &object)))).await
     }
 
     async fn run_in_transaction(&self, _database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
@@ -371,11 +365,9 @@ impl Session for SqliteSession {
         _timeout_secs: u32,
     ) -> DbResult<ExplainResult> {
         if analyze {
-            return Err(DbError::unsupported(
-                "SQLite has no EXPLAIN ANALYZE. Run the query to see its time, or use Explain for the plan.",
-            ));
+            return Err(crate::explain::no_analyze());
         }
-        let statement = format!("EXPLAIN QUERY PLAN {}", sql.trim().trim_end_matches(';'));
+        let statement = crate::explain::statement(sql);
         let params = params.to_vec();
         blocking(&self.catalog, move |conn| {
             let mut prepared = conn.prepare(&statement).map_err(|e| map_error(&e))?;

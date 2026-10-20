@@ -148,6 +148,12 @@ pub fn prepare(
 ) -> DbResult<Prepared> {
     let dialect = match flavor {
         SqlFlavor::Postgres if version.starts_with("CockroachDB") => "CockroachDB (PostgreSQL-compatible)",
+        SqlFlavor::Postgres if version.starts_with("Amazon Redshift") => {
+            "Amazon Redshift (PostgreSQL 8.0-based; no RETURNING, sequences or indexes)"
+        }
+        SqlFlavor::Postgres if version.starts_with("Greenplum") || version.contains("Cloudberry") => {
+            "Greenplum / Apache Cloudberry (PostgreSQL-based MPP)"
+        }
         SqlFlavor::Postgres => "PostgreSQL",
         SqlFlavor::Mysql => "MySQL/MariaDB",
         SqlFlavor::Sqlserver => "SQL Server T-SQL",
@@ -156,6 +162,8 @@ pub fn prepare(
         SqlFlavor::Duckdb => "DuckDB SQL",
         SqlFlavor::Sqlite => "SQLite",
         SqlFlavor::Snowflake => "Snowflake SQL",
+        SqlFlavor::Bigquery => "BigQuery GoogleSQL (backtick `project.dataset.table` names)",
+        SqlFlavor::Vertica => "Vertica SQL",
         SqlFlavor::Mongodb => "MongoDB shell (mongosh) syntax, e.g. db.orders.find({ … })",
         SqlFlavor::Partiql => "DynamoDB PartiQL",
         SqlFlavor::Redis => "Redis commands (one per line, redis-cli syntax)",

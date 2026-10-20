@@ -43,11 +43,13 @@ pub enum BackupFamily {
 
 impl BackupFamily {
     /// The family of `engine`, or `None` when it has no backup support.
-    /// `CockroachDB` speaks the `PostgreSQL` protocol but rejects `pg_dump`'s
-    /// catalog queries; it has its own `BACKUP` statement.
+    /// `CockroachDB` and Redshift speak the `PostgreSQL` protocol but reject
+    /// `pg_dump`'s catalog queries; `CockroachDB` has its own `BACKUP`
+    /// statement, Redshift snapshots and `UNLOAD`. Greenplum takes `pg_dump`
+    /// (without distribution clauses; `gpbackup` is its tool for large databases).
     pub fn of(engine: Engine) -> Option<Self> {
         Some(match engine {
-            Engine::Postgres => Self::Postgres,
+            Engine::Postgres | Engine::Greenplum => Self::Postgres,
             Engine::Mysql | Engine::Mariadb => Self::Mysql,
             Engine::Mongodb => Self::Mongodb,
             Engine::Sqlite => Self::Sqlite,
@@ -240,8 +242,12 @@ pub struct ServerVersion {
 }
 
 impl ServerVersion {
+    /// Reads `PostgreSQL 17.4`, `MariaDB 11.4.2` or `8.4.0`. Products built on
+    /// PostgreSQL name it too (`Greenplum 7.0.0 (PostgreSQL 12.12)`), and the
+    /// client tools must match that version, not the product's.
     pub fn parse(text: &str) -> Option<Self> {
-        let (major, minor) = tools::version_numbers(text)?;
+        let base = text.split_once("(PostgreSQL ").map_or(text, |(_, base)| base);
+        let (major, minor) = tools::version_numbers(base)?;
         Some(Self { major, minor, mariadb: text.contains("MariaDB") })
     }
 }
@@ -258,6 +264,11 @@ pub fn version_warning(tool: Tool, version: &ToolVersion, server: Option<ServerV
         Tool::PgRestore | Tool::Psql if version.major < server.major => Some(format!(
             "{name} {} is older than the server (PostgreSQL {}); backups made by a newer pg_dump may not restore.",
             version.text, server.major
+        )),
+        // pg_restore 17 and newer always runs `SET transaction_timeout`.
+        Tool::PgRestore if version.major >= 17 && server.major < 17 => Some(format!(
+            "{name} {} sets transaction_timeout, which PostgreSQL {} does not have, so restores fail. Install client tools from PostgreSQL {} to 16 or choose them in Settings → Engines.",
+            version.text, server.major, server.major
         )),
         Tool::Mysqldump | Tool::Mysql if version.mariadb != server.mariadb => Some(format!(
             "{name} is the {} client but the server is {}. If it fails, install the {} client tools or choose them in Settings → Engines.",
@@ -545,6 +556,8 @@ mod tests {
         assert_eq!(BackupFamily::of(Engine::Postgres), Some(BackupFamily::Postgres));
         assert_eq!(BackupFamily::of(Engine::Mariadb), Some(BackupFamily::Mysql));
         assert_eq!(BackupFamily::of(Engine::Cockroachdb), None);
+        assert_eq!(BackupFamily::of(Engine::Redshift), None);
+        assert_eq!(BackupFamily::of(Engine::Greenplum), Some(BackupFamily::Postgres));
         assert_eq!(BackupFamily::of(Engine::Redis), None);
         assert_eq!(BackupFamily::Postgres.restore_tool(BackupFormat::Plain), Some(Tool::Psql));
         assert_eq!(BackupFamily::Postgres.restore_tool(BackupFormat::Custom), Some(Tool::PgRestore));
@@ -561,6 +574,11 @@ mod tests {
         assert!(version_warning(Tool::PgDump, &tool_version("pg_dump (PostgreSQL) 17.0"), pg17).is_none());
         assert!(version_warning(Tool::PgRestore, &old, pg17).is_some());
         assert!(version_warning(Tool::PgDump, &old, None).is_none(), "unknown server version");
+        let greenplum = ServerVersion::parse("Greenplum 7.0.0 (PostgreSQL 12.12)").unwrap();
+        assert_eq!((greenplum.major, greenplum.minor), (12, 12), "the PostgreSQL it is built on");
+        let restore17 = tool_version("pg_restore (PostgreSQL) 17.4");
+        assert!(version_warning(Tool::PgRestore, &restore17, Some(greenplum)).unwrap().contains("transaction_timeout"));
+        assert!(version_warning(Tool::PgRestore, &restore17, pg17).is_none());
 
         let maria = ServerVersion::parse("MariaDB 11.4.2");
         let mysql_tool = tool_version("mysqldump  Ver 9.2.0 for macos15.2 on arm64 (Homebrew)");

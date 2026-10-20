@@ -20,6 +20,8 @@ export const TYPE_SUGGESTIONS: Record<SqlFlavor, string[]> = {
   sqlite: ['INTEGER', 'REAL', 'NUMERIC', 'NUMERIC(12,2)', 'TEXT', 'BLOB', 'BOOLEAN', 'DATE', 'DATETIME', 'JSON'],
   duckdb: ['BIGINT', 'INTEGER', 'SMALLINT', 'DECIMAL(12,2)', 'DOUBLE', 'BOOLEAN', 'VARCHAR', 'UUID', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'INTERVAL', 'BLOB', 'JSON', 'VARCHAR[]', 'STRUCT(a INTEGER)'],
   snowflake: ['NUMBER(38,0)', 'NUMBER(12,2)', 'FLOAT', 'BOOLEAN', 'VARCHAR', 'VARCHAR(255)', 'DATE', 'TIME', 'TIMESTAMP_NTZ', 'TIMESTAMP_TZ', 'VARIANT', 'OBJECT', 'ARRAY', 'BINARY', 'GEOGRAPHY'],
+  bigquery: ['INT64', 'NUMERIC', 'NUMERIC(12, 2)', 'BIGNUMERIC', 'FLOAT64', 'BOOL', 'STRING', 'STRING(255)', 'BYTES', 'DATE', 'TIME', 'DATETIME', 'TIMESTAMP', 'INTERVAL', 'JSON', 'GEOGRAPHY', 'ARRAY<STRING>', 'STRUCT<a INT64, b STRING>'],
+  vertica: ['INT', 'NUMERIC(12,2)', 'FLOAT', 'BOOLEAN', 'VARCHAR(255)', 'LONG VARCHAR', 'CHAR(10)', 'UUID', 'DATE', 'TIME', 'TIMESTAMP', 'TIMESTAMPTZ', 'INTERVAL DAY TO SECOND', 'VARBINARY(255)', 'ARRAY[INT]', 'GEOMETRY'],
   oracle: ['NUMBER(19)', 'NUMBER(10)', 'NUMBER(12,2)', 'BINARY_DOUBLE', 'VARCHAR2(255 CHAR)', 'NVARCHAR2(255)', 'CHAR(1)', 'CLOB', 'DATE', 'TIMESTAMP(6)', 'TIMESTAMP(6) WITH TIME ZONE', 'RAW(16)', 'BLOB', 'JSON'],
   // Document engines have no schema forms.
   mongodb: [],
@@ -46,6 +48,8 @@ const IDENTITY_LABEL: Record<SqlFlavor, string> = {
   query_dsl: 'Identity (not supported)',
   cypher: 'Identity (not supported)',
   snowflake: 'IDENTITY',
+  bigquery: 'Identity (not supported; use GENERATE_UUID() as default)',
+  vertica: 'IDENTITY',
 };
 
 function TypeList({ flavor }: { flavor: SqlFlavor }) {

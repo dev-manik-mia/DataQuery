@@ -153,6 +153,7 @@ export const api = {
   renameFolder: (id: string, name: string) => call<void>('rename_folder', { id, name }),
   deleteFolder: (id: string) => call<void>('delete_folder', { id }),
   testConnection: (draft: ConnectionDraft) => call<ServerInfo>('test_connection', { draft }),
+  draftDatabases: (draft: ConnectionDraft) => call<string[]>('draft_databases', { draft }),
   trustHostKey: (host: string, port: number, fingerprint: string) => call<void>('trust_host_key', { host, port, fingerprint }),
   exportConnections: (path: string, ids: string[] | null) => call<number>('export_connections', { path, ids }),
   importConnections: (path: string) => call<ConnectionImportReport>('import_connections', { path }),

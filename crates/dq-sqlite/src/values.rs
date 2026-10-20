@@ -3,7 +3,7 @@
 
 use dq_core::result::{ColumnMeta, Row as CellRow};
 use dq_core::value::{Cell, CellLimits};
-use rusqlite::types::ValueRef;
+pub use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Row, Statement};
 
 /// Declared types that hold JSON text.

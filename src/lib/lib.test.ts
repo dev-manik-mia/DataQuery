@@ -5,6 +5,7 @@ import type { StatementInfo } from '@/bindings/StatementInfo';
 
 import { binaryLabel, cellText, hexDump, isSensitiveColumn, parseClipboardGrid, splitTemporal } from './cells';
 import { serializeRows, serializeRowsChunked } from './clipboard';
+import { connectsByApi, databaseLabel, defaultSslMode, flavorOf, hasSchemas, libsqlEndpoint, placeholderLabel } from './engines';
 import { formatCount, formatDuration, formatTimer } from './format';
 import { statementAt } from './sql';
 
@@ -84,6 +85,17 @@ describe('statementAt', () => {
   });
 });
 
+describe('engines', () => {
+  it('reaches BigQuery through its API with GoogleSQL', () => {
+    expect(flavorOf('bigquery')).toBe('bigquery');
+    expect(connectsByApi('bigquery') && !connectsByApi('snowflake')).toBe(true);
+    expect(databaseLabel('bigquery')).toBe('Project ID');
+    expect(defaultSslMode('bigquery')).toBe('verify-full');
+    expect(placeholderLabel('bigquery', 2)).toBe('@… #2');
+    expect(hasSchemas('bigquery')).toBe(true);
+  });
+});
+
 describe('format', () => {
   it('formats durations and timers', () => {
     expect(formatDuration(142)).toBe('142 ms');
@@ -109,5 +121,14 @@ describe('grid helpers', () => {
 
   it('dumps bytes as hex and ascii', () => {
     expect(hexDump('89504e470d0a1a0a41')).toBe(`00000000  ${'89 50 4e 47 0d 0a 1a 0a 41'.padEnd(47)}  .PNG....A`);
+  });
+});
+
+describe('libsqlEndpoint', () => {
+  it('reads Turso and sqld URLs pasted as the host', () => {
+    expect(libsqlEndpoint('libsql://shop-acme.turso.io?authToken=eyJ.x')).toEqual({ host: 'shop-acme.turso.io', port: 443, sslMode: 'verify-full', token: 'eyJ.x' });
+    expect(libsqlEndpoint('http://localhost:8080/')).toEqual({ host: 'localhost', port: 8080, sslMode: 'disable', token: null });
+    expect(libsqlEndpoint('libsql://127.0.0.1:58080?tls=0')).toMatchObject({ port: 58080, sslMode: 'disable' });
+    expect(libsqlEndpoint('shop-acme.turso.io')).toBeNull();
   });
 });

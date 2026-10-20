@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use dq_core::adapter::ConnectParams;
 use dq_core::result::ServerInfo;
 use dq_core::{DbError, ErrorKind};
 use dq_store::import::{self, DetectedSource, ForeignPreview, SourceApp, UserDirs};
@@ -126,6 +127,15 @@ pub async fn test_connection(state: State<'_, AppState>, draft: ConnectionDraft)
     let info = opened.session.info().clone();
     opened.session.close().await;
     Ok(info)
+}
+
+/// Databases the form's credentials can open, for engines whose database is
+/// picked from an account (Cloudflare D1). `Keep` secrets read the saved ones.
+#[tauri::command]
+pub async fn draft_databases(state: State<'_, AppState>, draft: ConnectionDraft) -> CmdResult<Vec<String>> {
+    let secrets = connector::draft_secrets(&state, &draft).await?;
+    let adapter = state.registry.get(draft.config.engine)?;
+    adapter.databases(&ConnectParams::new(draft.config, secrets.password)).await
 }
 
 /// Trusts the SSH host key that `host:port` just offered, if its fingerprint

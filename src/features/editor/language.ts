@@ -28,6 +28,20 @@ const CQL = SQLDialect.define({
   doubleQuotedStrings: false,
 });
 
+/** BigQuery GoogleSQL: backtick paths, `#` comments, both quotes for strings, backslash escapes, `@param`. */
+const BIGQUERY = SQLDialect.define({
+  keywords:
+    'all and any array as asc assert_rows_modified at between by case cast collate contains create cross cube current default define desc distinct else end enum escape except exclude exists extract false fetch following for from full group grouping groups hash having if ignore in inner intersect interval into is join lateral left like limit lookup merge natural new no not null nulls of on or order outer over partition preceding proto qualify range recursive respect right rollup rows select set some struct tablesample then to treat true unbounded union unnest using when where window with within ' +
+    'insert update delete values truncate table view materialized schema function procedure returns language options cluster replace temp temporary drop alter add column rename primary key foreign references enforced declare begin commit rollback transaction call execute immediate loop while do repeat until leave continue break return raise exception error elseif iterate offset safe_cast',
+  types: 'int64 float64 numeric bignumeric decimal bigdecimal bool string bytes date time datetime timestamp interval json geography struct array range',
+  builtin: 'current_date current_timestamp current_datetime session_user safe_divide coalesce ifnull nullif format to_json_string parse_json json_value json_query generate_array generate_date_array st_geogpoint st_astext approx_count_distinct array_agg string_agg countif',
+  hashComments: true,
+  backslashEscapes: true,
+  doubleQuotedStrings: true,
+  identifierQuotes: '`',
+  specialVar: '@?',
+});
+
 const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   postgres: PostgreSQL,
   mysql: MySQL,
@@ -38,6 +52,9 @@ const DIALECTS: Record<SqlFlavor, SQLDialect> = {
   duckdb: PostgreSQL,
   sqlite: SQLite,
   snowflake: StandardSQL,
+  bigquery: BIGQUERY,
+  // Double-quoted names, E'' strings and dollar quotes, like PostgreSQL.
+  vertica: PostgreSQL,
   // Not SQL: MongoDB uses the JavaScript mode below.
   mongodb: StandardSQL,
   partiql: StandardSQL,

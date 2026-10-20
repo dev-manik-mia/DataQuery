@@ -289,8 +289,9 @@ impl Found {
 /// databases that only resemble a supported one map to `None`.
 fn engine_named(name: &str) -> Option<Engine> {
     const NAMES: &[(&str, Option<Engine>)] = &[
-        ("redshift", None),
-        ("greenplum", None),
+        ("redshift", Some(Engine::Redshift)),
+        ("greenplum", Some(Engine::Greenplum)),
+        ("cloudberry", Some(Engine::Greenplum)),
         ("libsql", None),
         ("cockroach", Some(Engine::Cockroachdb)),
         ("mariadb", Some(Engine::Mariadb)),
@@ -306,6 +307,7 @@ fn engine_named(name: &str) -> Option<Engine> {
         ("duckdb", Some(Engine::Duckdb)),
         ("sqlite", Some(Engine::Sqlite)),
         ("snowflake", Some(Engine::Snowflake)),
+        ("vertica", Some(Engine::Vertica)),
         ("valkey", Some(Engine::Valkey)),
         ("dragonfly", Some(Engine::Dragonfly)),
         ("redis", Some(Engine::Redis)),
@@ -497,9 +499,10 @@ mod tests {
         assert_eq!(engine_named("MSSQL"), Some(Engine::Sqlserver));
         assert_eq!(engine_named("Mongo"), Some(Engine::Mongodb));
         assert_eq!(engine_named("sqlite.xerial"), Some(Engine::Sqlite));
-        assert_eq!(engine_named("Redshift"), None);
+        assert_eq!(engine_named("Redshift"), Some(Engine::Redshift));
+        assert_eq!(engine_named("Greenplum"), Some(Engine::Greenplum));
         assert_eq!(engine_named("LibSQL"), None);
-        assert_eq!(engine_named("Vertica"), None);
+        assert_eq!(engine_named("Vertica"), Some(Engine::Vertica));
     }
 
     #[test]
@@ -515,10 +518,10 @@ mod tests {
     #[test]
     fn unsupported_engines_are_skipped_and_invalid_ones_flagged() {
         let mut found = Found::default();
-        found.push(Raw { name: "warehouse".into(), driver: "Redshift".into(), ..Raw::default() });
+        found.push(Raw { name: "warehouse".into(), driver: "Teradata".into(), ..Raw::default() });
         found.push(Raw { name: "no user".into(), engine: Some(Engine::Postgres), ..Raw::default() });
         let preview = found.finish(SourceApp::Tableplus);
-        assert_eq!(preview.skipped, ["warehouse: Redshift is not supported."]);
+        assert_eq!(preview.skipped, ["warehouse: Teradata is not supported."]);
         let c = &preview.connections[0];
         assert_eq!((c.connection.config.host.as_str(), c.connection.config.port), ("localhost", 5432));
         assert_eq!(c.problem.as_deref(), Some("Username is required."));

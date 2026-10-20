@@ -19,6 +19,7 @@ import {
   SelectField,
   Spinner,
 } from '@/components/ui';
+import { connectionAddress } from '@/lib/engines';
 import { toAppError } from '@/lib/errors';
 import { plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
@@ -153,9 +154,7 @@ export function ImportAppsDialog({ onClose }: { onClose: () => void }) {
               {rows.map((row, i) => {
                 const c = row.connection;
                 const engine = engines.find((e) => e.engine === c.config.engine);
-                const address = c.config.host
-                  ? `${c.config.host}:${c.config.port}${c.config.database ? `/${c.config.database}` : ''}`
-                  : c.config.database;
+                const address = connectionAddress(c.config);
                 return (
                   <div key={i} className={styles.importRow}>
                     <Checkbox

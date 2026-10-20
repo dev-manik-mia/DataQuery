@@ -3,7 +3,7 @@ import type { Engine } from '@/bindings/Engine';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { SslMode } from '@/bindings/SslMode';
 
-/** SQL dialect used for highlighting and analysis. CockroachDB speaks PostgreSQL. */
+/** SQL dialect used for highlighting and analysis. CockroachDB, Redshift and Greenplum speak PostgreSQL. */
 export function flavorOf(engine: Engine | undefined): SqlFlavor {
   switch (engine) {
     case 'mysql':
@@ -18,9 +18,15 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
     case 'duckdb':
       return 'duckdb';
     case 'sqlite':
+    case 'libsql':
+    case 'd1':
       return 'sqlite';
     case 'snowflake':
       return 'snowflake';
+    case 'bigquery':
+      return 'bigquery';
+    case 'vertica':
+      return 'vertica';
     case 'mongodb':
       return 'mongodb';
     case 'dynamodb':
@@ -50,6 +56,7 @@ export function hasSchemas(flavor: SqlFlavor): boolean {
 export function defaultSchema(flavor: SqlFlavor, user?: string): string | null {
   switch (flavor) {
     case 'postgres':
+    case 'vertica':
       return 'public';
     case 'sqlserver':
       return 'dbo';
@@ -79,6 +86,9 @@ export function placeholderLabel(flavor: SqlFlavor, n: number): string {
     case 'clickhouse':
       // Named `{name:Type}` parameters take values in order of first appearance.
       return `{…} #${n}`;
+    case 'bigquery':
+      // `@name` parameters in order of first appearance, or positional `?`.
+      return `@… #${n}`;
     default:
       return `?${n}`;
   }
@@ -91,12 +101,34 @@ export function databaseLabel(engine: Engine): string {
   if (engine === 'mongodb') return 'Default database';
   if (engine === 'redis' || engine === 'valkey' || engine === 'dragonfly') return 'Database number';
   if (engine === 'cassandra' || engine === 'scylladb') return 'Keyspace';
+  if (engine === 'd1') return 'Database ID or name';
+  if (engine === 'bigquery') return 'Project ID';
   return 'Database';
 }
 
-/** Label and hint of the host field. */
-export function hostField(engine: Engine): { label: string; hint?: string } {
+/** Engines reached through a cloud API with their own credentials: no host, port, user, password, TLS files or SSH. */
+const API_ENGINES: Engine[] = ['bigquery'];
+
+export function connectsByApi(engine: Engine): boolean {
+  return API_ENGINES.includes(engine);
+}
+
+/** `host:port/database`, or just the database (file, cloud project) where there is no host. */
+export function connectionAddress(config: Pick<ConnConfig, 'host' | 'port' | 'database'>): string {
+  return config.host ? `${config.host}:${config.port}${config.database ? `/${config.database}` : ''}` : config.database;
+}
+
+/** Label, hint and placeholder of the host field. */
+export function hostField(engine: Engine): { label: string; hint?: string; placeholder?: string } {
   switch (engine) {
+    case 'redshift':
+      return {
+        label: 'Endpoint',
+        hint: 'Cluster or Serverless workgroup endpoint, without the port. Sign-in is by user name and password (IAM credentials are not supported).',
+        placeholder: 'examplecluster.abc123xyz789.us-west-2.redshift.amazonaws.com',
+      };
+    case 'greenplum':
+      return { label: 'Coordinator host', hint: 'The coordinator (master) host; segments are reached through it. Also Apache Cloudberry.' };
     case 'snowflake':
       return { label: 'Account', hint: 'Account identifier (myorg-myaccount or xy12345.eu-west-1) or the full host name.' };
     case 'mongodb':
@@ -106,6 +138,8 @@ export function hostField(engine: Engine): { label: string; hint?: string } {
       return { label: 'Contact points', hint: 'One node, or node1,node2:9043 — the driver discovers the rest of the cluster.' };
     case 'dynamodb':
       return { label: 'Endpoint', hint: 'Leave empty for AWS in the region below, or e.g. localhost for DynamoDB Local.' };
+    case 'libsql':
+      return { label: 'Host', hint: 'The database host (my-db-myorg.turso.io), or paste its libsql:// or https:// URL.' };
     default:
       return { label: 'Host' };
   }
@@ -127,6 +161,10 @@ export function credentialLabels(engine: Engine): { username: string; password: 
       return { username: 'Username', password: 'Password', usernameRequired: false };
     case 'elasticsearch':
       return { username: 'Username', password: 'Password, or an API key with no username', usernameRequired: false };
+    case 'libsql':
+      return { username: 'Username', password: 'Auth token', usernameRequired: false };
+    case 'd1':
+      return { username: 'Username', password: 'API token', usernameRequired: false };
     default:
       return { username: 'Username', password: 'Password', usernameRequired: true };
   }
@@ -135,11 +173,16 @@ export function credentialLabels(engine: Engine): { username: string; password: 
 /** Database and user a new connection form starts with. */
 /**
  * SSL mode for a new connection. TLS is off by default so local and internal
- * servers without certificates connect first time; Snowflake is only reachable
- * over HTTPS, so it keeps full verification.
+ * servers without certificates connect first time; Snowflake, Redshift, Turso (libSQL)
+ * and Cloudflare D1 are cloud services with public certificates, so they keep full verification.
  */
 export function defaultSslMode(engine: Engine): SslMode {
-  return engine === 'snowflake' ? 'verify-full' : 'disable';
+  return ['snowflake', 'redshift', 'libsql', 'd1'].includes(engine) || connectsByApi(engine) ? 'verify-full' : 'disable';
+}
+
+/** Engines that offer cloud IAM sign-in (provider CLI tokens) besides a password. */
+export function offersCloudAuth(engine: Engine): boolean {
+  return !['mongodb', 'redshift', 'greenplum', 'libsql', 'd1'].includes(engine);
 }
 
 export function connectionDefaults(engine: Engine): { database: string; username: string } {
@@ -151,6 +194,10 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: '', username: 'root' };
     case 'cockroachdb':
       return { database: 'defaultdb', username: 'root' };
+    case 'redshift':
+      return { database: 'dev', username: 'awsuser' };
+    case 'greenplum':
+      return { database: 'postgres', username: 'gpadmin' };
     case 'sqlserver':
       return { database: 'master', username: 'sa' };
     case 'oracle':
@@ -170,6 +217,9 @@ export function connectionDefaults(engine: Engine): { database: string; username
       return { database: '', username: 'elastic' };
     case 'neo4j':
       return { database: 'neo4j', username: 'neo4j' };
+    case 'vertica':
+      // A cluster serves one database; an empty name connects to it.
+      return { database: '', username: 'dbadmin' };
     default:
       return { database: '', username: '' };
   }
@@ -233,6 +283,7 @@ const HTTPS_SSL_LABELS: Record<SslMode, string> = {
 
 /** SSL mode as the engine's own client spells it (`sslmode`, `--ssl-mode`, `encrypt`, TCPS). */
 export function sslModeLabel(engine: Engine, mode: SslMode): string {
+  if (engine === 'libsql') return HTTPS_SSL_LABELS[mode];
   switch (flavorOf(engine)) {
     case 'mysql':
       return MYSQL_SSL_LABELS[mode];
@@ -242,6 +293,7 @@ export function sslModeLabel(engine: Engine, mode: SslMode): string {
       return ORACLE_SSL_LABELS[mode];
     case 'clickhouse':
     case 'snowflake':
+    case 'bigquery':
     case 'partiql':
     case 'query_dsl':
       return HTTPS_SSL_LABELS[mode];
@@ -273,4 +325,29 @@ export function insecureReason(config: Pick<ConnConfig, 'host' | 'ssl_mode' | 's
     default:
       return null;
   }
+}
+
+/**
+ * A libSQL URL pasted into the host field: `libsql://db-org.turso.io` (TLS
+ * unless `?tls=0`), `https://…`, `http://localhost:8080` or `ws(s)://…`, with an
+ * optional `?authToken=`. `null` when the input is a plain host name.
+ */
+export function libsqlEndpoint(input: string): { host: string; port: number; sslMode: SslMode; token: string | null } | null {
+  const [, scheme = '', rest = ''] = /^(libsql|https?|wss?):\/\/(.+)$/i.exec(input.trim()) ?? [];
+  if (!rest) return null;
+  let url: URL;
+  try {
+    url = new URL(`http://${rest}`);
+  } catch {
+    return null;
+  }
+  const tlsParam = url.searchParams.get('tls');
+  const kind = scheme.toLowerCase();
+  const tls = kind === 'libsql' ? tlsParam !== '0' && tlsParam !== 'false' : kind === 'https' || kind === 'wss';
+  return {
+    host: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+    port: url.port ? Number(url.port) : tls ? 443 : 8080,
+    sslMode: tls ? 'verify-full' : 'disable',
+    token: url.searchParams.get('authToken'),
+  };
 }

@@ -1,12 +1,13 @@
 //! `SQLite` adapter for DataQuery: a local database file (or `:memory:`).
 //!
 //! The explorer goes database (`main`, plus any `ATTACH`ed ones) → tables
-//! and views → indexes and triggers, like `MySQL`.
+//! and views → indexes and triggers, like `MySQL`. The catalog, value and plan
+//! code is shared with the remote `SQLite` services in `dq-sqlite-http`.
 
 mod backup;
-mod catalog;
-mod error;
-mod explain;
+pub mod catalog;
+pub mod error;
+pub mod explain;
 mod session;
 pub mod values;
 mod worker;
@@ -20,6 +21,14 @@ use dq_core::engine::{Capabilities, Engine};
 use dq_core::result::ServerInfo;
 
 pub use session::SqliteSession;
+
+/// Statements whose changed-row count is reported (`INSERT`, `UPDATE`, `DELETE`, upserts).
+pub fn counts_rows(sql: &str) -> bool {
+    use dq_core::sql::{SqlFlavor, StatementKind, analyze};
+    analyze(sql, SqlFlavor::Sqlite).is_some_and(|s| {
+        matches!(s.kind, StatementKind::Insert | StatementKind::Update | StatementKind::Delete | StatementKind::Merge)
+    })
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SqliteAdapter;

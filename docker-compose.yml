@@ -159,6 +159,18 @@ services:
       interval: 2s
       retries: 30
 
+  # Greenplum 7 (coordinator and two segments). The image trusts every client;
+  # the test account is created once the cluster is up.
+  greenplum:
+    image: andruche/greenplum:7-2seg
+    entrypoint: ["bash", "-c", "(until su - gpadmin -c 'psql -d postgres -c \"SELECT 1\"' >/dev/null 2>&1; do sleep 2; done; su - gpadmin -c 'psql -d postgres -f /seed/init.sql') & exec /entrypoint.sh"]
+    ports: ["55433:5432"]
+    volumes: ["./docker/greenplum-init.sql:/seed/init.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "su - gpadmin -c 'psql -h 127.0.0.1 -U dataquery -d dataquery_test -c \"SELECT 1\"' >/dev/null 2>&1"]
+      interval: 3s
+      retries: 60
+
   # Heavy optional servers run under profiles (see package.json db:up:wide / db:up:search):
   # all test databases together need more than the default 8 GB of Docker memory.
   # Cassandra 5 with password authentication (user cassandra / cassandra); slow to start.
@@ -215,6 +227,43 @@ services:
     ports: ["57687:7687", "57474:7474"]
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p dataquery123 'RETURN 1' >/dev/null 2>&1"]
+      interval: 5s
+      retries: 60
+
+  # libSQL server (sqld, what Turso runs): Hrana over HTTP on :58080. Requests need
+  # a JWT signed by this test-only Ed25519 key, like Turso database tokens; the
+  # matching token is DATAQUERY_TEST_LIBSQL_TOKEN in package.json.
+  libsql:
+    profiles: ["libsql"]
+    image: ghcr.io/tursodatabase/libsql-server:v0.24.33
+    environment:
+      SQLD_AUTH_JWT_KEY: pgDGrptawVYE-009MvmoJaTmQi5uCtQH6iq5kRiDF0Q
+    ports: ["58080:8080"]
+
+  # BigQuery emulator (REST API v2 on ZetaSQL and SQLite), without authentication.
+  bigquery:
+    profiles: ["bigquery"]
+    image: ghcr.io/goccy/bigquery-emulator:0.8.1
+    command: ["--project=dataquery-test", "--port=9050"]
+    ports: ["59050:9050"]
+
+  # Vertica 25.4 Community Edition (26.1 and later dropped the CE license). The image
+  # ships no database: the init script creates `vdb` (about two minutes) with users
+  # dbadmin / dataquery and dataquery / dataquery123. Needs about 2 GB of memory.
+  vertica:
+    profiles: ["vertica"]
+    image: opentext/vertica-k8s:25.4.0-0-multiarch
+    user: "998:996"
+    environment:
+      VERTICA_DB: vdb
+      VERTICA_PASSWORD: dataquery
+    entrypoint: ["/bin/bash", "/seed/vertica-init.sh"]
+    ports: ["55443:5433"]
+    volumes:
+      - ./docker/vertica-init.sh:/seed/vertica-init.sh:ro
+      - ./docker/vertica-seed.sql:/seed/vertica-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/.seeded"]
       interval: 5s
       retries: 60
 

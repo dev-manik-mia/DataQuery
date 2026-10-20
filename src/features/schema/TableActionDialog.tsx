@@ -36,7 +36,7 @@ export function TableActionDialog({ action, objects, onClose, onApplied }: { act
   const [disableForeignKeys, setDisableForeignKeys] = useState(false);
   const [newName, setNewName] = useState(`${objects[0]?.name ?? ''}_copy`);
   const [withData, setWithData] = useState(true);
-  const dropCascade = flavor === 'postgres' || flavor === 'oracle' || flavor === 'duckdb' || flavor === 'snowflake';
+  const dropCascade = flavor === 'postgres' || flavor === 'oracle' || flavor === 'duckdb' || flavor === 'snowflake' || flavor === 'vertica';
 
   const changes = useMemo<SchemaChange[] | string>(() => {
     const tables = objects.map(objectRef);

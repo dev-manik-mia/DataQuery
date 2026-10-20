@@ -289,6 +289,10 @@ fn validate_path(path: &str, what: &str) -> DbResult<()> {
 
 impl ConnConfig {
     pub const MAX_TIMEOUT_SECS: u32 = 300;
+    /// Property holding a Cloudflare D1 connection's account id.
+    pub const D1_ACCOUNT: &str = "account_id";
+    /// Host of the Cloudflare API, where D1 connections go.
+    pub const D1_API_HOST: &str = "api.cloudflare.com";
 
     /// Redis database index: empty means 0.
     pub fn database_index(&self) -> Option<u32> {
@@ -338,6 +342,72 @@ impl ConnConfig {
         Ok(())
     }
 
+    /// Cloudflare D1: an account id and a database (id or name), reached
+    /// through the Cloudflare API host rather than a database server.
+    fn validate_d1(&self) -> DbResult<()> {
+        let account_ok =
+            self.property(Self::D1_ACCOUNT).is_some_and(|a| a.len() == 32 && a.chars().all(|c| c.is_ascii_hexdigit()));
+        if !account_ok {
+            return Err(DbError::invalid("Enter the Cloudflare account ID (32 hexadecimal characters)."));
+        }
+        if self.database.trim().is_empty() {
+            return Err(DbError::invalid("Enter the D1 database ID or name, or load the list with your API token."));
+        }
+        if self.ssh.is_some() {
+            return Err(DbError::invalid("Cloudflare D1 is reached through the Cloudflare API, not an SSH tunnel."));
+        }
+        Ok(())
+    }
+
+    /// `BigQuery`: the billing project in `database`, an optional default
+    /// `dataset` and `location`, and credentials: a service-account `key_file`
+    /// or the Google Cloud CLI ([`AuthMethod::GcpIam`]). An emulator
+    /// `endpoint` (base URL) may run without credentials.
+    fn validate_bigquery(&self) -> DbResult<()> {
+        let name_ok = |s: &str, max: usize, extra: &str| {
+            !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
+        };
+        if !name_ok(self.database.trim(), 128, "-.:_") {
+            return Err(DbError::invalid("Enter the Google Cloud project ID, e.g. my-project-123."));
+        }
+        if self.property("dataset").is_some_and(|d| !name_ok(d, 1024, "_")) {
+            return Err(DbError::invalid("A dataset name has letters, digits and underscores only."));
+        }
+        if self.property("location").is_some_and(|l| !name_ok(l, 64, "-")) {
+            return Err(DbError::invalid("Enter a BigQuery location such as US, EU or europe-west1."));
+        }
+        let endpoint = self.property("endpoint");
+        if let Some(e) = endpoint {
+            let url = Url::parse(e).ok().filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
+            if url.is_none_or(|u| !u.username().is_empty() || u.password().is_some()) {
+                return Err(DbError::invalid("The endpoint is a base URL such as http://localhost:9050."));
+            }
+        }
+        let key_file = self.property("key_file");
+        if let Some(path) = key_file {
+            validate_path(path, "The key file")?;
+        }
+        match self.auth {
+            AuthMethod::GcpIam => {}
+            AuthMethod::Password if key_file.is_some() || endpoint.is_some() => {}
+            AuthMethod::Password => {
+                return Err(DbError::invalid(
+                    "Choose a service account key file, or sign in with the Google Cloud CLI.",
+                ));
+            }
+            AuthMethod::AwsIam { .. } | AuthMethod::AzureAd => {
+                return Err(DbError::invalid("BigQuery signs in with a service account key or the Google Cloud CLI."));
+            }
+        }
+        if self.ssh.is_some() {
+            return Err(DbError::invalid("BigQuery is reached over HTTPS; SSH tunnels are not used."));
+        }
+        if self.connect_timeout_secs == 0 || self.connect_timeout_secs > Self::MAX_TIMEOUT_SECS {
+            return Err(DbError::invalid("Connect timeout must be between 1 and 300 seconds."));
+        }
+        self.options.validate()
+    }
+
     fn validate_properties(&self) -> DbResult<()> {
         for (key, value) in &self.properties {
             let key_ok =
@@ -358,10 +428,16 @@ impl ConnConfig {
             }
             return self.validate_file();
         }
+        if self.engine == Engine::Bigquery {
+            return self.validate_bigquery();
+        }
         if self.engine == Engine::Dynamodb {
             self.validate_dynamodb()?;
         } else {
             validate_host(&self.host, "Host")?;
+        }
+        if self.engine == Engine::D1 {
+            self.validate_d1()?;
         }
         if self.port == 0 {
             return Err(DbError::invalid("Port must be between 1 and 65535."));
@@ -369,6 +445,7 @@ impl ConnConfig {
         // MongoDB and Redis may run without authentication (Redis uses the `default` user);
         // DynamoDB checks its access key above.
         // Cassandra and ScyllaDB accept anonymous logins unless an authenticator is set.
+        // libSQL and D1 authenticate with a token alone.
         let optional_user = matches!(
             self.engine,
             Engine::Mongodb
@@ -379,6 +456,8 @@ impl ConnConfig {
                 | Engine::Cassandra
                 | Engine::Scylladb
                 | Engine::Elasticsearch
+                | Engine::Libsql
+                | Engine::D1
         );
         if self.username.trim().is_empty() && !optional_user {
             return Err(DbError::invalid("Username is required."));
@@ -406,6 +485,11 @@ impl ConnConfig {
             if !ok(region) || profile.as_deref().is_some_and(|p| !ok(p)) {
                 return Err(DbError::invalid("Enter an AWS region such as eu-west-1 (and an optional profile name)."));
             }
+        }
+        // The token flows are RDS, Azure and Cloud SQL ones; Redshift's IAM sign-in
+        // (GetClusterCredentials) returns another user name, so it is not offered.
+        if self.auth.is_cloud() && matches!(self.engine, Engine::Redshift | Engine::Greenplum) {
+            return Err(DbError::invalid(format!("{} connects with a user name and password.", self.engine.name())));
         }
         // DynamoDB signs requests (SigV4) instead of sending a token, so DynamoDB Local over HTTP is fine.
         if self.auth.is_cloud() && self.ssl_mode == SslMode::Disable && self.engine != Engine::Dynamodb {
@@ -483,10 +567,10 @@ fn parse_file_url(input: &str) -> DbResult<Option<ParsedUrl>> {
     Ok(Some(ParsedUrl { config, password: None, name_suggestion }))
 }
 
-/// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
+/// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `redshift://`, `greenplum://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
-/// `snowflake://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
-/// `valkeys://`, `dragonfly://` and `dragonflys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
+/// `snowflake://`, `vertica://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
+/// `valkeys://`, `dragonfly://`, `dragonflys://` and `libsql://` URLs (`?tls=0`, `?authToken=`). For Oracle the path is the service name; for Snowflake it is `database/schema`; for
 /// `DuckDB` and `SQLite` it is the file; for Redis it is the database number.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     // Several hosts are not a valid URL authority, so MongoDB URLs are read by hand.
@@ -500,16 +584,20 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let engine = match url.scheme() {
         "postgres" | "postgresql" => Engine::Postgres,
         "cockroachdb" | "cockroach" => Engine::Cockroachdb,
+        "redshift" => Engine::Redshift,
+        "greenplum" | "cloudberry" => Engine::Greenplum,
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
         "sqlserver" | "mssql" => Engine::Sqlserver,
         "oracle" => Engine::Oracle,
         "clickhouse" => Engine::Clickhouse,
         "snowflake" => Engine::Snowflake,
+        "vertica" => Engine::Vertica,
         "redis" | "rediss" => Engine::Redis,
         "neo4j" | "neo4j+s" | "neo4j+ssc" | "bolt" | "bolt+s" | "bolt+ssc" => Engine::Neo4j,
         "valkey" | "valkeys" => Engine::Valkey,
         "dragonfly" | "dragonflys" => Engine::Dragonfly,
+        "libsql" => Engine::Libsql,
         other => {
             return Err(DbError::unsupported(format!("Unsupported URL scheme `{other}`.")));
         }
@@ -542,11 +630,14 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     };
     // `+ssc`: TLS with a self-signed certificate (not verified).
     let mut trust_server_certificate = url.scheme().ends_with("+ssc");
+    let mut token = None;
     for (key, value) in url.query_pairs() {
         let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "strict" | "mandatory");
         match key.as_ref() {
-            // SQL Server `encrypt`, ClickHouse `secure`.
-            "encrypt" | "secure" => encrypt = Some(truthy),
+            // SQL Server `encrypt`, ClickHouse `secure`, libSQL `tls`.
+            "encrypt" | "secure" | "tls" => encrypt = Some(truthy),
+            // libSQL clients take the database token in the URL.
+            "authToken" => token = Some(value.into_owned()),
             "warehouse" | "role" | "account" => {
                 properties.insert(key.into_owned(), value.into_owned());
             }
@@ -575,6 +666,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let port = match (engine, url.port()) {
         (Engine::Neo4j, None | Some(7687)) if ssl_mode == SslMode::Disable => Some(7474),
         (Engine::Neo4j, None | Some(7687)) => Some(7473),
+        // A self-hosted `sqld` listens on 8080 without TLS.
+        (Engine::Libsql, None) if ssl_mode == SslMode::Disable => Some(8080),
         (_, port) => port,
     };
     let config = ConnConfig {
@@ -591,7 +684,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     };
     config.validate()?;
     let name_suggestion = if database.is_empty() { host } else { format!("{database}@{host}") };
-    Ok(ParsedUrl { password: url.password().map(decode).filter(|p| !p.is_empty()), config, name_suggestion })
+    let password = token.or_else(|| url.password().map(decode)).filter(|p| !p.is_empty());
+    Ok(ParsedUrl { config, password, name_suggestion })
 }
 
 /// `mongodb://user:pw@h1:27017,h2:27018/db?replicaSet=rs0&authSource=admin&tls=true`
@@ -686,6 +780,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_libsql_urls_and_checks_d1() {
+        let p = parse_connection_url("libsql://shop-acme.turso.io?authToken=eyJ.x").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Libsql, 443, SslMode::VerifyFull));
+        assert_eq!((p.config.host.as_str(), p.password.as_deref()), ("shop-acme.turso.io", Some("eyJ.x")));
+        let p = parse_connection_url("libsql://localhost?tls=0").unwrap();
+        assert_eq!((p.config.port, p.config.ssl_mode, p.password), (8080, SslMode::Disable, None));
+        let d1 = |account: &str, database: &str| ConnConfig {
+            engine: Engine::D1,
+            host: ConnConfig::D1_API_HOST.into(),
+            port: 443,
+            database: database.into(),
+            properties: BTreeMap::from([(ConnConfig::D1_ACCOUNT.to_owned(), account.to_owned())]),
+            ..ConnConfig::default()
+        };
+        assert!(d1("0123456789abcdef0123456789ABCDEF", "shop").validate().is_ok());
+        assert!(d1("not-an-account", "shop").validate().is_err());
+        assert!(d1("0123456789abcdef0123456789abcdef", " ").validate().is_err());
+    }
+
+    #[test]
     fn parses_redis_urls() {
         let p = parse_connection_url("rediss://default:s%40cret@cache.local:6380/2").unwrap();
         assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Redis, 6380, "2"));
@@ -736,6 +850,30 @@ mod tests {
     }
 
     #[test]
+    fn bigquery_rules() {
+        let key = if cfg!(windows) { "C:\\keys\\sa.json" } else { "/keys/sa.json" };
+        let bq = ConnConfig {
+            engine: Engine::Bigquery,
+            host: String::new(),
+            port: 0,
+            database: "my-project-123".into(),
+            properties: [("key_file".to_owned(), key.to_owned()), ("location".to_owned(), "EU".to_owned())].into(),
+            ..ConnConfig::default()
+        };
+        bq.validate().unwrap();
+        assert!(ConnConfig { properties: BTreeMap::new(), ..bq.clone() }.validate().is_err(), "needs credentials");
+        ConnConfig { properties: BTreeMap::new(), auth: AuthMethod::GcpIam, ..bq.clone() }.validate().unwrap();
+        let emulator = [("endpoint".to_owned(), "http://localhost:59050".to_owned())].into();
+        ConnConfig { properties: emulator, ..bq.clone() }.validate().unwrap();
+        let bad_endpoint = [("endpoint".to_owned(), "ftp://x".to_owned())].into();
+        assert!(ConnConfig { properties: bad_endpoint, ..bq.clone() }.validate().is_err());
+        assert!(ConnConfig { database: "my project".into(), ..bq.clone() }.validate().is_err());
+        let mut dataset = bq.clone();
+        dataset.properties.insert("dataset".into(), "sales-2024".into());
+        assert!(dataset.validate().is_err());
+    }
+
+    #[test]
     fn parses_postgres_url_and_splits_secret() {
         let p = parse_connection_url("postgres://app%40corp:p%40ss@db.local:6543/app_dev?sslmode=require").unwrap();
         assert_eq!(p.config.engine, Engine::Postgres);
@@ -755,6 +893,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_redshift_and_greenplum_urls() {
+        let p = parse_connection_url("redshift://awsuser:pw@dw.abc123.eu-west-1.redshift.amazonaws.com/dev").unwrap();
+        assert_eq!(
+            (p.config.engine, p.config.port, p.config.ssl_mode, p.config.database.as_str()),
+            (Engine::Redshift, 5439, SslMode::VerifyFull, "dev")
+        );
+        let p = parse_connection_url("greenplum://gpadmin@gp.local/warehouse?sslmode=disable").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Greenplum, 5432, SslMode::Disable));
+        let p = parse_connection_url("cloudberry://gpadmin@cbdb.local:15432/postgres").unwrap();
+        assert_eq!((p.config.engine, p.config.port), (Engine::Greenplum, 15432));
+        // IAM tokens are RDS ones; Redshift signs in with a password.
+        let mut config = p.config;
+        config.ssl_mode = SslMode::VerifyFull;
+        config.auth = AuthMethod::AwsIam { region: "eu-west-1".into(), profile: None };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn parses_sqlserver_oracle_and_cockroach_urls() {
         let p = parse_connection_url("sqlserver://sa:secret@sql.local/sales?trustServerCertificate=true").unwrap();
         assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Sqlserver, 1433, SslMode::Require));
@@ -764,6 +920,8 @@ mod tests {
         assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Oracle, 1521, "ORCLPDB1"));
         let p = parse_connection_url("cockroachdb://root@crdb.local/defaultdb?sslmode=disable").unwrap();
         assert_eq!((p.config.engine, p.config.port), (Engine::Cockroachdb, 26257));
+        let p = parse_connection_url("vertica://dbadmin@vt.local/VMart?sslmode=require").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.database.as_str()), (Engine::Vertica, 5433, "VMart"));
         let p = parse_connection_url("clickhouse://default@ch.local/logs?secure=false").unwrap();
         assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Clickhouse, 8123, SslMode::Disable));
         let p = parse_connection_url("snowflake://ana:pw@myorg-acct/SALES/PUBLIC?warehouse=WH&role=ANALYST").unwrap();

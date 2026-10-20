@@ -1,7 +1,7 @@
 //! Query plans: the `EXPLAIN` statement for each engine and a common tree the
 //! UI renders. PostgreSQL's JSON plan maps to named fields; MySQL and MariaDB
 //! JSON plans are walked generically (every object is a node); `CockroachDB`'s
-//! text tree is read line by line. SQL Server and Oracle plans are read by
+//! text tree and Redshift's `PostgreSQL`-style text plan are read line by line. SQL Server and Oracle plans are read by
 //! their adapters, which build the same tree.
 
 use serde::Serialize;
@@ -48,6 +48,8 @@ pub struct ExplainResult {
 pub enum ExplainDialect {
     Postgres,
     Cockroach,
+    /// Amazon Redshift: `EXPLAIN` as text only, without `ANALYZE`.
+    Redshift,
     Mysql,
     Mariadb,
 }
@@ -57,6 +59,7 @@ impl ExplainDialect {
     pub fn new(flavor: SqlFlavor, version: &str) -> Option<Self> {
         match flavor {
             SqlFlavor::Postgres if version.starts_with("CockroachDB") => Some(Self::Cockroach),
+            SqlFlavor::Postgres if version.starts_with("Amazon Redshift") => Some(Self::Redshift),
             SqlFlavor::Postgres => Some(Self::Postgres),
             SqlFlavor::Mysql if version.starts_with("MariaDB") => Some(Self::Mariadb),
             SqlFlavor::Mysql => Some(Self::Mysql),
@@ -66,6 +69,8 @@ impl ExplainDialect {
             | SqlFlavor::Duckdb
             | SqlFlavor::Sqlite
             | SqlFlavor::Snowflake
+            | SqlFlavor::Bigquery
+            | SqlFlavor::Vertica
             | SqlFlavor::Mongodb
             | SqlFlavor::Partiql
             | SqlFlavor::Redis
@@ -73,6 +78,11 @@ impl ExplainDialect {
             | SqlFlavor::QueryDsl
             | SqlFlavor::Cypher => None,
         }
+    }
+
+    /// The engine can run a statement to measure its plan (`EXPLAIN ANALYZE`).
+    pub fn analyzes(self) -> bool {
+        self != Self::Redshift
     }
 
     /// The statement that explains `sql`. `analyze` executes it, so callers
@@ -84,6 +94,7 @@ impl ExplainDialect {
             (Self::Postgres, true) => format!("EXPLAIN (FORMAT JSON, VERBOSE, ANALYZE, BUFFERS) {sql}"),
             (Self::Cockroach, false) => format!("EXPLAIN (VERBOSE) {sql}"),
             (Self::Cockroach, true) => format!("EXPLAIN ANALYZE (VERBOSE) {sql}"),
+            (Self::Redshift, _) => format!("EXPLAIN {sql}"),
             (Self::Mysql | Self::Mariadb, false) => format!("EXPLAIN FORMAT=JSON {sql}"),
             // MySQL measures only in its TREE format.
             (Self::Mysql, true) => format!("EXPLAIN ANALYZE {sql}"),
@@ -98,6 +109,9 @@ impl ExplainDialect {
         if self == Self::Cockroach {
             return Ok(cockroach_plan(raw, analyzed));
         }
+        if self == Self::Redshift {
+            return Ok(text_plan(raw, analyzed));
+        }
         let json: Value = serde_json::from_str(&raw).map_err(|e| DbError::internal(format!("unreadable plan: {e}")))?;
         Ok(match self {
             Self::Postgres => {
@@ -111,7 +125,7 @@ impl ExplainDialect {
                     analyzed,
                 }
             }
-            Self::Cockroach | Self::Mysql | Self::Mariadb => ExplainResult {
+            Self::Cockroach | Self::Redshift | Self::Mysql | Self::Mariadb => ExplainResult {
                 plan: Some(generic_node("query", &json)),
                 planning_ms: None,
                 execution_ms: None,
@@ -249,6 +263,97 @@ pub fn duration_ms(value: &str) -> Option<f64> {
     })
 }
 
+/// Closes the open plan nodes indented at `until` or deeper, attaching each to
+/// the node above it (or to `roots`). `stack` holds (column, node) pairs from
+/// the root down to the current node.
+fn close_nodes(stack: &mut Vec<(usize, PlanNode)>, roots: &mut Vec<PlanNode>, until: usize) {
+    while stack.last().is_some_and(|(col, _)| *col >= until) {
+        let (_, node) = stack.pop().expect("non-empty stack");
+        match stack.last_mut() {
+            Some((_, parent)) => parent.children.push(node),
+            None => roots.push(node),
+        }
+    }
+}
+
+/// `cost=0.00..1.72 rows=172 width=4` or `actual time=0.01..0.20 rows=3 loops=1`,
+/// a parenthesised group after a text plan node.
+fn read_estimates(node: &mut PlanNode, group: &str) {
+    let actual = group.starts_with("actual");
+    for (key, value) in group.split_whitespace().filter_map(|kv| kv.split_once('=')) {
+        let upper = || value.rsplit("..").next().and_then(|v| v.parse().ok());
+        match (key, actual) {
+            ("cost", _) => node.cost = upper(),
+            ("rows", false) => node.rows = value.parse().ok(),
+            ("time", true) => node.actual_ms = upper(),
+            ("rows", true) => node.actual_rows = value.parse().ok(),
+            ("loops", _) => node.loops = value.parse().ok(),
+            _ => {}
+        }
+    }
+}
+
+/// One text plan node: `XN Seq Scan on sales  (cost=0.00..1.72 rows=172 width=4)`.
+fn text_plan_node(content: &str) -> PlanNode {
+    let (head, groups) = content.split_once("  (").unwrap_or((content, ""));
+    let head = head.trim();
+    let (label, detail) = match head.split_once(" on ").or_else(|| head.split_once(" using ")) {
+        Some((label, detail)) => (label.trim(), Some(detail.trim().to_owned())),
+        None => (head, None),
+    };
+    let mut node = PlanNode { label: label.to_owned(), detail, ..PlanNode::default() };
+    for group in groups.split('(') {
+        read_estimates(&mut node, group.trim().trim_end_matches(')'));
+    }
+    node
+}
+
+/// Reads a `PostgreSQL`-style text plan (Redshift's only format): the first line
+/// and `->` lines are nodes nested by indentation, `Key: value` lines below a
+/// node are its properties, and Redshift's `----- … -----` notes go on the root.
+fn text_plan(raw: String, analyzed: bool) -> ExplainResult {
+    let mut stack: Vec<(usize, PlanNode)> = Vec::new();
+    let mut roots: Vec<PlanNode> = Vec::new();
+    let mut notes = Vec::new();
+    let mut planning_ms = None;
+    let mut execution_ms = None;
+    for line in raw.lines() {
+        let content = line.trim_start();
+        if content.is_empty() {
+            continue;
+        }
+        let column = line.len() - content.len();
+        if let Some(note) = content.strip_prefix("-----") {
+            notes.push(note.trim_matches(|c: char| c == '-' || c.is_whitespace()).to_owned());
+            continue;
+        }
+        if let Some(node) = content.strip_prefix("->") {
+            close_nodes(&mut stack, &mut roots, column);
+            stack.push((column, text_plan_node(node)));
+            continue;
+        }
+        let key_value = content.split_once(": ").map(|(k, v)| (k.trim(), v.trim()));
+        match (stack.last_mut(), key_value) {
+            (_, Some(("Planning Time" | "Planning time", v))) => planning_ms = leading_number(v),
+            (_, Some(("Execution Time" | "Execution time", v))) => execution_ms = leading_number(v),
+            (Some((_, node)), Some((key, value))) => node.props.push((key.to_owned(), value.to_owned())),
+            (Some((_, node)), None) => node.props.push(("note".to_owned(), content.to_owned())),
+            (None, _) if content.contains("(cost=") => stack.push((column, text_plan_node(content))),
+            _ => notes.push(content.to_owned()),
+        }
+    }
+    close_nodes(&mut stack, &mut roots, 0);
+    let mut plan = match roots.len() {
+        0 => None,
+        1 => roots.pop(),
+        _ => Some(PlanNode { label: "plan".into(), children: roots, ..PlanNode::default() }),
+    };
+    if let Some(root) = plan.as_mut() {
+        root.props.extend(notes.into_iter().filter(|n| !n.is_empty()).map(|n| ("note".to_owned(), n)));
+    }
+    ExplainResult { plan, raw, analyzed, planning_ms, execution_ms }
+}
+
 /// Reads `CockroachDB`'s `EXPLAIN` text tree: `• op` lines are nodes, indented
 /// `key: value` lines are properties of the node above them.
 fn cockroach_plan(raw: String, analyzed: bool) -> ExplainResult {
@@ -258,15 +363,6 @@ fn cockroach_plan(raw: String, analyzed: bool) -> ExplainResult {
     // (bullet column, node) from the root down to the current node.
     let mut stack: Vec<(usize, PlanNode)> = Vec::new();
     let mut roots: Vec<PlanNode> = Vec::new();
-    let close = |stack: &mut Vec<(usize, PlanNode)>, roots: &mut Vec<PlanNode>, until: usize| {
-        while stack.last().is_some_and(|(col, _)| *col >= until) {
-            let (_, node) = stack.pop().expect("non-empty stack");
-            match stack.last_mut() {
-                Some((_, parent)) => parent.children.push(node),
-                None => roots.push(node),
-            }
-        }
-    };
     for line in raw.lines() {
         let content_start =
             line.char_indices().find(|(_, c)| !matches!(c, ' ' | '│' | '├' | '└' | '─')).map(|(i, _)| i);
@@ -274,7 +370,7 @@ fn cockroach_plan(raw: String, analyzed: bool) -> ExplainResult {
         let content = &line[start..];
         let column = line[..start].chars().count();
         if let Some(label) = content.strip_prefix('•') {
-            close(&mut stack, &mut roots, column);
+            close_nodes(&mut stack, &mut roots, column);
             stack.push((column, PlanNode { label: label.trim().to_owned(), ..PlanNode::default() }));
             continue;
         }
@@ -296,7 +392,7 @@ fn cockroach_plan(raw: String, analyzed: bool) -> ExplainResult {
             _ => node.props.push((key.to_owned(), value.to_owned())),
         }
     }
-    close(&mut stack, &mut roots, 0);
+    close_nodes(&mut stack, &mut roots, 0);
     let plan = match roots.len() {
         0 => None,
         1 if header.props.is_empty() => roots.pop(),
@@ -321,6 +417,58 @@ mod tests {
         assert_eq!(ExplainDialect::new(SqlFlavor::Mysql, "MariaDB 11.4.2"), Some(ExplainDialect::Mariadb));
         assert_eq!(ExplainDialect::new(SqlFlavor::Postgres, "CockroachDB 25.2.1"), Some(ExplainDialect::Cockroach));
         assert_eq!(ExplainDialect::new(SqlFlavor::Sqlserver, "SQL Server 2022"), None);
+        let redshift = ExplainDialect::new(SqlFlavor::Postgres, "Amazon Redshift 1.0.12103").unwrap();
+        assert_eq!((redshift, redshift.analyzes()), (ExplainDialect::Redshift, false));
+        assert_eq!(redshift.statement("select 1;", false), "EXPLAIN select 1");
+        assert_eq!(ExplainDialect::new(SqlFlavor::Postgres, "Greenplum 7.1.0"), Some(ExplainDialect::Postgres));
+    }
+
+    #[test]
+    fn parses_redshift_text_plans() {
+        let raw = "XN Merge  (cost=1000000000136.38..1000000000137.82 rows=576 width=33)
+  Merge Key: sum(sales.pricepaid)
+  ->  XN Network  (cost=1000000000136.38..1000000000137.82 rows=576 width=33)
+        Send to leader
+        ->  XN Hash Join DS_DIST_ALL_NONE  (cost=0.00..21.05 rows=576 width=33)
+              Hash Cond: (\"outer\".eventid = \"inner\".eventid)
+              ->  XN Seq Scan on sales  (cost=0.00..1.72 rows=172 width=12)
+              ->  XN Hash  (cost=0.80..0.80 rows=80 width=25)
+                    ->  XN Seq Scan on event e  (cost=0.00..0.80 rows=80 width=25)
+----- Tables missing statistics: event -----
+----- Update statistics by running the ANALYZE command on these tables -----";
+        let r = ExplainDialect::Redshift.parse(raw.into(), false).unwrap();
+        let root = r.plan.unwrap();
+        assert_eq!((root.label.as_str(), root.cost, root.rows), ("XN Merge", Some(1_000_000_000_137.82), Some(576.0)));
+        assert_eq!(root.props[0], ("Merge Key".to_owned(), "sum(sales.pricepaid)".to_owned()));
+        assert!(root.props.iter().any(|(k, v)| k == "note" && v == "Tables missing statistics: event"));
+        let network = &root.children[0];
+        assert_eq!(network.props, [("note".to_owned(), "Send to leader".to_owned())]);
+        let join = &network.children[0];
+        assert_eq!(join.label, "XN Hash Join DS_DIST_ALL_NONE");
+        assert_eq!(join.props, [("Hash Cond".to_owned(), "(\"outer\".eventid = \"inner\".eventid)".to_owned())]);
+        assert_eq!(join.children.len(), 2);
+        assert_eq!(
+            (join.children[0].label.as_str(), join.children[0].detail.as_deref()),
+            ("XN Seq Scan", Some("sales"))
+        );
+        let scan = &join.children[1].children[0];
+        assert_eq!((scan.detail.as_deref(), scan.rows, scan.cost), (Some("event e"), Some(80.0), Some(0.8)));
+    }
+
+    #[test]
+    fn parses_postgres_text_plans_with_timings() {
+        let raw = "Seq Scan on orders o  (cost=0.00..1.05 rows=5 width=8) (actual time=0.010..0.020 rows=3 loops=1)
+  Filter: (id > 1)
+Planning Time: 0.050 ms
+Execution Time: 0.100 ms";
+        let r = text_plan(raw.into(), true);
+        let root = r.plan.unwrap();
+        assert_eq!(
+            (root.label.as_str(), root.detail.as_deref(), root.actual_ms, root.actual_rows, root.loops),
+            ("Seq Scan", Some("orders o"), Some(0.02), Some(3.0), Some(1.0))
+        );
+        assert_eq!(root.props, [("Filter".to_owned(), "(id > 1)".to_owned())]);
+        assert_eq!((r.planning_ms, r.execution_ms), (Some(0.05), Some(0.1)));
     }
 
     #[test]

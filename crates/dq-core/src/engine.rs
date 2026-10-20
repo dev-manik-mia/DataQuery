@@ -14,9 +14,13 @@ pub enum Engine {
     Sqlserver,
     Oracle,
     Cockroachdb,
+    Redshift,
+    Greenplum,
     Clickhouse,
     Duckdb,
     Snowflake,
+    Bigquery,
+    Vertica,
     Redis,
     Valkey,
     Dragonfly,
@@ -26,6 +30,10 @@ pub enum Engine {
     Scylladb,
     Elasticsearch,
     Neo4j,
+    /// libSQL over HTTP (Hrana): Turso or a self-hosted `sqld`.
+    Libsql,
+    /// Cloudflare D1 through the Cloudflare API.
+    D1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -214,6 +222,30 @@ const SPECS: &[Spec] = &[
         P::P2,
     ),
     spec(
+        Engine::Redshift,
+        "Amazon Redshift",
+        "Rs",
+        235,
+        G::Analytical,
+        "SQL",
+        Some(5439),
+        "5439 · Postgres wire",
+        "Provisioned and Serverless · password sign-in",
+        P::P2,
+    ),
+    spec(
+        Engine::Greenplum,
+        "Greenplum",
+        "Gp",
+        165,
+        G::Analytical,
+        "SQL",
+        Some(5432),
+        "5432 · SQL · v6–7",
+        "Greenplum 6–7 · also Apache Cloudberry",
+        P::P2,
+    ),
+    spec(
         Engine::Clickhouse,
         "ClickHouse",
         "Ch",
@@ -247,6 +279,30 @@ const SPECS: &[Spec] = &[
         Some(443),
         "HTTPS · SQL",
         "Cloud warehouse",
+        P::P2,
+    ),
+    spec(
+        Engine::Bigquery,
+        "BigQuery",
+        "Bq",
+        235,
+        G::Analytical,
+        "GoogleSQL",
+        None,
+        "HTTPS · GoogleSQL",
+        "Google Cloud warehouse · REST API v2",
+        P::P2,
+    ),
+    spec(
+        Engine::Vertica,
+        "Vertica",
+        "Vt",
+        125,
+        G::Analytical,
+        "SQL",
+        Some(5433),
+        "5433 · SQL · v12–26",
+        "OpenText Vertica 12–26 · columnar MPP",
         P::P2,
     ),
     spec(
@@ -357,6 +413,30 @@ const SPECS: &[Spec] = &[
         "Graph · Neo4j 5.19+ Query API",
         P::P2,
     ),
+    spec(
+        Engine::Libsql,
+        "libSQL",
+        "Ls",
+        170,
+        G::Relational,
+        "SQL",
+        Some(443),
+        "HTTPS · SQLite (Hrana)",
+        "Turso or self-hosted sqld",
+        P::P2,
+    ),
+    spec(
+        Engine::D1,
+        "Cloudflare D1",
+        "D1",
+        45,
+        G::Relational,
+        "SQL",
+        Some(443),
+        "Cloudflare API · SQLite",
+        "Serverless SQLite on Cloudflare",
+        P::P2,
+    ),
 ];
 
 /// Builds the full engine catalog. `capabilities_of` returns `Some` for engines
@@ -395,10 +475,11 @@ impl Engine {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
     }
 
-    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`), never
-    /// a real account; the engine picker labels them "Beta".
+    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`,
+    /// `bigquery-emulator`) or unit tests (Redshift cannot run locally), never a real
+    /// account; the engine picker labels them "Beta".
     pub fn is_beta(self) -> bool {
-        matches!(self, Self::Snowflake | Self::Dynamodb)
+        matches!(self, Self::Snowflake | Self::Dynamodb | Self::Redshift | Self::Bigquery)
     }
 
     /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.
