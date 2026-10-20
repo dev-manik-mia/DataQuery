@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 
 export type MenuEntry =
-  | { type?: 'item'; label: ReactNode; onSelect: () => void; hint?: string; danger?: boolean; disabled?: boolean }
+  | { type?: 'item'; label: ReactNode; onSelect: () => void; hint?: string; danger?: boolean; disabled?: boolean; /** Tooltip, e.g. why the item is disabled. */ title?: string }
   | { type: 'separator' }
   | { type: 'label'; label: ReactNode };
 
@@ -71,6 +71,7 @@ export function Menu({ x, y, items, onClose, label = 'Actions' }: MenuProps) {
             type="button"
             role="menuitem"
             disabled={item.disabled}
+            title={item.title}
             className={`dq-menu__item${item.danger ? ' dq-menu__item--danger' : ''}`}
             onClick={() => {
               onClose();

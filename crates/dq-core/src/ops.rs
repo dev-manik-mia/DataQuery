@@ -11,6 +11,8 @@ use crate::node::{NodeKind, ObjectRef};
 use crate::schema::TableStructure;
 use crate::schema_cache::StructureCache;
 use crate::sql::builder;
+use crate::sql::ddl::{self, SchemaChange};
+use crate::sql::table_actions::table_actions;
 use crate::table::{RowCount, RowFilter, TablePage, TablePageRequest};
 use crate::transfer::{
     self, ExportFormat, ExportOptions, ExportReport, ExportSource, FieldRef, ImportOptions, ImportReport, ImportSource,
@@ -191,6 +193,33 @@ pub async fn apply_changes(
         }
     }
     Ok(report)
+}
+
+/// Most schema changes reviewed and applied at once (bulk table actions too).
+pub const MAX_SCHEMA_CHANGES: usize = 200;
+
+/// The statements of reviewed schema changes, reading from the catalog what
+/// each one needs (structure, `CREATE TABLE` text). The changes must all be in
+/// one database, since they run in one transaction there.
+pub async fn schema_statements(session: &dyn Session, changes: &[SchemaChange]) -> DbResult<Vec<String>> {
+    if changes.is_empty() || changes.len() > MAX_SCHEMA_CHANGES {
+        return Err(DbError::invalid(format!("Between 1 and {MAX_SCHEMA_CHANGES} changes can be applied at once.")));
+    }
+    if changes.iter().any(|c| c.table().database != changes[0].table().database) {
+        return Err(DbError::invalid("Changes can be applied to one database at a time."));
+    }
+    let d = session.dialect();
+    let flavor = d.flavor();
+    let actions = table_actions(flavor, Some(session.info().engine));
+    let mut out = Vec::new();
+    for change in changes {
+        actions.check(change)?;
+        let table = change.table();
+        let structure = if change.needs_structure(flavor) { Some(session.structure(table).await?) } else { None };
+        let definition = if change.needs_definition(flavor) { Some(session.ddl(table).await?) } else { None };
+        out.extend(ddl::statements_with(d, change, structure.as_ref(), definition.as_deref())?);
+    }
+    Ok(out)
 }
 
 pub async fn export(

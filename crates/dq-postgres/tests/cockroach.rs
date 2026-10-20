@@ -395,3 +395,42 @@ async fn write_connection_is_reused_until_an_error() {
     assert_ne!(rows[1][1], rows[2][1], "the failed transaction's connection was dropped");
     run_all(&*s, "DROP TABLE public.it_writer").await;
 }
+
+#[tokio::test]
+async fn table_actions_duplicate_and_truncate() {
+    use dq_core::sql::ddl::SchemaChange;
+
+    let cfg = require_db!();
+    let s = session(&cfg).await;
+    run_all(
+        &*s,
+        "DROP TABLE IF EXISTS public.ta_crdb_copy, public.ta_crdb; \
+         CREATE TABLE public.ta_crdb (id INT8 PRIMARY KEY, name STRING NOT NULL DEFAULT 'x', INDEX (name)); \
+         INSERT INTO public.ta_crdb VALUES (1, 'a'), (2, 'b')",
+    )
+    .await;
+    let apply = |changes: Vec<SchemaChange>| {
+        let s = s.clone();
+        async move { transact(&*s, &ops::schema_statements(&*s, &changes).await?).await }
+    };
+    let count = |name: &'static str| {
+        let s = s.clone();
+        async move { text(&s.execute(&format!("SELECT count(*) FROM public.{name}"), &[], OPTS).await.unwrap().rows[0][0]) }
+    };
+    let copy =
+        SchemaChange::DuplicateTable { table: table("ta_crdb"), new_name: "ta_crdb_copy".into(), with_data: true };
+    apply(vec![copy]).await.unwrap();
+    assert_eq!(count("ta_crdb_copy").await, "2");
+    // CockroachDB has no RESTART IDENTITY: refused before anything runs.
+    let truncate = |restart_identity: bool| SchemaChange::TruncateTable {
+        table: table("ta_crdb_copy"),
+        restart_identity,
+        cascade: false,
+        disable_foreign_keys: false,
+    };
+    let refused = ops::schema_statements(&*s, &[truncate(true)]).await.unwrap_err();
+    assert_eq!(refused.kind, ErrorKind::Unsupported);
+    apply(vec![truncate(false)]).await.unwrap();
+    assert_eq!(count("ta_crdb_copy").await, "0");
+    run_all(&*s, "DROP TABLE public.ta_crdb_copy, public.ta_crdb").await;
+}

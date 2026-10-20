@@ -6,6 +6,7 @@ use dq_core::engine::Capabilities;
 use dq_core::keyvalue::{KeyValueFeatures, KeyValueStore};
 use dq_core::result::ServerInfo;
 use dq_core::sql::SqlFlavor;
+use dq_core::sql::table_actions::{TableActions, table_actions};
 use dq_store::SavedConnection;
 use serde::Serialize;
 use tauri::State;
@@ -31,6 +32,8 @@ pub struct SessionInfo {
     pub tunneled: bool,
     /// Why the connection is not fully secure, if it is not.
     pub insecure: Option<String>,
+    /// Truncate, empty and duplicate support in the explorer.
+    pub table_actions: TableActions,
 }
 
 /// Opens a session for a saved connection and registers it under `session_id`,
@@ -49,6 +52,7 @@ async fn open(state: &AppState, connection_id: &str, session_id: String) -> DbRe
         keys: opened.session.keys().map(KeyValueStore::features),
         tunneled: opened.tunnel.is_some(),
         insecure: connection.config.insecure_reason().map(str::to_owned),
+        table_actions: table_actions(opened.session.dialect().flavor(), Some(connection.config.engine)),
         connection,
     };
     let open = OpenSession::new(
