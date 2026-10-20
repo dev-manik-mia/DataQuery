@@ -121,7 +121,7 @@ export function UsersView({ active }: { active: boolean }) {
     return (
       <div className={styles.page} style={active ? undefined : { display: 'none' }}>
         <EmptyState title={t('nav.users')}>
-          User and role management is available for PostgreSQL, CockroachDB, MySQL and MariaDB.
+          User and role management is available for PostgreSQL, CockroachDB, Greenplum, MySQL and MariaDB.
         </EmptyState>
       </div>
     );

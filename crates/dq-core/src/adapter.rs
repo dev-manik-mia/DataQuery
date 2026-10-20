@@ -180,6 +180,12 @@ pub trait Session: Send + Sync {
     ) -> DbResult<ExplainResult> {
         let dialect = ExplainDialect::new(self.dialect().flavor(), &self.info().version)
             .ok_or_else(|| DbError::unsupported("Query plans are not available for this engine."))?;
+        if analyze && !dialect.analyzes() {
+            return Err(DbError::unsupported(format!(
+                "{} cannot run a statement to measure its plan (no EXPLAIN ANALYZE); Explain shows the estimated plan.",
+                self.info().engine.name()
+            )));
+        }
         let options = ExecOptions { row_limit: 10_000, timeout_secs };
         let result = self.execute(&dialect.statement(sql, analyze), params, options).await?;
         let raw = result

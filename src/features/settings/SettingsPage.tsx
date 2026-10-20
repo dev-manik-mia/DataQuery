@@ -491,6 +491,9 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
   cassandra: { transactions: 'Cassandra has no multi-statement transactions, only single-statement lightweight ones.' },
   scylladb: { transactions: 'ScyllaDB has no multi-statement transactions, only single-statement lightweight ones.' },
   elasticsearch: { transactions: 'Elasticsearch has no transactions.', schema_diff: 'Index mappings are not a relational schema.' },
+  redshift: {
+    schema_diff: "Redshift's ALTER TABLE cannot change nullability, defaults or most column types, so a diff could not be applied.",
+  },
   neo4j: {
     grid_edit: 'Graph results have no row identity; change data with Cypher in the editor.',
     schema_diff: 'Graphs have no fixed schema to compare.',
@@ -504,6 +507,7 @@ const CQL_SNAPSHOTS = `Snapshots (nodetool snapshot) ${SERVER_SIDE}`;
 /** Why an engine has no Backup and Restore (`dq_core::backup::BackupFamily::of`). */
 const NO_BACKUP: Partial<Record<Engine, string>> = {
   cockroachdb: 'CockroachDB rejects pg_dump; back up with its BACKUP statement to cloud or nodelocal storage.',
+  redshift: 'Redshift rejects pg_dump; it keeps automated and manual snapshots, and UNLOAD exports tables to S3.',
   sqlserver: `Backups (BACKUP DATABASE … TO DISK) ${SERVER_SIDE}`,
   oracle: `Data Pump dump files (expdp) ${SERVER_SIDE}`,
   clickhouse: `Backups (the BACKUP statement, to server disks or object storage) ${SERVER_SIDE}`,

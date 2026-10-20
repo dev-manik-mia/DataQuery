@@ -18,7 +18,9 @@ use crate::state::AppState;
 
 fn admin(session: &dyn Session) -> CmdResult<&dyn UserAdmin> {
     session.users().ok_or_else(|| {
-        DbError::unsupported("User and role management is available for PostgreSQL, CockroachDB, MySQL and MariaDB.")
+        DbError::unsupported(
+            "User and role management is available for PostgreSQL, CockroachDB, Greenplum, MySQL and MariaDB.",
+        )
     })
 }
 

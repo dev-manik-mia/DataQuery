@@ -14,6 +14,8 @@ impl Registry {
         let adapters: Vec<(Engine, Arc<dyn DatabaseAdapter>)> = vec![
             (Engine::Postgres, Arc::new(dq_postgres::PostgresAdapter::POSTGRES)),
             (Engine::Cockroachdb, Arc::new(dq_postgres::PostgresAdapter::COCKROACH)),
+            (Engine::Redshift, Arc::new(dq_postgres::PostgresAdapter::REDSHIFT)),
+            (Engine::Greenplum, Arc::new(dq_postgres::PostgresAdapter::GREENPLUM)),
             (Engine::Sqlserver, Arc::new(dq_sqlserver::SqlServerAdapter)),
             (Engine::Oracle, Arc::new(dq_oracle::OracleAdapter)),
             (Engine::Clickhouse, Arc::new(dq_clickhouse::ClickhouseAdapter)),

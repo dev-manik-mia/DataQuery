@@ -434,6 +434,11 @@ impl ConnConfig {
                 return Err(DbError::invalid("Enter an AWS region such as eu-west-1 (and an optional profile name)."));
             }
         }
+        // The token flows are RDS, Azure and Cloud SQL ones; Redshift's IAM sign-in
+        // (GetClusterCredentials) returns another user name, so it is not offered.
+        if self.auth.is_cloud() && matches!(self.engine, Engine::Redshift | Engine::Greenplum) {
+            return Err(DbError::invalid(format!("{} connects with a user name and password.", self.engine.name())));
+        }
         // DynamoDB signs requests (SigV4) instead of sending a token, so DynamoDB Local over HTTP is fine.
         if self.auth.is_cloud() && self.ssl_mode == SslMode::Disable && self.engine != Engine::Dynamodb {
             return Err(DbError::invalid(
@@ -510,7 +515,7 @@ fn parse_file_url(input: &str) -> DbResult<Option<ParsedUrl>> {
     Ok(Some(ParsedUrl { config, password: None, name_suggestion }))
 }
 
-/// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
+/// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `redshift://`, `greenplum://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
 /// `snowflake://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
 /// `valkeys://`, `dragonfly://`, `dragonflys://` and `libsql://` URLs (`?tls=0`, `?authToken=`). For Oracle the path is the service name; for Snowflake it is `database/schema`; for
@@ -527,6 +532,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let engine = match url.scheme() {
         "postgres" | "postgresql" => Engine::Postgres,
         "cockroachdb" | "cockroach" => Engine::Cockroachdb,
+        "redshift" => Engine::Redshift,
+        "greenplum" | "cloudberry" => Engine::Greenplum,
         "mysql" => Engine::Mysql,
         "mariadb" => Engine::Mariadb,
         "sqlserver" | "mssql" => Engine::Sqlserver,
@@ -806,6 +813,24 @@ mod tests {
         assert_eq!(p.config.port, 3306);
         assert_eq!(p.config.ssl_mode, SslMode::VerifyFull);
         assert_eq!(p.password, None);
+    }
+
+    #[test]
+    fn parses_redshift_and_greenplum_urls() {
+        let p = parse_connection_url("redshift://awsuser:pw@dw.abc123.eu-west-1.redshift.amazonaws.com/dev").unwrap();
+        assert_eq!(
+            (p.config.engine, p.config.port, p.config.ssl_mode, p.config.database.as_str()),
+            (Engine::Redshift, 5439, SslMode::VerifyFull, "dev")
+        );
+        let p = parse_connection_url("greenplum://gpadmin@gp.local/warehouse?sslmode=disable").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Greenplum, 5432, SslMode::Disable));
+        let p = parse_connection_url("cloudberry://gpadmin@cbdb.local:15432/postgres").unwrap();
+        assert_eq!((p.config.engine, p.config.port), (Engine::Greenplum, 15432));
+        // IAM tokens are RDS ones; Redshift signs in with a password.
+        let mut config = p.config;
+        config.ssl_mode = SslMode::VerifyFull;
+        config.auth = AuthMethod::AwsIam { region: "eu-west-1".into(), profile: None };
+        assert!(config.validate().is_err());
     }
 
     #[test]

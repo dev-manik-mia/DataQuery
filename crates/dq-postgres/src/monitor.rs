@@ -4,7 +4,13 @@
 //!
 //! `CockroachDB` keeps the same information in `crdb_internal` (sessions,
 //! queries, locks) and cancels with `CANCEL QUERY` / `CANCEL SESSION`; see
-//! [`cockroach`].
+//! [`cockroach`]. Redshift has none of the modern `pg_stat_activity` columns:
+//! sessions come from `stv_sessions` and `stv_recents`, locks from
+//! `svv_transactions`, sizes from `svv_table_info` (see [`redshift`]).
+//! Greenplum reports its segments (`gp_segment_configuration`) in place of
+//! streaming replication.
+
+use std::fmt::Write;
 
 use async_trait::async_trait;
 use dq_core::monitor::{
@@ -14,7 +20,7 @@ use dq_core::node::{NodeKind, ObjectRef};
 use dq_core::{DbError, DbResult};
 use tokio_postgres::Client;
 
-use crate::connect::Flavor;
+use crate::connect::{Flavor, Server};
 use crate::error::map_error;
 use crate::session::PgSession;
 
@@ -24,15 +30,28 @@ fn pg(e: tokio_postgres::Error) -> DbError {
     map_error(&e, None)
 }
 
-async fn processes(client: &Client) -> DbResult<Vec<ServerProcess>> {
+/// Client sessions in `pg_stat_activity`; before `backend_type` (PostgreSQL 10) it lists only those.
+fn client_backends(server: Server) -> &'static str {
+    if server.legacy { "true" } else { "backend_type = 'client backend'" }
+}
+
+async fn processes(client: &Client, server: Server) -> DbResult<Vec<ServerProcess>> {
+    // PostgreSQL 9.4 (Greenplum 6) has `waiting` instead of wait events and no `pg_blocking_pids`.
+    let (wait, blocked_by) = if server.legacy {
+        ("CASE WHEN waiting THEN coalesce(waiting_reason, 'lock') END", "NULL::int8[]")
+    } else {
+        ("wait_event_type || ': ' || wait_event", "(SELECT array_agg(b::int8) FROM unnest(pg_blocking_pids(pid)) b)")
+    };
     let rows = client
         .query(
-            "SELECT pid::int8, usename::text, datname::text, client_addr::text, state, \
-                    (extract(epoch FROM now() - coalesce(query_start, backend_start)) * 1000)::int8, \
-                    query, wait_event_type || ': ' || wait_event, \
-                    (SELECT array_agg(b::int8) FROM unnest(pg_blocking_pids(pid)) b) \
-             FROM pg_stat_activity WHERE backend_type = 'client backend' AND pid <> pg_backend_pid() \
-             ORDER BY state = 'active' DESC, query_start NULLS LAST LIMIT $1",
+            &format!(
+                "SELECT pid::int8, usename::text, datname::text, client_addr::text, state, \
+                        (extract(epoch FROM now() - coalesce(query_start, backend_start)) * 1000)::int8, \
+                        query, {wait}, {blocked_by} \
+                 FROM pg_stat_activity WHERE {} AND pid <> pg_backend_pid() \
+                 ORDER BY state = 'active' DESC, query_start NULLS LAST LIMIT $1",
+                client_backends(server)
+            ),
             &[&MAX_PROCESSES],
         )
         .await
@@ -80,6 +99,36 @@ async fn locks(client: &Client) -> DbResult<Vec<LockInfo>> {
         .collect())
 }
 
+/// Greenplum: primary and mirror segments up, and mirrors out of sync.
+async fn segments(client: &Client) -> DbResult<Replication> {
+    let r = client
+        .query_one(
+            "SELECT count(*) FILTER (WHERE role = 'p'), count(*) FILTER (WHERE role = 'p' AND status = 'u'), \
+                    count(*) FILTER (WHERE role = 'm'), count(*) FILTER (WHERE role = 'm' AND status = 'u'), \
+                    count(*) FILTER (WHERE role = 'p' AND mode <> 's' \
+                                       AND EXISTS (SELECT 1 FROM gp_segment_configuration m \
+                                                   WHERE m.content = g.content AND m.role = 'm')), \
+                    string_agg(CASE WHEN status = 'd' THEN 'seg' || content || ' ' || hostname || ':' || port END, ', ') \
+             FROM gp_segment_configuration g WHERE content >= 0",
+            &[],
+        )
+        .await
+        .map_err(pg)?;
+    let (primaries, primaries_up, mirrors, mirrors_up, unsynced): (i64, i64, i64, i64, i64) =
+        (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4));
+    let mut state = format!("{primaries_up} of {primaries} primary segments up");
+    if mirrors > 0 {
+        let _ = write!(state, " · {mirrors_up} of {mirrors} mirrors up");
+    }
+    if unsynced > 0 {
+        let _ = write!(state, " · {unsynced} not in sync");
+    }
+    if let Some(down) = r.get::<_, Option<String>>(5) {
+        let _ = write!(state, " · down: {down}");
+    }
+    Ok(Replication { role: "coordinator".into(), lag_secs: None, replicas: mirrors, state: Some(state) })
+}
+
 async fn replication(client: &Client) -> DbResult<Replication> {
     let r = client
         .query_one(
@@ -105,19 +154,24 @@ async fn replication(client: &Client) -> DbResult<Replication> {
 impl Monitor for PgSession {
     async fn snapshot(&self, long_running_secs: u32) -> DbResult<MonitorSnapshot> {
         let client = self.catalog_client("").await?;
-        if self.flavor == Flavor::Cockroach {
-            return cockroach::snapshot(&client, self.info_version(), long_running_secs).await;
+        match self.server.flavor {
+            Flavor::Cockroach => return cockroach::snapshot(&client, self.info_version(), long_running_secs).await,
+            Flavor::Redshift => return redshift::snapshot(&client, self.info_version(), long_running_secs).await,
+            Flavor::Postgres | Flavor::Greenplum => {}
         }
         let gauge = client
             .query_one(
-                "SELECT (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend'), \
-                        current_setting('max_connections')::int8",
+                &format!(
+                    "SELECT (SELECT count(*) FROM pg_stat_activity WHERE {}), \
+                            current_setting('max_connections')::int8",
+                    client_backends(self.server)
+                ),
                 &[],
             )
             .await
             .map_err(pg)?;
         let mut unavailable = Vec::new();
-        let processes = processes(&client).await?;
+        let processes = processes(&client, self.server).await?;
         let locks = match locks(&client).await {
             Ok(l) => l,
             Err(e) => {
@@ -125,10 +179,15 @@ impl Monitor for PgSession {
                 Vec::new()
             }
         };
-        let replication = match replication(&client).await {
+        let (replication, what) = if self.server.flavor == Flavor::Greenplum {
+            (segments(&client).await, "Segments")
+        } else {
+            (replication(&client).await, "Replication")
+        };
+        let replication = match replication {
             Ok(r) => Some(r),
             Err(e) => {
-                unavailable.push(format!("Replication: {}", e.message));
+                unavailable.push(format!("{what}: {}", e.message));
                 None
             }
         };
@@ -153,8 +212,10 @@ impl Monitor for PgSession {
 
     async fn server_settings(&self, search: Option<&str>) -> DbResult<Vec<ServerSetting>> {
         let client = self.catalog_client("").await?;
-        if self.flavor == Flavor::Cockroach {
-            return cockroach::settings(&client, search).await;
+        match self.server.flavor {
+            Flavor::Cockroach => return cockroach::settings(&client, search).await,
+            Flavor::Redshift => return redshift::settings(&client, search).await,
+            Flavor::Postgres | Flavor::Greenplum => {}
         }
         let pattern = search.map(dq_core::sql::builder::like_contains);
         let rows = client
@@ -180,8 +241,10 @@ impl Monitor for PgSession {
     async fn largest_tables(&self, database: &str, limit: u32) -> DbResult<Vec<ObjectSize>> {
         let client = self.catalog_client(database).await?;
         let database = if database.is_empty() { self.info_database() } else { database.to_owned() };
-        if self.flavor == Flavor::Cockroach {
-            return cockroach::largest_tables(&client, &database, limit).await;
+        match self.server.flavor {
+            Flavor::Cockroach => return cockroach::largest_tables(&client, &database, limit).await,
+            Flavor::Redshift => return redshift::largest_tables(&client, &database, limit).await,
+            Flavor::Postgres | Flavor::Greenplum => {}
         }
         let rows = client
             .query(
@@ -214,12 +277,180 @@ impl Monitor for PgSession {
 
     async fn kill(&self, pid: i64, terminate: bool) -> DbResult<bool> {
         let client = self.catalog_client("").await?;
-        if self.flavor == Flavor::Cockroach {
+        if self.server.flavor == Flavor::Cockroach {
             return cockroach::kill(&client, pid, terminate).await;
         }
         let pid = i32::try_from(pid).map_err(|_| DbError::invalid("Not a PostgreSQL process id."))?;
         let sql = if terminate { "SELECT pg_terminate_backend($1)" } else { "SELECT pg_cancel_backend($1)" };
         Ok(client.query_one(sql, &[&pid]).await.map_err(pg)?.get(0))
+    }
+}
+
+/// Redshift: sessions from `stv_sessions` with their running statement from
+/// `stv_recents`, locks from `svv_transactions`. These are compute-node views,
+/// which cannot be joined with leader-node functions such as `pg_backend_pid()`
+/// or with `pg_class`, so those are read in queries of their own. Cancel and
+/// terminate use `pg_cancel_backend` / `pg_terminate_backend` as in PostgreSQL.
+mod redshift {
+    use std::collections::HashMap;
+
+    use dq_core::DbResult;
+    use dq_core::monitor::{LockInfo, MonitorSnapshot, ObjectSize, ServerProcess, ServerSetting, short_query};
+    use dq_core::node::{NodeKind, ObjectRef};
+    use tokio_postgres::{Client, SimpleQueryMessage};
+
+    use super::{MAX_PROCESSES, pg};
+
+    pub async fn snapshot(client: &Client, version: String, long_running_secs: u32) -> DbResult<MonitorSnapshot> {
+        let own: i32 = client.query_one("SELECT pg_backend_pid()", &[]).await.map_err(pg)?.get(0);
+        let rows = client
+            .query(
+                "SELECT s.process::int8, trim(s.user_name)::varchar(128), trim(s.db_name)::varchar(128), \
+                        r.pid IS NOT NULL, \
+                        (CASE WHEN r.pid IS NULL THEN datediff(ms, s.starttime, getdate()) \
+                              ELSE r.duration / 1000 END)::int8, \
+                        trim(r.query)::varchar(600) \
+                 FROM stv_sessions s LEFT JOIN stv_recents r ON r.pid = s.process AND r.status = 'Running' \
+                 ORDER BY 4 DESC, 5 DESC LIMIT $1",
+                &[&MAX_PROCESSES],
+            )
+            .await
+            .map_err(pg)?;
+        let mut processes: Vec<ServerProcess> = rows
+            .iter()
+            .filter(|r| r.get::<_, i64>(0) != i64::from(own))
+            .map(|r| {
+                let active: bool = r.get(3);
+                ServerProcess {
+                    pid: r.get(0),
+                    user: r.get(1),
+                    database: r.get(2),
+                    client: None,
+                    state: Some(if active { "running" } else { "idle" }.into()),
+                    duration_ms: r.get(4),
+                    query: short_query(r.get(5)),
+                    wait: None,
+                    blocked_by: Vec::new(),
+                    active,
+                }
+            })
+            .collect();
+        let mut unavailable = Vec::new();
+        let locks = match locks(client, own).await {
+            Ok(locks) => locks,
+            Err(e) => {
+                unavailable.push(format!("Locks: {}", e.message));
+                Vec::new()
+            }
+        };
+        // A waiting lock is blocked by the sessions holding one on the same table.
+        for waiting in locks.iter().filter(|l| !l.granted) {
+            let holders = locks.iter().filter(|l| l.granted && l.pid != waiting.pid && l.object == waiting.object);
+            if let Some(p) = processes.iter_mut().find(|p| p.pid == waiting.pid) {
+                p.blocked_by.extend(holders.map(|l| l.pid));
+                p.wait = Some("lock".into());
+            }
+        }
+        let long_ms = i64::from(long_running_secs) * 1000;
+        Ok(MonitorSnapshot {
+            version,
+            // The limit depends on the node type and is not exposed to SQL.
+            connections: None,
+            active_queries: Some(processes.iter().filter(|p| p.active).count() as i64),
+            long_running: Some(
+                processes.iter().filter(|p| p.active && p.duration_ms.unwrap_or(0) > long_ms).count() as i64
+            ),
+            blocked: Some(processes.iter().filter(|p| !p.blocked_by.is_empty()).count() as i64),
+            replication: None,
+            processes,
+            locks,
+            unavailable,
+        })
+    }
+
+    async fn locks(client: &Client, own: i32) -> DbResult<Vec<LockInfo>> {
+        let rows = client
+            .query(
+                "SELECT pid::int8, lockable_object_type::varchar(64), lock_mode::varchar(64), granted, relation::int8 \
+                 FROM svv_transactions ORDER BY granted, pid LIMIT 500",
+                &[],
+            )
+            .await
+            .map_err(pg)?;
+        let rows: Vec<_> = rows.iter().filter(|r| r.get::<_, i64>(0) != i64::from(own)).collect();
+        let mut oids: Vec<i64> = rows.iter().filter_map(|r| r.get::<_, Option<i64>>(4)).collect();
+        oids.sort_unstable();
+        oids.dedup();
+        let mut names: HashMap<i64, String> = HashMap::new();
+        if !oids.is_empty() {
+            // Numbers from the server, not user input.
+            let list = oids.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT c.oid::int8, n.nspname::text || '.' || c.relname::text FROM pg_class c \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid IN ({list})"
+            );
+            for r in client.query(&sql, &[]).await.map_err(pg)? {
+                names.insert(r.get(0), r.get(1));
+            }
+        }
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let relation: Option<i64> = r.get(4);
+                LockInfo {
+                    pid: r.get(0),
+                    lock_type: r.get::<_, Option<String>>(1).unwrap_or_else(|| "relation".into()),
+                    mode: r.get::<_, Option<String>>(2).unwrap_or_default(),
+                    granted: r.get(3),
+                    object: relation.map(|oid| names.get(&oid).cloned().unwrap_or_else(|| oid.to_string())),
+                }
+            })
+            .collect())
+    }
+
+    /// `SHOW ALL`: Redshift has no `pg_settings`.
+    pub async fn settings(client: &Client, search: Option<&str>) -> DbResult<Vec<ServerSetting>> {
+        let needle = search.map(str::to_lowercase);
+        let messages = client.simple_query("SHOW ALL").await.map_err(pg)?;
+        Ok(messages
+            .iter()
+            .filter_map(|m| match m {
+                SimpleQueryMessage::Row(r) => Some(ServerSetting {
+                    name: r.get(0)?.to_owned(),
+                    value: r.get(1).unwrap_or_default().to_owned(),
+                    unit: None,
+                    category: None,
+                    description: r.try_get(2).ok().flatten().map(str::to_owned),
+                }),
+                _ => None,
+            })
+            .filter(|s| needle.as_deref().is_none_or(|n| s.name.to_lowercase().contains(n)))
+            .collect())
+    }
+
+    /// `svv_table_info` sizes are in 1 MB blocks, indexes do not exist.
+    pub async fn largest_tables(client: &Client, database: &str, limit: u32) -> DbResult<Vec<ObjectSize>> {
+        let rows = client
+            .query(
+                "SELECT trim(\"schema\")::varchar(128), trim(\"table\")::varchar(128), size::int8, tbl_rows::int8 \
+                 FROM svv_table_info ORDER BY size DESC LIMIT $1",
+                &[&i64::from(limit.clamp(1, 1000))],
+            )
+            .await
+            .map_err(pg)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let bytes = r.get::<_, Option<i64>>(2).unwrap_or(0) * 1024 * 1024;
+                ObjectSize {
+                    object: ObjectRef::new(NodeKind::Table, database, Some(r.get(0)), r.get::<_, String>(1)),
+                    total_bytes: bytes,
+                    table_bytes: bytes,
+                    index_bytes: 0,
+                    rows: r.get(3),
+                }
+            })
+            .collect())
     }
 }
 

@@ -16,7 +16,7 @@ use dq_core::adapter::{BatchFn, ConnectParams, IdleConnection, Params, Session, 
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
-use dq_core::sql::{Dialect, PostgresDialect, SqlFlavor, command_tag};
+use dq_core::sql::{Dialect, PostgresDialect, RedshiftDialect, SqlFlavor, command_tag};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult};
 use futures_util::{StreamExt, TryStreamExt};
@@ -25,10 +25,10 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{CancelToken, Client, RowStream};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-use crate::catalog;
-use crate::connect::{self, Flavor, Role};
+use crate::connect::{self, Flavor, Role, Server};
 use crate::error::map_error;
 use crate::values::{TextParam, column_meta, decode_row};
+use crate::{catalog, redshift};
 
 const STREAM_BATCH: usize = 1_000;
 
@@ -48,7 +48,7 @@ pub struct PgSession {
     /// Kept in memory only, to open catalog and edit connections.
     params: ConnectParams,
     info: ServerInfo,
-    pub(crate) flavor: Flavor,
+    pub(crate) server: Server,
     tls: MakeRustlsConnect,
     query: Mutex<QueryConnection>,
     cancel_token: CancelToken,
@@ -77,7 +77,7 @@ impl PgSession {
         let started = Instant::now();
         let config = &params.config;
         let conn = connect::open(params, &config.database, Role::Query, &tls).await?;
-        let (info, flavor) = connect::server_info(&conn.client, config, started).await?;
+        let (info, server) = connect::server_info(&conn.client, config, started).await?;
         Ok(Self {
             cancel_token: conn.client.cancel_token(),
             query: Mutex::new(QueryConnection {
@@ -88,7 +88,7 @@ impl PgSession {
             }),
             params: params.clone(),
             info,
-            flavor,
+            server,
             tls,
             running: AtomicBool::new(false),
             catalogs: Mutex::new(Vec::new()),
@@ -111,6 +111,10 @@ impl PgSession {
 
     fn err(&self, e: &tokio_postgres::Error) -> DbError {
         map_error(e, self.params.password())
+    }
+
+    fn redshift(&self) -> bool {
+        self.server.flavor == Flavor::Redshift
     }
 
     /// Read-only catalog connection for `database`, opened on first use and
@@ -221,28 +225,43 @@ impl Session for PgSession {
     }
 
     fn dialect(&self) -> &'static dyn Dialect {
-        &PostgresDialect
+        if self.redshift() { &RedshiftDialect } else { &PostgresDialect }
     }
 
     async fn list_children(&self, parent: Option<&ObjectRef>) -> DbResult<Vec<Node>> {
+        let rs = self.redshift();
         match parent {
             None => catalog::databases(&*self.catalog("").await?, &self.info.database).await,
-            Some(p) if p.kind == NodeKind::Database => catalog::schemas(&*self.catalog(&p.name).await?, &p.name).await,
-            Some(p) if p.kind == NodeKind::Schema => {
-                catalog::relations(&*self.catalog(&p.database).await?, &p.database, &p.name).await
+            Some(p) if p.kind == NodeKind::Database && rs => {
+                redshift::schemas(&*self.catalog(&p.name).await?, &p.name).await
             }
-            Some(p) if matches!(p.kind, NodeKind::Table | NodeKind::MaterializedView) => {
+            Some(p) if p.kind == NodeKind::Database => catalog::schemas(&*self.catalog(&p.name).await?, &p.name).await,
+            Some(p) if p.kind == NodeKind::Schema && rs => {
+                redshift::relations(&*self.catalog(&p.database).await?, &p.database, &p.name).await
+            }
+            Some(p) if p.kind == NodeKind::Schema => {
+                catalog::relations(&*self.catalog(&p.database).await?, self.server, &p.database, &p.name).await
+            }
+            // Redshift has no indexes or triggers.
+            Some(p) if matches!(p.kind, NodeKind::Table | NodeKind::MaterializedView) && !rs => {
                 catalog::table_children(&*self.catalog(&p.database).await?, p).await
             }
+            Some(p) if p.kind == NodeKind::Group && rs => {
+                redshift::group_children(&*self.catalog(&p.database).await?, p).await
+            }
             Some(p) if p.kind == NodeKind::Group => {
-                catalog::group_children(&*self.catalog(&p.database).await?, p).await
+                catalog::group_children(&*self.catalog(&p.database).await?, self.server, p).await
             }
             Some(_) => Ok(Vec::new()),
         }
     }
 
     async fn search(&self, query: &str, limit: u32) -> DbResult<Vec<Node>> {
-        catalog::search(&*self.catalog("").await?, &self.info.database, query, limit).await
+        let client = self.catalog("").await?;
+        if self.redshift() {
+            return redshift::search(&client, &self.info.database, query, limit).await;
+        }
+        catalog::search(&client, &self.info.database, query, limit).await
     }
 
     async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
@@ -285,20 +304,37 @@ impl Session for PgSession {
     }
 
     async fn structure(&self, object: &ObjectRef) -> DbResult<TableStructure> {
-        catalog::structure(&*self.catalog(&object.database).await?, object).await
+        let client = self.catalog(&object.database).await?;
+        if self.redshift() {
+            return redshift::structure(&client, object).await;
+        }
+        catalog::structure(&client, self.server, object).await
     }
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {
-        catalog::ddl(&*self.catalog(&object.database).await?, object).await
+        let client = self.catalog(&object.database).await?;
+        match self.server.flavor {
+            Flavor::Redshift => redshift::ddl(&client, object).await,
+            Flavor::Greenplum => catalog::greenplum_ddl(&client, self.server, object).await,
+            Flavor::Postgres | Flavor::Cockroach => catalog::ddl(&client, self.server, object).await,
+        }
     }
 
     async fn dependencies(&self, object: &ObjectRef) -> DbResult<Dependencies> {
-        catalog::dependencies(&*self.catalog(&object.database).await?, object).await
+        let client = self.catalog(&object.database).await?;
+        if self.redshift() {
+            return redshift::dependencies(&client, object).await;
+        }
+        catalog::dependencies(&client, object).await
     }
 
     async fn schema_model(&self, database: &str, schema: Option<&str>) -> DbResult<SchemaModel> {
         let database = if database.is_empty() { self.info.database.as_str() } else { database };
-        catalog::schema_model(&*self.catalog(database).await?, database, schema).await
+        let client = self.catalog(database).await?;
+        if self.redshift() {
+            return redshift::schema_model(&client, database, schema).await;
+        }
+        catalog::schema_model(&client, self.server, database, schema).await
     }
 
     async fn read_query(
@@ -352,7 +388,11 @@ impl Session for PgSession {
     }
 
     async fn row_estimate(&self, object: &ObjectRef) -> DbResult<Option<i64>> {
-        catalog::row_estimate(&*self.catalog(&object.database).await?, object).await
+        let client = self.catalog(&object.database).await?;
+        if self.redshift() {
+            return redshift::row_estimate(&client, object).await;
+        }
+        catalog::row_estimate(&client, object).await
     }
 
     /// On any error the connection is dropped (its transaction rolls back);
@@ -381,8 +421,9 @@ impl Session for PgSession {
         Some(self)
     }
 
+    /// Redshift's users, groups and roles are not `pg_roles` with SCRAM passwords.
     fn users(&self) -> Option<&dyn dq_core::users::UserAdmin> {
-        Some(self)
+        (!self.redshift()).then_some(self as &dyn dq_core::users::UserAdmin)
     }
 
     async fn close(&self) {

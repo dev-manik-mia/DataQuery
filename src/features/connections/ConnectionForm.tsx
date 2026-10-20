@@ -16,7 +16,7 @@ import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
 import { Alert, Button, Checkbox, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, libsqlEndpoint, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, libsqlEndpoint, offersCloudAuth, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -75,9 +75,6 @@ const NO_DATABASE_FIELD: Engine[] = ['dynamodb', 'elasticsearch', 'libsql'];
 /** Engines that authenticate with a token alone, without a username. */
 const TOKEN_ONLY: Engine[] = ['libsql', 'd1'];
 
-/** Engines without cloud IAM sign-in (the Authentication section). */
-const NO_CLOUD_AUTH: Engine[] = ['mongodb', 'libsql', 'd1'];
-
 /** Engines reached through a fixed cloud API host over HTTPS instead of a host the user enters. */
 const API_HOSTS: Partial<Record<Engine, string>> = { d1: 'api.cloudflare.com' };
 
@@ -121,7 +118,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
-    host: config?.host ?? API_HOSTS[engine] ?? (engine === 'dynamodb' ? '' : 'localhost'),
+    host: config?.host ?? API_HOSTS[engine] ?? (engine === 'dynamodb' || engine === 'redshift' ? '' : 'localhost'),
     port: String(config?.port ?? defaultPort ?? ''),
     database: config?.database ?? defaults.database,
     username: config?.username ?? defaults.username,
@@ -375,7 +372,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             <>
           {!apiHost && (
           <div className={styles.hostRow}>
-            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} onChange={(e) => setHost(e.target.value)} />
+            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} placeholder={host.placeholder} onChange={(e) => setHost(e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
           )}
@@ -481,7 +478,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
           )}
           {!fileBased && !apiHost && (
             <>
-          {!NO_CLOUD_AUTH.includes(engine) && (
+          {offersCloudAuth(engine) && (
           <FormSection title="Authentication" summary={authSummary(state.auth, engine)} open={openSections.auth} onToggle={() => toggle('auth')}>
             <AuthFields auth={state.auth} engine={engine} onChange={(a) => set('auth', a)} />
             {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}

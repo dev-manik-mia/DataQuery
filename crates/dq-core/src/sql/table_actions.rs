@@ -52,8 +52,11 @@ const DOCUMENTS: &str = "Document collections have no SQL table actions.";
 const CQL_EMPTY: &str = "Cassandra deletes rows by partition key only; use Truncate to remove every row.";
 const CQL_DUPLICATE: &str = "CQL cannot copy rows from one table into another.";
 
+const REDSHIFT_DUPLICATE: &str = "Copies columns, defaults, NOT NULL, distribution and sort keys (LIKE … INCLUDING DEFAULTS). Primary, unique and foreign keys are not copied.";
+
 /// The table actions of an engine. `engine` refines the flavor where engines
-/// sharing it differ (`CockroachDB` has no `RESTART IDENTITY`).
+/// sharing it differ (`CockroachDB` has no `RESTART IDENTITY`; Redshift has
+/// neither it nor `CASCADE`, and its `LIKE` copies less).
 pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions {
     if flavor.is_document() {
         return TableActions {
@@ -66,7 +69,11 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
         };
     }
     let cockroach = engine == Some(Engine::Cockroachdb);
+    let redshift = engine == Some(Engine::Redshift);
     let truncate_note = match flavor {
+        SqlFlavor::Postgres if redshift => {
+            Some("TRUNCATE commits the open transaction at once and cannot be rolled back; use Empty to stay in it.")
+        }
         SqlFlavor::Mysql => Some(
             "TRUNCATE commits at once, resets AUTO_INCREMENT and fails while other tables' foreign keys reference the table, unless foreign key checks are turned off.",
         ),
@@ -87,6 +94,7 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
     };
     let duplicate = match flavor {
         SqlFlavor::Cql => ActionSupport::no(CQL_DUPLICATE),
+        SqlFlavor::Postgres if redshift => ActionSupport::yes(Some(REDSHIFT_DUPLICATE)),
         SqlFlavor::Postgres => ActionSupport::yes(Some(
             "Copies columns, defaults, constraints, indexes and comments (LIKE … INCLUDING ALL). Foreign keys and triggers are not copied; serial columns keep using the original sequence.",
         )),
@@ -114,8 +122,9 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
     };
     TableActions {
         truncate: ActionSupport::yes(truncate_note),
-        truncate_restart_identity: (flavor == SqlFlavor::Postgres && !cockroach) || flavor == SqlFlavor::Sqlite,
-        truncate_cascade: matches!(flavor, SqlFlavor::Postgres | SqlFlavor::Oracle),
+        truncate_restart_identity: (flavor == SqlFlavor::Postgres && !cockroach && !redshift)
+            || flavor == SqlFlavor::Sqlite,
+        truncate_cascade: (flavor == SqlFlavor::Postgres && !redshift) || flavor == SqlFlavor::Oracle,
         truncate_disable_foreign_keys: flavor == SqlFlavor::Mysql,
         empty,
         duplicate,
@@ -278,8 +287,10 @@ pub(super) fn duplicate(
     Ok(match flavor {
         SqlFlavor::Postgres => {
             let s = structure()?;
-            let mut out = vec![format!("CREATE TABLE {copy} (LIKE {source} INCLUDING ALL)")];
-            if with_data {
+            let mut out = vec![format!("CREATE TABLE {copy} (LIKE {source} {})", d.like_options())];
+            if with_data && !d.identity_sequences() {
+                out.push(insert(s, ""));
+            } else if with_data {
                 let identity: Vec<_> = s.columns.iter().filter(|c| c.identity).collect();
                 out.push(insert(s, if identity.is_empty() { "" } else { " OVERRIDING SYSTEM VALUE" }));
                 // The copy's identity sequences are new: continue after the copied rows.
@@ -387,7 +398,7 @@ mod tests {
     use crate::sql::ddl::statements_with;
     use crate::sql::dialect::{
         ClickhouseDialect, CqlDialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect, PostgresDialect,
-        SnowflakeDialect, SqlServerDialect, SqliteDialect,
+        RedshiftDialect, SnowflakeDialect, SqlServerDialect, SqliteDialect,
     };
 
     fn column(name: &str, identity: bool, generated: bool, primary_key: bool) -> ColumnInfo {
@@ -559,6 +570,15 @@ mod tests {
                 "INSERT INTO `shop`.`orders_copy` (`id`, `name`) SELECT `id`, `name` FROM `shop`.`orders`",
             ]
         );
+        // Redshift: LIKE copies defaults and keys, identity values go in as they are.
+        let rs = t("dev", Some("public"), "orders");
+        assert_eq!(
+            duplicate(&RedshiftDialect, &rs, "orders_copy", true, Some(&structure(rs.clone())), None).unwrap(),
+            [
+                r#"CREATE TABLE "public"."orders_copy" (LIKE "public"."orders" INCLUDING DEFAULTS)"#,
+                r#"INSERT INTO "public"."orders_copy" ("id", "name") SELECT "id", "name" FROM "public"."orders""#,
+            ]
+        );
         assert!(duplicate(&MysqlDialect, &my, "orders", true, Some(&s), None).is_err(), "same name");
         assert!(duplicate(&MysqlDialect, &my, " ", true, Some(&s), None).is_err());
     }
@@ -643,6 +663,11 @@ mod tests {
         assert!(pg.truncate_restart_identity && pg.truncate_cascade && !pg.truncate_disable_foreign_keys);
         let crdb = table_actions(SqlFlavor::Postgres, Some(Engine::Cockroachdb));
         assert!(!crdb.truncate_restart_identity && crdb.truncate_cascade);
+        let rs = table_actions(SqlFlavor::Postgres, Some(Engine::Redshift));
+        assert!(!rs.truncate_restart_identity && !rs.truncate_cascade && rs.truncate.note.is_some());
+        assert_eq!(rs.duplicate.note.as_deref(), Some(REDSHIFT_DUPLICATE));
+        let gp = table_actions(SqlFlavor::Postgres, Some(Engine::Greenplum));
+        assert!(gp.truncate_restart_identity && gp.truncate_cascade);
         let my = table_actions(SqlFlavor::Mysql, Some(Engine::Mariadb));
         assert!(my.truncate_disable_foreign_keys && my.truncate.note.is_some());
         let cql = table_actions(SqlFlavor::Cql, Some(Engine::Cassandra));

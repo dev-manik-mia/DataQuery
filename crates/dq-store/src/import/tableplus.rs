@@ -130,7 +130,7 @@ mod tests {
         {
             let preview = read_app(SourceApp::Tableplus, &fixture(file), &dirs()).unwrap();
             let names: Vec<&str> = preview.connections.iter().map(|c| c.connection.name.as_str()).collect();
-            assert_eq!(names, ["Billing prod", "Shop (local)", "Cache", "Analytics file"], "{file}");
+            assert_eq!(names, ["Billing prod", "Shop (local)", "Cache", "Warehouse", "Analytics file"], "{file}");
             let prod = &preview.connections[0];
             assert_eq!(prod.problem, None);
             assert_eq!(
@@ -153,17 +153,19 @@ mod tests {
                 (Engine::Mariadb, SslMode::Prefer, Environment::Local)
             );
             assert_eq!(preview.connections[2].connection.config.engine, Engine::Redis);
-            let file = &preview.connections[3].connection.config;
+            let warehouse = &preview.connections[3];
+            assert_eq!(
+                (warehouse.connection.config.engine, warehouse.connection.config.port, warehouse.problem.as_deref()),
+                (Engine::Redshift, 5439, None)
+            );
+            let file = &preview.connections[4].connection.config;
             assert_eq!(
                 (file.engine, file.database.as_str(), file.port),
                 (Engine::Sqlite, "/Users/ada/data/analytics.db", 0)
             );
             assert_eq!(
                 preview.skipped,
-                [
-                    "Socket db: connects through a local socket, which DataQuery does not support.",
-                    "Warehouse: Redshift is not supported."
-                ]
+                ["Socket db: connects through a local socket, which DataQuery does not support."]
             );
         }
     }

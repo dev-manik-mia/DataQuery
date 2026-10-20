@@ -21,6 +21,6 @@ pub use analyze::{
 };
 pub use dialect::{
     ClickhouseDialect, CqlDialect, CypherDialect, D1Dialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect,
-    OracleDialect, PartiqlDialect, PostgresDialect, QueryDslDialect, RedisDialect, SnowflakeDialect, SqlFlavor,
+    OracleDialect, PartiqlDialect, PostgresDialect, QueryDslDialect, RedisDialect, RedshiftDialect, SnowflakeDialect, SqlFlavor,
     SqlServerDialect, SqliteDialect,
 };

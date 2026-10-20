@@ -159,6 +159,18 @@ services:
       interval: 2s
       retries: 30
 
+  # Greenplum 7 (coordinator and two segments). The image trusts every client;
+  # the test account is created once the cluster is up.
+  greenplum:
+    image: andruche/greenplum:7-2seg
+    entrypoint: ["bash", "-c", "(until su - gpadmin -c 'psql -d postgres -c \"SELECT 1\"' >/dev/null 2>&1; do sleep 2; done; su - gpadmin -c 'psql -d postgres -f /seed/init.sql') & exec /entrypoint.sh"]
+    ports: ["55433:5432"]
+    volumes: ["./docker/greenplum-init.sql:/seed/init.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "su - gpadmin -c 'psql -h 127.0.0.1 -U dataquery -d dataquery_test -c \"SELECT 1\"' >/dev/null 2>&1"]
+      interval: 3s
+      retries: 60
+
   # Heavy optional servers run under profiles (see package.json db:up:wide / db:up:search):
   # all test databases together need more than the default 8 GB of Docker memory.
   # Cassandra 5 with password authentication (user cassandra / cassandra); slow to start.

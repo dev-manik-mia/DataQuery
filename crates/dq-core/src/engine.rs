@@ -14,6 +14,8 @@ pub enum Engine {
     Sqlserver,
     Oracle,
     Cockroachdb,
+    Redshift,
+    Greenplum,
     Clickhouse,
     Duckdb,
     Snowflake,
@@ -215,6 +217,30 @@ const SPECS: &[Spec] = &[
         Some(26257),
         "26257 · Postgres wire",
         "Postgres wire protocol",
+        P::P2,
+    ),
+    spec(
+        Engine::Redshift,
+        "Amazon Redshift",
+        "Rs",
+        235,
+        G::Analytical,
+        "SQL",
+        Some(5439),
+        "5439 · Postgres wire",
+        "Provisioned and Serverless · password sign-in",
+        P::P2,
+    ),
+    spec(
+        Engine::Greenplum,
+        "Greenplum",
+        "Gp",
+        165,
+        G::Analytical,
+        "SQL",
+        Some(5432),
+        "5432 · SQL · v6–7",
+        "Greenplum 6–7 · also Apache Cloudberry",
         P::P2,
     ),
     spec(
@@ -423,11 +449,11 @@ impl Engine {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
     }
 
-    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`) or a
-    /// mock of the documented API (Cloudflare D1), never a real account; the engine
-    /// picker labels them "Beta".
+    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`), a
+    /// mock of the documented API (Cloudflare D1) or unit tests (Redshift cannot run
+    /// locally), never a real account; the engine picker labels them "Beta".
     pub fn is_beta(self) -> bool {
-        matches!(self, Self::Snowflake | Self::Dynamodb | Self::D1)
+        matches!(self, Self::Snowflake | Self::Dynamodb | Self::D1 | Self::Redshift)
     }
 
     /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.

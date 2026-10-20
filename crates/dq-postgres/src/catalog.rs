@@ -12,6 +12,7 @@ use dq_core::sql::{Dialect, PostgresDialect};
 use dq_core::{DbError, DbResult};
 use tokio_postgres::Client;
 
+use crate::connect::{Flavor, Server};
 use crate::error::map_error;
 use crate::values::is_native_oid;
 
@@ -37,6 +38,35 @@ fn pg(e: tokio_postgres::Error) -> DbError {
     map_error(&e, None)
 }
 
+/// Catalog SQL that differs on a `PostgreSQL` 9.x catalog (Greenplum 6).
+impl Server {
+    /// Hides partitions, which are listed under their parent table.
+    fn not_partition(self) -> &'static str {
+        match (self.legacy, self.flavor) {
+            (false, _) => "NOT COALESCE(c.relispartition, false)",
+            (true, Flavor::Greenplum) => {
+                "NOT EXISTS (SELECT 1 FROM pg_partition_rule pr WHERE pr.parchildrelid = c.oid)"
+            }
+            (true, _) => "true",
+        }
+    }
+
+    /// Functions or procedures; there were no procedures before `prokind`.
+    fn routines(self, procedures: bool) -> &'static str {
+        match (self.legacy, procedures) {
+            (false, false) => "p.prokind IN ('f','a','w')",
+            (false, true) => "p.prokind = 'p'",
+            (true, false) => "true",
+            (true, true) => "false",
+        }
+    }
+
+    /// `attidentity` and `attgenerated`, or empty strings where they do not exist.
+    fn identity_columns(self) -> &'static str {
+        if self.legacy { "''::text, ''::text" } else { "a.attidentity::text, a.attgenerated::text" }
+    }
+}
+
 pub async fn databases(client: &Client, current: &str) -> DbResult<Vec<Node>> {
     let rows = client
         .query("SELECT datname::text FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname", &[])
@@ -59,7 +89,7 @@ pub async fn schemas(client: &Client, database: &str) -> DbResult<Vec<Node>> {
                 (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN {RELKINDS}), \
                 obj_description(n.oid, 'pg_namespace') \
          FROM pg_namespace n \
-         WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname NOT IN ('information_schema', 'crdb_internal') \
+         WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname NOT IN ('information_schema', 'crdb_internal', 'gp_toolkit') \
          ORDER BY n.nspname <> 'public', n.nspname"
     );
     let rows = client.query(&sql, &[]).await.map_err(pg)?;
@@ -87,21 +117,26 @@ fn relation_node(database: &str, row: &tokio_postgres::Row) -> Node {
 
 const RELATION_COLUMNS: &str = "n.nspname::text, c.relname::text, c.relkind::text, COALESCE(c.reltuples, -1)::int8, obj_description(c.oid, 'pg_class')";
 
-pub async fn relations(client: &Client, database: &str, schema: &str) -> DbResult<Vec<Node>> {
+pub async fn relations(client: &Client, server: Server, database: &str, schema: &str) -> DbResult<Vec<Node>> {
     let sql = format!(
         "SELECT {RELATION_COLUMNS} FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE n.nspname = $1 AND c.relkind IN {RELKINDS} AND NOT COALESCE(c.relispartition, false) \
+         WHERE n.nspname = $1 AND c.relkind IN {RELKINDS} AND {} \
          ORDER BY {}, c.relname",
+        server.not_partition(),
         relkind_order()
     );
     let rows = client.query(&sql, &[&schema]).await.map_err(pg)?;
     let mut nodes: Vec<Node> = rows.iter().map(|r| relation_node(database, r)).collect();
     let counts = client
         .query_one(
-            "SELECT (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S'), \
-                    (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = n.oid AND p.prokind IN ('f','a','w')), \
-                    (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = n.oid AND p.prokind = 'p') \
-             FROM pg_namespace n WHERE n.nspname = $1",
+            &format!(
+                "SELECT (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'S'), \
+                        (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = n.oid AND {}), \
+                        (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = n.oid AND {}) \
+                 FROM pg_namespace n WHERE n.nspname = $1",
+                server.routines(false),
+                server.routines(true)
+            ),
             &[&schema],
         )
         .await
@@ -143,14 +178,15 @@ pub async fn table_children(client: &Client, table: &ObjectRef) -> DbResult<Vec<
 }
 
 /// Sequences, functions or procedures of a schema.
-pub async fn group_children(client: &Client, group: &ObjectRef) -> DbResult<Vec<Node>> {
+pub async fn group_children(client: &Client, server: Server, group: &ObjectRef) -> DbResult<Vec<Node>> {
     let schema = group.schema.as_deref().ok_or_else(|| DbError::invalid("A schema is required."))?;
     let object = |kind, name: String| ObjectRef::new(kind, group.database.clone(), Some(schema.to_owned()), name);
-    let routines = |kinds: &'static str| {
+    let routines = |procedures: bool| {
         format!(
             "SELECT p.proname::text, pg_get_function_identity_arguments(p.oid), obj_description(p.oid, 'pg_proc') \
              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
-             WHERE n.nspname = $1 AND p.prokind IN {kinds} ORDER BY 1, 2"
+             WHERE n.nspname = $1 AND {} ORDER BY 1, 2",
+            server.routines(procedures)
         )
     };
     let (sql, kind) = match group.name.as_str() {
@@ -160,8 +196,8 @@ pub async fn group_children(client: &Client, group: &ObjectRef) -> DbResult<Vec<
                 .to_owned(),
             NodeKind::Sequence,
         ),
-        GROUP_FUNCTIONS => (routines("('f','a','w')"), NodeKind::Function),
-        GROUP_PROCEDURES => (routines("('p')"), NodeKind::Procedure),
+        GROUP_FUNCTIONS => (routines(false), NodeKind::Function),
+        GROUP_PROCEDURES => (routines(true), NodeKind::Procedure),
         other => return Err(DbError::invalid(format!("Unknown group `{other}`."))),
     };
     let rows = client.query(&sql, &[&schema]).await.map_err(pg)?;
@@ -222,10 +258,10 @@ pub async fn row_estimate(client: &Client, object: &ObjectRef) -> DbResult<Optio
     Ok(relation(client, object).await?.estimate)
 }
 
-pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStructure> {
+pub async fn structure(client: &Client, server: Server, object: &ObjectRef) -> DbResult<TableStructure> {
     let rel = relation(client, object).await?;
     let (columns, constraints, indexes, identity, foreign_keys, size) = tokio::try_join!(
-        columns(client, rel.oid),
+        columns(client, server, rel.oid),
         constraints(client, rel.oid),
         indexes(client, rel.oid),
         row_identity(client, rel.oid),
@@ -246,18 +282,21 @@ pub async fn structure(client: &Client, object: &ObjectRef) -> DbResult<TableStr
     })
 }
 
-async fn columns(client: &Client, oid: u32) -> DbResult<Vec<ColumnInfo>> {
+async fn columns(client: &Client, server: Server, oid: u32) -> DbResult<Vec<ColumnInfo>> {
     let rows = client
         .query(
-            "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \
-                    pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text, \
-                    a.atttypid, t.typtype::text, CASE WHEN t.typcategory = 'A' THEN t.typelem ELSE 0::oid END, t.typbasetype, col_description(a.attrelid, a.attnum), \
-                    EXISTS (SELECT 1 FROM pg_index x WHERE x.indrelid = a.attrelid AND x.indisprimary AND a.attnum = ANY(x.indkey)) \
-             FROM pg_attribute a \
-             JOIN pg_type t ON t.oid = a.atttypid \
-             LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-             WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped \
-             ORDER BY a.attnum",
+            &format!(
+                "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \
+                        pg_get_expr(d.adbin, d.adrelid), {}, \
+                        a.atttypid, t.typtype::text, CASE WHEN t.typcategory = 'A' THEN t.typelem ELSE 0::oid END, t.typbasetype, col_description(a.attrelid, a.attnum), \
+                        EXISTS (SELECT 1 FROM pg_index x WHERE x.indrelid = a.attrelid AND x.indisprimary AND a.attnum = ANY(x.indkey)) \
+                 FROM pg_attribute a \
+                 JOIN pg_type t ON t.oid = a.atttypid \
+                 LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+                 WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped \
+                 ORDER BY a.attnum",
+                server.identity_columns()
+            ),
             &[&oid],
         )
         .await
@@ -300,7 +339,8 @@ async fn constraints(client: &Client, oid: u32) -> DbResult<Vec<ConstraintInfo>>
     let rows = client
         .query(
             "SELECT conname::text, contype::text, pg_get_constraintdef(oid, true) FROM pg_constraint \
-             WHERE conrelid = $1 ORDER BY array_position(ARRAY['p','u','f','c','x']::text[], contype::text), conname",
+             WHERE conrelid = $1 \
+             ORDER BY CASE contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 WHEN 'c' THEN 3 ELSE 4 END, conname",
             &[&oid],
         )
         .await
@@ -495,7 +535,12 @@ pub async fn dependencies(client: &Client, object: &ObjectRef) -> DbResult<Depen
 }
 
 /// Tables, columns and foreign keys of one schema or every user schema.
-pub async fn schema_model(client: &Client, database: &str, schema: Option<&str>) -> DbResult<SchemaModel> {
+pub async fn schema_model(
+    client: &Client,
+    server: Server,
+    database: &str,
+    schema: Option<&str>,
+) -> DbResult<SchemaModel> {
     let filter = "(($1::text IS NULL AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema') \
                    OR n.nspname = $1)";
     let max_tables = SchemaModel::MAX_TABLES as i64;
@@ -504,13 +549,14 @@ pub async fn schema_model(client: &Client, database: &str, schema: Option<&str>)
             &format!(
                 "WITH rels AS (SELECT c.oid, n.nspname, c.relname, c.relkind FROM pg_class c \
                      JOIN pg_namespace n ON n.oid = c.relnamespace \
-                     WHERE c.relkind IN {RELKINDS} AND NOT COALESCE(c.relispartition, false) AND {filter} \
+                     WHERE c.relkind IN {RELKINDS} AND {} AND {filter} \
                      ORDER BY n.nspname, c.relname LIMIT $2) \
                  SELECT r.nspname::text, r.relname::text, r.relkind::text, a.attname::text, \
                         format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, \
                         EXISTS (SELECT 1 FROM pg_index x WHERE x.indrelid = r.oid AND x.indisprimary AND a.attnum = ANY(x.indkey)) \
                  FROM rels r JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped \
-                 ORDER BY r.nspname, r.relname, a.attnum LIMIT $3"
+                 ORDER BY r.nspname, r.relname, a.attnum LIMIT $3",
+                server.not_partition()
             ),
             &[&schema, &(max_tables + 1), &(SchemaModel::MAX_COLUMNS as i64)],
         )
@@ -587,7 +633,7 @@ async fn row_identity(client: &Client, oid: u32) -> DbResult<Vec<String>> {
 }
 
 /// Definition of an index, sequence, trigger, function or procedure.
-async fn object_ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
+async fn object_ddl(client: &Client, server: Server, object: &ObjectRef) -> DbResult<String> {
     let schema = object.schema.as_deref().ok_or_else(|| DbError::invalid("A schema is required."))?;
     let missing = || DbError::not_found(format!("{} no longer exists.", object.name));
     let d = PostgresDialect;
@@ -622,6 +668,9 @@ async fn object_ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
             .await
             .map_err(pg)?
             .map(|r| r.get(0)),
+        NodeKind::Sequence if server.legacy => {
+            return Err(DbError::unsupported("Sequence definitions need a server built on PostgreSQL 10 or newer."));
+        }
         NodeKind::Sequence => {
             let row = client
                 .query_opt(
@@ -665,9 +714,9 @@ async fn object_ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
 }
 
 /// DDL reconstructed from the catalog.
-pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
+pub async fn ddl(client: &Client, server: Server, object: &ObjectRef) -> DbResult<String> {
     if !object.kind.is_relation() {
-        return object_ddl(client, object).await;
+        return object_ddl(client, server, object).await;
     }
     let d = PostgresDialect;
     let rel = relation(client, object).await?;
@@ -678,11 +727,14 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         let keyword = if rel.kind == NodeKind::View { "VIEW" } else { "MATERIALIZED VIEW" };
         return Ok(format!("CREATE {keyword} {name} AS\n{}", def.trim_end()));
     }
-    let structure = structure(client, object).await?;
+    let structure = structure(client, server, object).await?;
     let attrs = client
         .query(
-            "SELECT a.attname::text, a.attidentity::text, a.attgenerated::text FROM pg_attribute a \
-             WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
+            &format!(
+                "SELECT a.attname::text, {} FROM pg_attribute a \
+                 WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
+                server.identity_columns()
+            ),
             &[&rel.oid],
         )
         .await
@@ -729,4 +781,79 @@ pub async fn ddl(client: &Client, object: &ObjectRef) -> DbResult<String> {
         );
     }
     Ok(out.trim_end().to_owned() + "\n")
+}
+
+/// Puts `clauses` (one per line) after the column list of the first `CREATE TABLE`.
+fn with_table_clauses(ddl: &str, clauses: &[String]) -> String {
+    match ddl.split_once("\n);") {
+        Some((head, tail)) if !clauses.is_empty() => format!("{head}\n)\n{};{tail}", clauses.join("\n")),
+        _ => ddl.to_owned(),
+    }
+}
+
+/// Greenplum: the table's DDL with what makes it an MPP table: access method
+/// (append-optimized row or column storage), storage options, distribution
+/// (`DISTRIBUTED BY / RANDOMLY / REPLICATED`) and partitioning, in the order
+/// both Greenplum 6 and 7 accept. Greenplum 6 keeps storage in the options
+/// and spells out every partition; Greenplum 7 names only the partition key.
+pub async fn greenplum_ddl(client: &Client, server: Server, object: &ObjectRef) -> DbResult<String> {
+    let text = ddl(client, server, object).await?;
+    if object.kind != NodeKind::Table {
+        return Ok(text);
+    }
+    let rel = relation(client, object).await?;
+    let (partitions, method, join) = if server.legacy {
+        (
+            "CASE WHEN EXISTS (SELECT 1 FROM pg_partition p WHERE p.parrelid = c.oid) \
+                  THEN pg_get_partition_def(c.oid, true, true) END",
+            "NULL::text",
+            "",
+        )
+    } else {
+        (
+            "CASE WHEN c.relkind = 'p' THEN 'PARTITION BY ' || pg_get_partkeydef(c.oid) END",
+            "am.amname::text",
+            "LEFT JOIN pg_am am ON am.oid = c.relam",
+        )
+    };
+    let r = client
+        .query_one(
+            &format!(
+                "SELECT {method}, array_to_string(c.reloptions, ', '), pg_get_table_distributedby(c.oid), {partitions} \
+                 FROM pg_class c {join} WHERE c.oid = $1"
+            ),
+            &[&rel.oid],
+        )
+        .await
+        .map_err(pg)?;
+    let mut clauses = Vec::new();
+    if let Some(method) = r.get::<_, Option<String>>(0).filter(|m| m != "heap") {
+        clauses.push(format!("USING {method}"));
+    }
+    if let Some(options) = r.get::<_, Option<String>>(1).filter(|o| !o.is_empty()) {
+        clauses.push(format!("WITH ({options})"));
+    }
+    for clause in [r.get::<_, Option<String>>(2), r.get(3)].into_iter().flatten() {
+        if !clause.trim().is_empty() {
+            clauses.push(clause.trim_end().to_owned());
+        }
+    }
+    Ok(with_table_clauses(&text, &clauses))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn greenplum_clauses_follow_the_column_list() {
+        let ddl =
+            "CREATE TABLE public.t (\n  id integer NOT NULL\n);\n\nCREATE INDEX i ON public.t USING btree (id);\n";
+        let clauses = ["USING ao_column".to_owned(), "DISTRIBUTED BY (id)".to_owned()];
+        assert_eq!(
+            with_table_clauses(ddl, &clauses),
+            "CREATE TABLE public.t (\n  id integer NOT NULL\n)\nUSING ao_column\nDISTRIBUTED BY (id);\n\nCREATE INDEX i ON public.t USING btree (id);\n"
+        );
+        assert_eq!(with_table_clauses(ddl, &[]), ddl);
+    }
 }
