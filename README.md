@@ -271,4 +271,4 @@ Pro licences are Ed25519-signed tokens checked offline (`src-tauri/src/license.r
 
 ## License
 
-MIT OR Apache-2.0
+Proprietary. Copyright © 2026 Manik Mia. All rights reserved. See [`LICENSE`](LICENSE).

@@ -674,7 +674,7 @@ function About() {
       <Card flush>
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
-        <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account. DataQuery Pro is a one-time licence (Settings → License).`} />
+        <Row title="Licence" help={`${info?.license ?? 'Proprietary'}. Free, no account. DataQuery Pro is a one-time licence (Settings → License).`} />
       </Card>
       <UpdatesCard />
     </>

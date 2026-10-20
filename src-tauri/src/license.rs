@@ -7,7 +7,7 @@
 //! (`DQ1.…`, issued with `scripts/license-token.mjs`) for machines without internet.
 //!
 //! Only official builds (`DATAQUERY_OFFICIAL_BUILD` set at compile time) apply the
-//! Free limits. DataQuery is open source: a build from source has every feature.
+//! Free limits; a development build from source has every feature.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

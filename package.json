@@ -4,7 +4,7 @@
   "version": "0.2.4",
   "type": "module",
   "description": "DataQuery — a fast, safe desktop database client.",
-  "license": "MIT OR Apache-2.0",
+  "license": "UNLICENSED",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
