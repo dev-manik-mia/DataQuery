@@ -16,7 +16,7 @@ import type { SslMode } from '@/bindings/SslMode';
 import type { TlsFiles } from '@/bindings/TlsFiles';
 import { Alert, Button, Checkbox, EngineMark, ErrorAlert, FieldShell, FileField, PageHead, Segmented, SelectField, TextField } from '@/components/ui';
 import { toAppError } from '@/lib/errors';
-import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, sslModeLabel } from '@/lib/engines';
+import { connectionDefaults, credentialLabels, databaseLabel, defaultSslMode, hostField, insecureReason, libsqlEndpoint, sslModeLabel } from '@/lib/engines';
 import { formatDuration } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
@@ -51,7 +51,7 @@ const DATABASE_FILTERS: Partial<Record<Engine, { name: string; extensions: strin
 };
 
 /** Engine settings kept in `properties`. */
-const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string; check?: boolean }[]>> = {
+const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; placeholder?: string; check?: boolean; required?: boolean }[]>> = {
   snowflake: [
     { key: 'warehouse', label: 'Warehouse', placeholder: 'COMPUTE_WH' },
     { key: 'role', label: 'Role', placeholder: 'default role' },
@@ -63,13 +63,23 @@ const ENGINE_PROPERTIES: Partial<Record<Engine, { key: string; label: string; pl
     { key: 'read_preference', label: 'Read preference', placeholder: 'primary' },
     { key: 'srv', label: 'DNS seed list (mongodb+srv)', check: true },
   ],
-  dynamodb: [{ key: 'region', label: 'Region', placeholder: 'us-east-1' }],
+  dynamodb: [{ key: 'region', label: 'Region', placeholder: 'us-east-1', required: true }],
+  d1: [{ key: 'account_id', label: 'Account ID', placeholder: '32 characters, from the dashboard URL', required: true }],
   cassandra: [{ key: 'datacenter', label: 'Local datacenter', placeholder: 'any (e.g. dc1)' }],
   scylladb: [{ key: 'datacenter', label: 'Local datacenter', placeholder: 'any (e.g. dc1)' }],
 };
 
 /** Engines whose server has no single database to pick in the form. */
-const NO_DATABASE_FIELD: Engine[] = ['dynamodb', 'elasticsearch'];
+const NO_DATABASE_FIELD: Engine[] = ['dynamodb', 'elasticsearch', 'libsql'];
+
+/** Engines that authenticate with a token alone, without a username. */
+const TOKEN_ONLY: Engine[] = ['libsql', 'd1'];
+
+/** Engines without cloud IAM sign-in (the Authentication section). */
+const NO_CLOUD_AUTH: Engine[] = ['mongodb', 'libsql', 'd1'];
+
+/** Engines reached through a fixed cloud API host over HTTPS instead of a host the user enters. */
+const API_HOSTS: Partial<Record<Engine, string>> = { d1: 'api.cloudflare.com' };
 
 const SSL_MODES: SslMode[] = ['verify-full', 'verify-ca', 'require', 'prefer', 'disable'];
 
@@ -111,7 +121,7 @@ function initialState(engine: Engine, defaultPort: number | null, existing?: { n
     name: existing?.name ?? prefill?.name_suggestion ?? '',
     folderId: existing?.folder_id ?? '',
     environment: existing?.environment ?? 'Development',
-    host: config?.host ?? (engine === 'dynamodb' ? '' : 'localhost'),
+    host: config?.host ?? API_HOSTS[engine] ?? (engine === 'dynamodb' ? '' : 'localhost'),
     port: String(config?.port ?? defaultPort ?? ''),
     database: config?.database ?? defaults.database,
     username: config?.username ?? defaults.username,
@@ -146,6 +156,8 @@ function validate(s: FormState, fileBased: boolean, engine: Engine): Errors {
   if (!s.name.trim()) errors.name = 'Give the connection a name.';
   if (!s.host.trim() && engine !== 'dynamodb') errors.host = 'Host is required.';
   if (engine === 'dynamodb' && !/^[a-z0-9-]+$/.test(s.properties.region?.trim() ?? '')) errors.properties = 'Enter the AWS region, e.g. eu-west-1.';
+  if (engine === 'd1' && !/^[0-9a-f]{32}$/i.test(s.properties.account_id?.trim() ?? '')) errors.properties = 'Enter the 32-character account ID from the Cloudflare dashboard.';
+  if (engine === 'd1' && !s.database.trim()) errors.database = 'Enter the database ID or name, or load the list.';
   const port = Number(s.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) errors.port = '1–65535';
   if (!s.username.trim() && credentialLabels(engine).usernameRequired && s.auth.method === 'password') errors.username = `${credentialLabels(engine).username} is required.`;
@@ -182,6 +194,16 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
     setState((s) => ({ ...s, [key]: value }));
     setResult(null);
   };
+  const apiHost = API_HOSTS[engine];
+  /** A pasted libSQL URL fills the host, port, TLS and token fields. */
+  const setHost = (value: string) => {
+    const endpoint = engine === 'libsql' ? libsqlEndpoint(value) : null;
+    if (!endpoint) return set('host', value);
+    setState((s) => ({ ...s, host: endpoint.host, port: String(endpoint.port), sslMode: endpoint.sslMode, password: endpoint.token ?? s.password }));
+    setResult(null);
+  };
+  const [databases, setDatabases] = useState<string[] | null>(null);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
 
   const passwordChange = (): PasswordChange => {
     if (state.password) return { action: 'set', value: state.password };
@@ -269,6 +291,19 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
     }
   };
 
+  /** Lists the account's databases with the entered token (Cloudflare D1). */
+  const loadDatabases = async () => {
+    setLoadingDatabases(true);
+    setResult(null);
+    try {
+      setDatabases(await api.draftDatabases(draft()));
+    } catch (e) {
+      setResult({ ok: false, error: toAppError(e).info });
+    } finally {
+      setLoadingDatabases(false);
+    }
+  };
+
   const err = (key: keyof FormState) => (touched ? errors[key] : undefined);
   const insecure = fileBased ? null : insecureReason({ host: state.host.trim(), ssl_mode: state.sslMode, ssh: state.ssh });
   const passwordHint = existing?.has_password
@@ -338,11 +373,13 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             />
           ) : (
             <>
+          {!apiHost && (
           <div className={styles.hostRow}>
-            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} onChange={(e) => set('host', e.target.value)} />
+            <TextField label={host.label} mono value={state.host} error={err('host')} hint={host.hint} onChange={(e) => setHost(e.target.value)} />
             <TextField label="Port" mono inputMode="numeric" value={state.port} error={err('port')} onChange={(e) => set('port', e.target.value.replace(/\D/g, ''))} />
           </div>
-          {!NO_DATABASE_FIELD.includes(engine) && (
+          )}
+          {!NO_DATABASE_FIELD.includes(engine) && !apiHost && (
             <TextField
               label={databaseLabel(engine)}
               mono
@@ -351,7 +388,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
               onChange={(e) => set('database', e.target.value)}
             />
           )}
-          {state.auth.method === 'password' || engine !== 'dynamodb' ? (
+          {!TOKEN_ONLY.includes(engine) && (state.auth.method === 'password' || engine !== 'dynamodb') ? (
             <TextField
               label={credentials.username}
               mono
@@ -373,10 +410,34 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
                 mono
                 placeholder={p.placeholder}
                 value={state.properties[p.key] ?? ''}
-                error={p.key === 'region' ? err('properties') : undefined}
+                error={p.required ? err('properties') : undefined}
                 onChange={(e) => set('properties', { ...state.properties, [p.key]: e.target.value })}
               />
             ),
+          )}
+          {apiHost && (
+            <TextField
+              label={databaseLabel(engine)}
+              mono
+              list="dq-account-databases"
+              value={state.database}
+              error={err('database')}
+              placeholder={databases ? 'Pick a database' : undefined}
+              hint={databases ? `${databases.length} database(s) in this account.` : 'Enter the API token below, then load the list, or type the ID.'}
+              onChange={(e) => set('database', e.target.value)}
+              action={
+                <Button busy={loadingDatabases} onClick={() => void loadDatabases()} title="Asks the account which databases the token can open (also checks the token)">
+                  Load databases
+                </Button>
+              }
+            />
+          )}
+          {databases && (
+            <datalist id="dq-account-databases">
+              {databases.map((d) => (
+                <option key={d} value={d} />
+              ))}
+            </datalist>
           )}
           {state.auth.method === 'password' && (
           <div className={styles.full} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -397,6 +458,7 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
             )}
           </div>
           )}
+          {!apiHost && (
           <SelectField
             label="SSL mode"
             mono
@@ -413,12 +475,13 @@ export function ConnectionForm({ engine, connectionId, prefill }: { engine: Engi
                     : 'Encrypted, but the certificate is not verified.'
             }
           />
+          )}
           <TextField label="Connect timeout" mono inputMode="numeric" suffix="seconds" value={state.timeout} error={err('timeout')} onChange={(e) => set('timeout', e.target.value.replace(/\D/g, ''))} />
             </>
           )}
-          {!fileBased && (
+          {!fileBased && !apiHost && (
             <>
-          {engine !== 'mongodb' && (
+          {!NO_CLOUD_AUTH.includes(engine) && (
           <FormSection title="Authentication" summary={authSummary(state.auth, engine)} open={openSections.auth} onToggle={() => toggle('auth')}>
             <AuthFields auth={state.auth} engine={engine} onChange={(a) => set('auth', a)} />
             {err('auth') && <span className={`dq-field__error ${styles.full}`}>{err('auth')}</span>}

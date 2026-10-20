@@ -474,6 +474,11 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
     transactions: 'ClickHouse has no multi-statement transactions.',
   },
   sqlite: { monitoring: NO_SERVER },
+  libsql: { monitoring: 'libSQL over HTTP exposes no server sessions or running statements.' },
+  d1: {
+    monitoring: 'Cloudflare D1 exposes no sessions or running queries; see query metrics in the Cloudflare dashboard.',
+    transactions: 'Each D1 API request is its own transaction: there is no BEGIN … COMMIT. Scripts and grid edits run as one all-or-nothing batch.',
+  },
   redis: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   valkey: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   dragonfly: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
@@ -512,6 +517,8 @@ const NO_BACKUP: Partial<Record<Engine, string>> = {
   scylladb: CQL_SNAPSHOTS,
   elasticsearch: `Snapshot repositories ${SERVER_SIDE}`,
   neo4j: `Dumps (neo4j-admin database dump) ${SERVER_SIDE}`,
+  libsql: 'Turso keeps point-in-time restores (turso db create --from-db … --timestamp); dump to SQL with turso db shell <database> .dump, or export tables here.',
+  d1: 'D1 keeps Time Travel restores (wrangler d1 time-travel); dump to SQL with wrangler d1 export <database> --remote, or export tables here.',
 };
 
 function CapabilityCell({ engine, name, capability, supported, available, priority }: {

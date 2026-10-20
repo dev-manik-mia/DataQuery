@@ -18,6 +18,8 @@ export function flavorOf(engine: Engine | undefined): SqlFlavor {
     case 'duckdb':
       return 'duckdb';
     case 'sqlite':
+    case 'libsql':
+    case 'd1':
       return 'sqlite';
     case 'snowflake':
       return 'snowflake';
@@ -91,6 +93,7 @@ export function databaseLabel(engine: Engine): string {
   if (engine === 'mongodb') return 'Default database';
   if (engine === 'redis' || engine === 'valkey' || engine === 'dragonfly') return 'Database number';
   if (engine === 'cassandra' || engine === 'scylladb') return 'Keyspace';
+  if (engine === 'd1') return 'Database ID or name';
   return 'Database';
 }
 
@@ -106,6 +109,8 @@ export function hostField(engine: Engine): { label: string; hint?: string } {
       return { label: 'Contact points', hint: 'One node, or node1,node2:9043 — the driver discovers the rest of the cluster.' };
     case 'dynamodb':
       return { label: 'Endpoint', hint: 'Leave empty for AWS in the region below, or e.g. localhost for DynamoDB Local.' };
+    case 'libsql':
+      return { label: 'Host', hint: 'The database host (my-db-myorg.turso.io), or paste its libsql:// or https:// URL.' };
     default:
       return { label: 'Host' };
   }
@@ -127,6 +132,10 @@ export function credentialLabels(engine: Engine): { username: string; password: 
       return { username: 'Username', password: 'Password', usernameRequired: false };
     case 'elasticsearch':
       return { username: 'Username', password: 'Password, or an API key with no username', usernameRequired: false };
+    case 'libsql':
+      return { username: 'Username', password: 'Auth token', usernameRequired: false };
+    case 'd1':
+      return { username: 'Username', password: 'API token', usernameRequired: false };
     default:
       return { username: 'Username', password: 'Password', usernameRequired: true };
   }
@@ -135,11 +144,11 @@ export function credentialLabels(engine: Engine): { username: string; password: 
 /** Database and user a new connection form starts with. */
 /**
  * SSL mode for a new connection. TLS is off by default so local and internal
- * servers without certificates connect first time; Snowflake is only reachable
- * over HTTPS, so it keeps full verification.
+ * servers without certificates connect first time; Snowflake, Turso (libSQL) and
+ * Cloudflare D1 are reached over HTTPS, so they keep full verification.
  */
 export function defaultSslMode(engine: Engine): SslMode {
-  return engine === 'snowflake' ? 'verify-full' : 'disable';
+  return engine === 'snowflake' || engine === 'libsql' || engine === 'd1' ? 'verify-full' : 'disable';
 }
 
 export function connectionDefaults(engine: Engine): { database: string; username: string } {
@@ -233,6 +242,7 @@ const HTTPS_SSL_LABELS: Record<SslMode, string> = {
 
 /** SSL mode as the engine's own client spells it (`sslmode`, `--ssl-mode`, `encrypt`, TCPS). */
 export function sslModeLabel(engine: Engine, mode: SslMode): string {
+  if (engine === 'libsql') return HTTPS_SSL_LABELS[mode];
   switch (flavorOf(engine)) {
     case 'mysql':
       return MYSQL_SSL_LABELS[mode];
@@ -273,4 +283,29 @@ export function insecureReason(config: Pick<ConnConfig, 'host' | 'ssl_mode' | 's
     default:
       return null;
   }
+}
+
+/**
+ * A libSQL URL pasted into the host field: `libsql://db-org.turso.io` (TLS
+ * unless `?tls=0`), `https://…`, `http://localhost:8080` or `ws(s)://…`, with an
+ * optional `?authToken=`. `null` when the input is a plain host name.
+ */
+export function libsqlEndpoint(input: string): { host: string; port: number; sslMode: SslMode; token: string | null } | null {
+  const [, scheme = '', rest = ''] = /^(libsql|https?|wss?):\/\/(.+)$/i.exec(input.trim()) ?? [];
+  if (!rest) return null;
+  let url: URL;
+  try {
+    url = new URL(`http://${rest}`);
+  } catch {
+    return null;
+  }
+  const tlsParam = url.searchParams.get('tls');
+  const kind = scheme.toLowerCase();
+  const tls = kind === 'libsql' ? tlsParam !== '0' && tlsParam !== 'false' : kind === 'https' || kind === 'wss';
+  return {
+    host: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+    port: url.port ? Number(url.port) : tls ? 443 : 8080,
+    sslMode: tls ? 'verify-full' : 'disable',
+    token: url.searchParams.get('authToken'),
+  };
 }

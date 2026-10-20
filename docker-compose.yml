@@ -218,6 +218,16 @@ services:
       interval: 5s
       retries: 60
 
+  # libSQL server (sqld, what Turso runs): Hrana over HTTP on :58080. Requests need
+  # a JWT signed by this test-only Ed25519 key, like Turso database tokens; the
+  # matching token is DATAQUERY_TEST_LIBSQL_TOKEN in package.json.
+  libsql:
+    profiles: ["libsql"]
+    image: ghcr.io/tursodatabase/libsql-server:v0.24.33
+    environment:
+      SQLD_AUTH_JWT_KEY: pgDGrptawVYE-009MvmoJaTmQi5uCtQH6iq5kRiDF0Q
+    ports: ["58080:8080"]
+
   # SSH bastion for tunnel tests; it reaches the databases by service name.
   ssh:
     build: { context: docker, dockerfile: ssh.Dockerfile }

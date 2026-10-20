@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use dq_core::adapter::Params;
 use dq_core::explain::ExplainResult;
 use dq_core::result::{ExecOptions, RowsPage, StatementResult};
 use dq_core::sql::dialect::dialect_for;
@@ -220,10 +221,73 @@ pub async fn run_sql(
     let mut outcomes = Vec::with_capacity(statements.len());
     // Written when the run ends, also if it errors out or is dropped midway.
     let mut history = HistoryBatch::new(&state, &settings, &connection, &open);
+    // Engines without interactive transactions (Cloudflare D1) run a script as one all-or-nothing request.
+    let texts: Vec<&str> = statements.iter().map(|s| s.text(&sql)).collect();
+    let script =
+        if texts.len() > 1 && params.is_empty() { open.session.execute_script(&texts, options).await } else { None };
+    match script {
+        Some(Ok(results)) => {
+            for (index, (statement, result)) in statements.iter().zip(results).enumerate() {
+                let rows = result.affected.map_or(result.rows.len() as i64, |a| a as i64);
+                history.push(texts[index], started.elapsed(), Ok(Some(rows)));
+                let (from, to) = (statement.from, statement.to);
+                outcomes.push(StatementOutcome {
+                    index: index as u32,
+                    from,
+                    to,
+                    result: Some(result),
+                    error: None,
+                    can_fetch_more: false,
+                });
+            }
+        }
+        Some(Err(error)) => {
+            history.push(&sql, started.elapsed(), Err(error.clone()));
+            // Nothing was applied: the error covers the whole script.
+            let to = statements.last().map_or(statements[0].to, |s| s.to);
+            outcomes.push(StatementOutcome {
+                index: 0,
+                from: statements[0].from,
+                to,
+                result: None,
+                error: Some(error),
+                can_fetch_more: false,
+            });
+        }
+        None => run_each(&open, &sql, &statements, &params, options, &mut history, &mut outcomes).await,
+    }
+    // Also when the statement failed: some engines keep part of a failed DDL statement.
+    if statements[..outcomes.len()].iter().any(|s| s.kind.may_change_structure()) {
+        open.structures.invalidate(None);
+    }
+    if let Some(last) = outcomes.last_mut() {
+        last.can_fetch_more = last.result.as_ref().is_some_and(|r| r.has_more);
+    }
+    Ok(Guarded::Done {
+        value: RunReport {
+            skipped: (statements.len() - outcomes.len()) as u32,
+            outcomes,
+            duration_ms: started.elapsed().as_millis() as u64,
+            tx: open.tx_status(),
+        },
+    })
+}
+
+/// Runs statements one by one, stopping at the first error.
+async fn run_each(
+    open: &OpenSession,
+    sql: &str,
+    statements: &[StatementInfo],
+    params: Params<'_>,
+    options: ExecOptions,
+    history: &mut HistoryBatch,
+    outcomes: &mut Vec<StatementOutcome>,
+) {
+    let flavor = open.session.dialect().flavor();
     for (index, statement) in statements.iter().enumerate() {
-        let text = statement.text(&sql);
+        let text = statement.text(sql);
         let ran = Instant::now();
-        let result = open.session.execute(text, &params, options).await;
+        let result = open.session.execute(text, params, options).await;
         open.set_tx_status(next_tx(open.tx_status(), text, flavor, result.is_err()));
         let rows = result.as_ref().ok().map(|r| r.affected.map_or(r.rows.len() as i64, |a| a as i64));
         history.push(text, ran.elapsed(), result.as_ref().map(|_| rows).map_err(Clone::clone));
@@ -244,21 +308,6 @@ pub async fn run_sql(
             break;
         }
     }
-    // Also when the statement failed: some engines keep part of a failed DDL statement.
-    if statements[..outcomes.len()].iter().any(|s| s.kind.may_change_structure()) {
-        open.structures.invalidate(None);
-    }
-    if let Some(last) = outcomes.last_mut() {
-        last.can_fetch_more = last.result.as_ref().is_some_and(|r| r.has_more);
-    }
-    Ok(Guarded::Done {
-        value: RunReport {
-            skipped: (statements.len() - outcomes.len()) as u32,
-            outcomes,
-            duration_ms: started.elapsed().as_millis() as u64,
-            tx: open.tx_status(),
-        },
-    })
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, TS)]
