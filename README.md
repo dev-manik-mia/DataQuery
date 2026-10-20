@@ -18,7 +18,7 @@ Feature status and task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE
   and keeps ER diagrams, backups, users and roles and every engine. Pro is one payment with lifetime updates.
 - **Moving over is quick:** import your connections from TablePlus, DBeaver, Sequel Ace or DataGrip (passwords stay
   behind; you type them once).
-- **Open source** (MIT or Apache-2.0), no account, no telemetry.
+- **No account, no telemetry.**
 
 ## Free and Pro
 
@@ -48,7 +48,6 @@ checked 2026-10-20. "Not documented" means the TablePlus docs have no page for i
 | Advanced filters | 2 (none in the free Windows version) | **4, on every platform** |
 | ER diagram | not documented | ✓ |
 | Import connections from other apps | not documented | ✓ TablePlus, DBeaver, Sequel Ace, DataGrip |
-| Source code | closed | open (MIT or Apache-2.0) |
 
 **Paid versions**
 
