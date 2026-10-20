@@ -6,6 +6,7 @@ use dq_core::engine::Capabilities;
 use dq_core::keyvalue::{KeyValueFeatures, KeyValueStore};
 use dq_core::result::ServerInfo;
 use dq_core::sql::SqlFlavor;
+use dq_core::users::{UserAdmin, UserAdminFeatures};
 use dq_store::SavedConnection;
 use serde::Serialize;
 use tauri::State;
@@ -27,6 +28,8 @@ pub struct SessionInfo {
     pub documents: Option<DocumentFeatures>,
     /// Set for key-value engines: the explorer becomes the key browser.
     pub keys: Option<KeyValueFeatures>,
+    /// Set for engines with user and role management.
+    pub users: Option<UserAdminFeatures>,
     /// The connection goes through an SSH tunnel.
     pub tunneled: bool,
     /// Why the connection is not fully secure, if it is not.
@@ -47,6 +50,7 @@ async fn open(state: &AppState, connection_id: &str, session_id: String) -> DbRe
         flavor: opened.session.dialect().flavor(),
         documents: opened.session.documents().map(DocumentStore::features),
         keys: opened.session.keys().map(KeyValueStore::features),
+        users: opened.session.users().map(UserAdmin::features),
         tunneled: opened.tunnel.is_some(),
         insecure: connection.config.insecure_reason().map(str::to_owned),
         connection,

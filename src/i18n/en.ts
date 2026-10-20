@@ -30,6 +30,7 @@ export const en = {
   'nav.history': 'History',
   'nav.settings': 'Settings',
   'nav.monitoring': 'Monitoring',
+  'nav.users': 'Users & roles',
   'nav.schemaDiff': 'Schema diff',
   'nav.commandPalette': 'Command palette',
   'nav.search': 'Search objects and scripts',

@@ -381,6 +381,10 @@ impl Session for PgSession {
         Some(self)
     }
 
+    fn users(&self) -> Option<&dyn dq_core::users::UserAdmin> {
+        Some(self)
+    }
+
     async fn close(&self) {
         let _ = self.cancel().await;
         self.catalogs.lock().await.clear();

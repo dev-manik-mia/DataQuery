@@ -5,6 +5,7 @@ import type { KeyValueFeatures } from "./KeyValueFeatures";
 import type { SavedConnection } from "./SavedConnection";
 import type { ServerInfo } from "./ServerInfo";
 import type { SqlFlavor } from "./SqlFlavor";
+import type { UserAdminFeatures } from "./UserAdminFeatures";
 
 export type SessionInfo = { session_id: string, connection: SavedConnection, server: ServerInfo, capabilities: Capabilities, flavor: SqlFlavor, 
 /**
@@ -15,6 +16,10 @@ documents: DocumentFeatures | null,
  * Set for key-value engines: the explorer becomes the key browser.
  */
 keys: KeyValueFeatures | null, 
+/**
+ * Set for engines with user and role management.
+ */
+users: UserAdminFeatures | null, 
 /**
  * The connection goes through an SSH tunnel.
  */

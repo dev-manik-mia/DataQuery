@@ -5,6 +5,9 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 
+import type { AccountList } from '@/bindings/AccountList';
+import type { AccountPrivileges } from '@/bindings/AccountPrivileges';
+import type { AccountRef } from '@/bindings/AccountRef';
 import type { AiAnswer } from '@/bindings/AiAnswer';
 import type { AiDisclosure } from '@/bindings/AiDisclosure';
 import type { AiProvider } from '@/bindings/AiProvider';
@@ -79,6 +82,7 @@ import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
 import type { TxAction } from '@/bindings/TxAction';
 import type { TxStatus } from '@/bindings/TxStatus';
+import type { UserChange } from '@/bindings/UserChange';
 import type { ValuePage } from '@/bindings/ValuePage';
 import type { ValueRequest } from '@/bindings/ValueRequest';
 
@@ -217,6 +221,14 @@ export const api = {
   largestTables: ({ sessionId }: Sid, database: string, limit: number) => call<ObjectSize[]>('largest_tables', { sessionId, database, limit }),
   killProcess: ({ sessionId }: Sid, pid: number, user: string | null, terminate: boolean, confirmation: Confirmation | null) =>
     call<Guarded<boolean>>('kill_process', { sessionId, pid, user, terminate, confirmation }),
+
+  // users and roles
+  userAccounts: ({ sessionId }: Sid) => call<AccountList>('user_accounts', { sessionId }),
+  userPrivileges: ({ sessionId }: Sid, account: AccountRef, database: string) =>
+    call<AccountPrivileges>('user_privileges', { sessionId, account, database }),
+  userChangePreview: ({ sessionId }: Sid, change: UserChange) => call<string>('user_change_preview', { sessionId, change }),
+  applyUserChange: ({ sessionId }: Sid, change: UserChange, confirmation: Confirmation | null) =>
+    call<Guarded<number>>('apply_user_change', { sessionId, change, confirmation }),
 
   // import / export
   exportData: ({ sessionId }: Sid, source: ExportSource, format: ExportFormat, options: ExportOptions, path: string, jobId: string) =>

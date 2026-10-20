@@ -22,6 +22,7 @@ use crate::node::{Node, ObjectRef};
 use crate::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult};
 use crate::schema::{Dependencies, KeyRole, SchemaModel, TableStructure};
 use crate::sql::Dialect;
+use crate::users::UserAdmin;
 use crate::value::CellLimits;
 
 /// Receives streamed rows in batches.
@@ -170,6 +171,11 @@ pub trait Session: Send + Sync {
 
     /// Server monitoring, when the engine supports it.
     fn monitor(&self) -> Option<&dyn Monitor> {
+        None
+    }
+
+    /// User and role management, when the engine supports it.
+    fn users(&self) -> Option<&dyn UserAdmin> {
         None
     }
 

@@ -26,6 +26,7 @@ pub mod sql;
 pub mod table;
 pub mod tls;
 pub mod transfer;
+pub mod users;
 pub mod value;
 
 pub use error::{DbError, DbResult, ErrorKind};
