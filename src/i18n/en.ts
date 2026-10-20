@@ -31,6 +31,7 @@ export const en = {
   'nav.settings': 'Settings',
   'nav.monitoring': 'Monitoring',
   'nav.schemaDiff': 'Schema diff',
+  'nav.dataCompare': 'Data compare',
   'nav.commandPalette': 'Command palette',
   'nav.search': 'Search objects and scripts',
   'workspace.noTabs': 'No open tabs',

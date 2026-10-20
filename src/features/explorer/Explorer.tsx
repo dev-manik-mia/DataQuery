@@ -6,6 +6,7 @@ import type { Node } from '@/bindings/Node';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
+import { comparesData, dataCompareAvailable, openDataCompare } from '@/features/datacompare/entry';
 import { CreateTableDialog, StructureEditDialog, type StructureEdit } from '@/features/schema/forms';
 import { TableActionDialog, type TableAction } from '@/features/schema/TableActionDialog';
 import { Icon, IconButton, Input, Menu, Skeleton, useContextMenu, type MenuEntry } from '@/components/ui';
@@ -265,6 +266,14 @@ export function Explorer({ width }: { width: number }) {
       { label: 'Open structure', onSelect: () => openTableTab(node, 'structure') },
       { label: 'View DDL', onSelect: () => openTableTab(node, 'ddl') },
       { label: 'Dependencies', onSelect: () => openTableTab(node, 'dependencies') },
+      ...(table && session && dataCompareAvailable() && comparesData(session.flavor)
+        ? [
+            {
+              label: 'Compare data with…',
+              onSelect: () => openDataCompare({ connection_id: session.connection.id, database: node.database, schema: node.schema, table: node.name }),
+            },
+          ]
+        : []),
       { type: 'separator' },
       { label: 'Copy qualified name', onSelect: () => void copyName() },
       { label: 'Generate SELECT', onSelect: () => void template(node, 'select') },

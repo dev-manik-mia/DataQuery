@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 import type { DbError } from '@/bindings/DbError';
 import type { DiffSide } from '@/bindings/DiffSide';
@@ -15,7 +15,8 @@ import { useWorkspace } from '@/stores/workspace';
 
 import styles from './Schema.module.css';
 
-function SidePicker({ label, value, onChange }: { label: string; value: DiffSide; onChange: (v: DiffSide) => void }) {
+/** Connection, database and schema of one side of a compare; `children` adds fields (e.g. a table). */
+export function SidePicker<T extends DiffSide>({ label, value, onChange, children }: { label: string; value: T; onChange: (v: T) => void; children?: ReactNode }) {
   const connections = useConnections((s) => s.connections);
   const connection = connections.find((c) => c.id === value.connection_id);
   const flavor = connection && flavorOf(connection.config.engine);
@@ -28,12 +29,13 @@ function SidePicker({ label, value, onChange }: { label: string; value: DiffSide
           value={value.connection_id}
           onChange={(e) => {
             const c = connections.find((x) => x.id === e.target.value);
-            onChange({ connection_id: e.target.value, database: c?.config.database ?? '', schema: c ? defaultSchema(flavorOf(c.config.engine), c.config.username) : null });
+            onChange({ ...value, connection_id: e.target.value, database: c?.config.database ?? '', schema: c ? defaultSchema(flavorOf(c.config.engine), c.config.username) : null });
           }}
           options={[{ value: '', label: 'Choose…' }, ...connections.map((c) => ({ value: c.id, label: `${c.name} (${c.environment})` }))]}
         />
         <TextField label={flavor === 'cql' ? 'Keyspace' : 'Database'} mono value={value.database} onChange={(e) => onChange({ ...value, database: e.target.value })} />
         {schemas && <TextField label="Schema" mono value={value.schema ?? ''} onChange={(e) => onChange({ ...value, schema: e.target.value || null })} />}
+        {children}
       </div>
     </Card>
   );

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import type { CompareTable } from '@/bindings/CompareTable';
 import type { Confirmation } from '@/bindings/Confirmation';
 import type { ConfirmationRequest } from '@/bindings/ConfirmationRequest';
 import type { Engine } from '@/bindings/Engine';
@@ -17,6 +18,7 @@ export type View =
   | { name: 'workspace' }
   | { name: 'history' }
   | { name: 'diff' }
+  | { name: 'data-compare'; source?: CompareTable }
   | { name: 'settings'; section: SettingsSection };
 
 export type ToastTone = 'info' | 'positive' | 'critical';
@@ -78,7 +80,7 @@ export const useUi = create<UiState>((set, get) => ({
 
   navigate: (view) => {
     const current = get().view;
-    const overlays = ['history', 'settings', 'diff'];
+    const overlays = ['history', 'settings', 'diff', 'data-compare'];
     const overlay = overlays.includes(view.name);
     const fromOverlay = overlays.includes(current.name);
     set({ view, returnTo: overlay && !fromOverlay ? current : get().returnTo });

@@ -4,6 +4,7 @@
 
 pub mod ai;
 pub mod connections;
+pub mod data_compare;
 pub mod documents;
 pub mod explorer;
 pub mod history;

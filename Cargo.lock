@@ -1926,6 +1926,7 @@ name = "dq-core"
 version = "0.2.4"
 dependencies = [
  "async-trait",
+ "chrono",
  "csv",
  "encoding_rs",
  "encoding_rs_io",

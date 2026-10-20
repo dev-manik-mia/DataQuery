@@ -45,7 +45,7 @@ pub struct TransferProgress {
 }
 
 /// Paths come from the native file dialog; they must be absolute.
-fn file_path(path: &str) -> CmdResult<PathBuf> {
+pub(super) fn file_path(path: &str) -> CmdResult<PathBuf> {
     let path = PathBuf::from(path);
     if !path.is_absolute() {
         return Err(DbError::invalid("Choose a file with the file dialog."));
@@ -54,7 +54,7 @@ fn file_path(path: &str) -> CmdResult<PathBuf> {
 }
 
 /// Registers a job: its cancel flag and a progress callback that emits at most every 200 ms.
-fn start_job(app: &AppHandle, state: &AppState, job_id: &str) -> TransferControl {
+pub(super) fn start_job(app: &AppHandle, state: &AppState, job_id: &str) -> TransferControl {
     let cancelled = Arc::new(AtomicBool::new(false));
     state.transfers.lock().expect("transfers lock").insert(job_id.to_owned(), cancelled.clone());
     let app = app.clone();
@@ -69,7 +69,7 @@ fn start_job(app: &AppHandle, state: &AppState, job_id: &str) -> TransferControl
     })
 }
 
-fn end_job(state: &AppState, job_id: &str) {
+pub(super) fn end_job(state: &AppState, job_id: &str) {
     state.transfers.lock().expect("transfers lock").remove(job_id);
 }
 
