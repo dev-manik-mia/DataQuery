@@ -47,6 +47,7 @@ impl CassandraAdapter {
         monitoring: true,
         transactions: false,
         schema_diff: true,
+        backup: false,
     };
 }
 

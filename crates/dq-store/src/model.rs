@@ -307,6 +307,9 @@ pub struct Settings {
     pub check_updates_on_launch: bool,
     /// Download and install updates in the background; they apply on the next restart.
     pub auto_install_updates: bool,
+    /// Backup tool → program path chosen by the user (e.g. `pg_dump` →
+    /// `/opt/homebrew/opt/libpq/bin/pg_dump`); unset tools are found automatically.
+    pub backup_tools: BTreeMap<String, String>,
 }
 
 pub const DEFAULT_MASK_PATTERNS: &[&str] =
@@ -341,6 +344,7 @@ impl Default for Settings {
             ai_endpoint: "http://localhost:11434/v1".into(),
             check_updates_on_launch: true,
             auto_install_updates: false,
+            backup_tools: BTreeMap::new(),
         }
     }
 }
@@ -377,6 +381,16 @@ impl Settings {
         self.history_max_days = self.history_max_days.min(3650);
         self.ai_model = clean_text(&self.ai_model, 100);
         self.ai_endpoint = clean_text(&self.ai_endpoint, 500);
+        // Known tools only, with absolute paths; anything else is dropped.
+        self.backup_tools = std::mem::take(&mut self.backup_tools)
+            .into_iter()
+            .filter(|(tool, path)| {
+                dq_core::backup::Tool::from_id(tool).is_some()
+                    && path.len() <= 4096
+                    && !path.chars().any(char::is_control)
+                    && std::path::Path::new(path).is_absolute()
+            })
+            .collect();
         self
     }
 }
@@ -384,6 +398,16 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_tool_paths_are_checked() {
+        let s: Settings = serde_json::from_str(
+            r#"{"backup_tools":{"pg_dump":"/opt/pg/bin/pg_dump","psql":"relative/psql","rm":"/bin/rm"}}"#,
+        )
+        .unwrap();
+        let s = s.normalized();
+        assert_eq!(s.backup_tools.into_iter().collect::<Vec<_>>(), [("pg_dump".into(), "/opt/pg/bin/pg_dump".into())]);
+    }
 
     #[test]
     fn older_local_model_setting_loads_as_custom() {

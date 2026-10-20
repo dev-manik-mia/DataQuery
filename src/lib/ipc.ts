@@ -10,6 +10,9 @@ import type { AiDisclosure } from '@/bindings/AiDisclosure';
 import type { AiProvider } from '@/bindings/AiProvider';
 import type { AiRequest } from '@/bindings/AiRequest';
 import type { AppInfo } from '@/bindings/AppInfo';
+import type { BackupOptions } from '@/bindings/BackupOptions';
+import type { BackupPlan } from '@/bindings/BackupPlan';
+import type { BackupReport } from '@/bindings/BackupReport';
 import type { ApplyReport } from '@/bindings/ApplyReport';
 import type { Cell } from '@/bindings/Cell';
 import type { ColumnMapping } from '@/bindings/ColumnMapping';
@@ -50,6 +53,7 @@ import type { ObjectSize } from '@/bindings/ObjectSize';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import type { ProviderInfo } from '@/bindings/ProviderInfo';
 import type { QueryAnalysis } from '@/bindings/QueryAnalysis';
+import type { RestoreOptions } from '@/bindings/RestoreOptions';
 import type { RowChange } from '@/bindings/RowChange';
 import type { RowCount } from '@/bindings/RowCount';
 import type { RowFilter } from '@/bindings/RowFilter';
@@ -77,6 +81,7 @@ import type { TablePage } from '@/bindings/TablePage';
 import type { TablePageRequest } from '@/bindings/TablePageRequest';
 import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
+import type { ToolStatus } from '@/bindings/ToolStatus';
 import type { TxAction } from '@/bindings/TxAction';
 import type { TxStatus } from '@/bindings/TxStatus';
 import type { ValuePage } from '@/bindings/ValuePage';
@@ -232,6 +237,14 @@ export const api = {
     confirmation: Confirmation | null,
   ) => call<Guarded<ImportReport>>('import_data', { sessionId, object: objectRef(object), source, mapping, options, jobId, confirmation }),
   cancelTransfer: (jobId: string) => call<boolean>('cancel_transfer', { jobId }),
+
+  // backup / restore (cancelled with cancelTransfer)
+  backupTools: () => call<ToolStatus[]>('backup_tools'),
+  backupPlan: ({ sessionId }: Sid) => call<BackupPlan>('backup_plan', { sessionId }),
+  backupDatabase: ({ sessionId }: Sid, options: BackupOptions, path: string, jobId: string) =>
+    call<BackupReport>('backup_database', { sessionId, options, path, jobId }),
+  restoreDatabase: ({ sessionId }: Sid, options: RestoreOptions, path: string, jobId: string, confirmation: Confirmation | null) =>
+    call<Guarded<BackupReport>>('restore_database', { sessionId, options, path, jobId, confirmation }),
 
   // history, scripts, snippets
   listHistory: (query: HistoryQuery) => call<HistoryPage>('list_history', { query }),

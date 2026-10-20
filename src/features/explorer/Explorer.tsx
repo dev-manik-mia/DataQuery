@@ -7,7 +7,9 @@ import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
 import { CreateTableDialog, StructureEditDialog, type StructureEdit } from '@/features/schema/forms';
+import { openBackup } from '@/features/transfer/backup';
 import { Icon, IconButton, Input, Menu, Skeleton, useContextMenu, type MenuEntry } from '@/components/ui';
+import { t } from '@/i18n';
 import { copyText } from '@/lib/clipboard';
 import { formatCount } from '@/lib/format';
 import { api } from '@/lib/ipc';
@@ -148,6 +150,13 @@ export function Explorer({ width }: { width: number }) {
               { label: 'ER diagram', onSelect: () => openContainerTab('diagram', node.database, schema) },
               { label: 'Framework migrations', onSelect: () => openContainerTab('migrations', node.database, schema) },
               ...(caps?.schema_diff ? [{ label: 'Compare with… (schema diff)', onSelect: () => navigate({ name: 'diff' }) }] : []),
+            ]
+          : []),
+        ...(caps?.backup
+          ? [
+              { type: 'separator' as const },
+              { label: t('action.backup'), onSelect: () => openBackup('backup', node.database, schema) },
+              ...(session?.server.read_only ? [] : [{ label: t('action.restore'), danger: true, onSelect: () => openBackup('restore', node.database) }]),
             ]
           : []),
       ];

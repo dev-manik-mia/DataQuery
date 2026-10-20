@@ -1,5 +1,6 @@
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 
+import { openBackup } from '@/features/transfer/backup';
 import { t } from '@/i18n';
 import { uid } from '@/lib/id';
 import { useSettings } from '@/stores/settings';
@@ -110,6 +111,14 @@ export function appCommands(): AppCommand[] {
     { id: 'nav.schemaDiff', title: t('nav.schemaDiff'), group: 'Navigate', available: true, run: () => ui.navigate({ name: 'diff' }) },
     { id: 'nav.monitor', title: t('nav.monitoring'), group: 'Navigate', available: Boolean(caps?.monitoring), run: () => (ui.navigate({ name: 'workspace' }), ws.openMonitorTab()) },
     { id: 'nav.workspace', title: `Back to ${session?.connection.name ?? 'workspace'}`, group: 'Navigate', available: Boolean(session) && !inWorkspace, run: () => ui.navigate({ name: 'workspace' }) },
+    { id: 'db.backup', title: `${t('action.backup')} (database)`, group: 'Database', available: inWorkspace && Boolean(caps?.backup), run: () => openBackup('backup', session!.server.database) },
+    {
+      id: 'db.restore',
+      title: `${t('action.restore')} (database)`,
+      group: 'Database',
+      available: inWorkspace && Boolean(caps?.backup) && !session?.server.read_only,
+      run: () => openBackup('restore', session!.server.database),
+    },
     { id: 'conn.reconnect', title: t('action.reconnect'), group: 'Connection', available: Boolean(session), run: () => void ws.reconnect() },
     { id: 'conn.disconnect', title: t('action.disconnect'), group: 'Connection', available: Boolean(session), run: () => void ws.disconnect().then(() => ui.navigate({ name: 'home' })) },
     ...(['general', 'editor', 'keyboard', 'results', 'history', 'security', 'ai', 'engines', 'about'] as const).map((section) => ({

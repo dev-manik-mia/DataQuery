@@ -136,7 +136,18 @@ pub fn is_complete(cell: &Cell) -> bool {
 // Progress and cancellation
 // ---------------------------------------------------------------------------
 
-type ProgressFn = dyn Fn(u64, u64) + Send + Sync;
+/// One progress report. Row transfers fill `rows` and `bytes`; backups also
+/// say how far through a known total they are and what the tool is doing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Progress<'a> {
+    /// Rows, or objects (tables, collections) for backups.
+    pub rows: u64,
+    pub bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub detail: Option<&'a str>,
+}
+
+type ProgressFn = dyn Fn(&Progress<'_>) + Send + Sync;
 
 /// Shared by a running transfer and the UI: cancel flag and progress callback.
 #[derive(Clone)]
@@ -147,6 +158,11 @@ pub struct TransferControl {
 
 impl TransferControl {
     pub fn new(cancelled: Arc<AtomicBool>, progress: impl Fn(u64, u64) + Send + Sync + 'static) -> Self {
+        Self::with_progress(cancelled, move |p| progress(p.rows, p.bytes))
+    }
+
+    /// Like [`TransferControl::new`], with the full report of [`TransferControl::report`].
+    pub fn with_progress(cancelled: Arc<AtomicBool>, progress: impl Fn(&Progress<'_>) + Send + Sync + 'static) -> Self {
         Self { cancelled, progress: Arc::new(progress) }
     }
 
@@ -154,8 +170,12 @@ impl TransferControl {
         Self::new(Arc::new(AtomicBool::new(false)), |_, _| {})
     }
 
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+
     pub fn check(&self) -> DbResult<()> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.is_cancelled() {
             return Err(DbError::new(ErrorKind::Cancelled, "The transfer was cancelled."));
         }
         Ok(())
@@ -163,7 +183,11 @@ impl TransferControl {
 
     /// Reports rows done and bytes written (export) or read (import).
     pub fn progress(&self, rows: u64, bytes: u64) {
-        (self.progress)(rows, bytes);
+        (self.progress)(&Progress { rows, bytes, ..Progress::default() });
+    }
+
+    pub fn report(&self, progress: &Progress<'_>) {
+        (self.progress)(progress);
     }
 }
 

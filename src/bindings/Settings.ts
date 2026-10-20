@@ -57,4 +57,9 @@ check_updates_on_launch: boolean,
 /**
  * Download and install updates in the background; they apply on the next restart.
  */
-auto_install_updates: boolean, };
+auto_install_updates: boolean, 
+/**
+ * Backup tool → program path chosen by the user (e.g. `pg_dump` →
+ * `/opt/homebrew/opt/libpq/bin/pg_dump`); unset tools are found automatically.
+ */
+backup_tools: { [key in string]?: string }, };

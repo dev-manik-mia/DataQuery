@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 
 import { Button, Dialog, TextField } from '@/components/ui';
 import { t } from '@/i18n';
+import { BackupDialog } from '@/features/transfer/BackupDialog';
+import { useBackupRequest } from '@/features/transfer/backup';
 import { ExportDialog } from '@/features/transfer/ExportDialog';
 import { useExportRequest } from '@/features/transfer/exportData';
 import { useUi } from '@/stores/ui';
@@ -95,9 +97,11 @@ function QuestionDialog() {
 
 export function GlobalDialogs() {
   const exporting = useExportRequest((s) => s.request);
+  const backingUp = useBackupRequest((s) => s.request);
   return (
     <>
       {exporting && <ExportDialog key={exporting.baseName + exporting.format} />}
+      {backingUp && <BackupDialog key={`${backingUp.mode}:${backingUp.database}:${backingUp.schema ?? ''}`} />}
       <ConfirmationDialog />
       <QuestionDialog />
     </>

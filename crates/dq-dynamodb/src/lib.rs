@@ -41,6 +41,7 @@ impl DynamodbAdapter {
         monitoring: false,
         transactions: true,
         schema_diff: false,
+        backup: false,
     };
 }
 

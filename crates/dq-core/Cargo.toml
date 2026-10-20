@@ -16,10 +16,15 @@ rust_xlsxwriter = { version = "0.99", default-features = false, features = ["con
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 ts-rs.workspace = true
 url.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Ends a backup tool's whole process group on cancel.
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [lints]
 workspace = true
