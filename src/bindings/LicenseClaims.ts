@@ -5,11 +5,11 @@
  */
 export type LicenseClaims = { v: number, plan: string, name: string, email: string, 
 /**
- * Lemon Squeezy order number, or an id for hand-issued tokens.
+ * Paddle transaction id, or an id for hand-issued tokens.
  */
 order: string, 
 /**
- * Lemon Squeezy activation instance, needed to free the seat again.
+ * Seat taken at activation, needed to free it again.
  */
 instance: string | null, 
 /**
