@@ -10,6 +10,7 @@ import { flavorOf } from '@/lib/engines';
 import { formatCount, formatDuration, formatRelative, formatTimestamp, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
+import { useFolderSync } from '@/stores/folderSync';
 import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
@@ -94,7 +95,9 @@ export function HistoryPage() {
   }, [load]);
 
   const loadScripts = useCallback(() => api.listScripts().then(setScripts).catch(toastError), [toastError]);
-  useEffect(() => void loadScripts(), [loadScripts]);
+  // Also reload when the scripts folder brought changes from disk.
+  const scriptsVersion = useFolderSync((s) => s.scriptsVersion);
+  useEffect(() => void loadScripts(), [loadScripts, scriptsVersion]);
 
   const filteredScripts = useMemo(() => {
     const q = search.trim().toLowerCase();

@@ -57,4 +57,12 @@ check_updates_on_launch: boolean,
 /**
  * Download and install updates in the background; they apply on the next restart.
  */
-auto_install_updates: boolean, };
+auto_install_updates: boolean, 
+/**
+ * Folder that holds the encrypted connection sync file; empty when sync is off.
+ */
+sync_folder: string, 
+/**
+ * Folder where saved scripts are mirrored as `.sql` files; empty when off.
+ */
+scripts_folder: string, };

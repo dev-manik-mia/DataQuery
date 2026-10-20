@@ -167,6 +167,8 @@ interface WorkspaceState {
   cycleTab: (step: 1 | -1) => void;
   updateSql: (id: string, sql: string) => void;
   markSaved: (id: string, patch: { title?: string; scriptId?: string | null; filePath?: string | null }) => void;
+  /** Replaces a query tab's text or script link, e.g. after its script changed on disk. */
+  patchQueryTab: (id: string, patch: Partial<Pick<QueryTab, 'sql' | 'savedSql' | 'scriptId' | 'title'>>) => void;
   setTableView: (id: string, view: TableView) => void;
   run: (tabId: string, sql: string, base: number, params?: (string | null)[] | null) => Promise<void>;
   fetchMore: (tabId: string) => Promise<void>;
@@ -475,6 +477,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     markSaved: (id, patch) =>
       patchTab(id, (t) => (t.kind === 'query' ? { ...t, savedSql: t.sql, title: patch.title ?? t.title, scriptId: patch.scriptId === undefined ? t.scriptId : patch.scriptId, filePath: patch.filePath === undefined ? t.filePath : patch.filePath } : t)),
 
+    patchQueryTab: (id, patch) => patchTab(id, (t) => (t.kind === 'query' ? { ...t, ...patch } : t)),
+
     setTableView: (id, view) => patchTab(id, (t) => (t.kind === 'table' ? { ...t, view } : t)),
 
     run: async (tabId, sql, base, params = null) => {
@@ -635,13 +639,17 @@ function scheduleAutosave(tabId: string) {
       const tab = useWorkspace.getState().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
       if (!tab?.scriptId || tab.sql === tab.savedSql) return;
       const sql = tab.sql;
+      // The base makes the backend refuse to overwrite a script that changed elsewhere (its file in the scripts folder).
       api
-        .updateScriptSql(tab.scriptId, sql)
+        .updateScriptSql(tab.scriptId, sql, tab.savedSql)
         .then(() => {
           const now = useWorkspace.getState().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
           if (now?.sql === sql) useWorkspace.getState().markSaved(tabId, {});
         })
-        .catch((e) => console.warn('autosave failed', e));
+        .catch((e) => {
+          if (toAppError(e).info.code === 'script_conflict') void import('@/features/history/scriptConflicts').then((m) => m.resolveScriptConflict(tabId));
+          else console.warn('autosave failed', e);
+        });
     }, 1200),
   );
 }

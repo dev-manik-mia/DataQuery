@@ -32,6 +32,8 @@ export const DEFAULT_SETTINGS: Settings = {
   ai_endpoint: 'http://localhost:11434/v1',
   check_updates_on_launch: true,
     auto_install_updates: false,
+  sync_folder: '',
+  scripts_folder: '',
 };
 
 interface SettingsState {

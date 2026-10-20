@@ -5,6 +5,7 @@ mod ai_client;
 mod cloud_auth;
 mod commands;
 mod connector;
+mod folder_sync;
 mod registry;
 mod safety;
 mod state;
@@ -36,6 +37,8 @@ pub fn run() {
             let store = Store::open(&data_dir.join("dataquery.db")).map_err(|e| e.message)?;
             let known_hosts = dq_ssh::KnownHosts::new(data_dir.join("known_hosts"));
             app.manage(AppState::new(store, Arc::new(KeyringSecrets), known_hosts));
+            app.manage(folder_sync::FolderSync::default());
+            folder_sync::start(app.handle());
             app.set_menu(menu(app.handle())?)?;
             spawn_idle_reaper(app.handle().clone());
             Ok(())
@@ -131,6 +134,13 @@ pub fn run() {
             commands::history::list_snippets,
             commands::history::save_snippet,
             commands::history::delete_snippet,
+            commands::sync::sync_status,
+            commands::sync::sync_configure,
+            commands::sync::sync_disable,
+            commands::sync::sync_now,
+            commands::sync::scripts_folder_status,
+            commands::sync::set_scripts_folder,
+            commands::sync::scripts_folder_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataQuery");

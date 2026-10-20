@@ -25,6 +25,7 @@ import { setLanguage, t } from '@/i18n';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
 import { useConnections, useEngine } from '@/stores/connections';
 import { useCompletion } from '@/stores/completion';
+import { startFolderSync } from '@/stores/folderSync';
 import { useLayout } from '@/stores/layout';
 import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
@@ -50,8 +51,10 @@ export function App() {
     void useLayout.getState().load();
     void useCompletion.getState().loadSnippets();
     const unlisten = listen<{ session_id: string; reason: string }>('session-closed', (e) => noteSessionClosed(e.payload.session_id, e.payload.reason));
+    const stopFolderSync = startFolderSync();
     return () => {
       stopUpdateChecks?.();
+      stopFolderSync();
       void unlisten.then((fn) => fn());
     };
   }, []);
