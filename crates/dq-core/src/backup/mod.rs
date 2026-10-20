@@ -48,7 +48,7 @@ impl BackupFamily {
     pub fn of(engine: Engine) -> Option<Self> {
         Some(match engine {
             Engine::Postgres => Self::Postgres,
-            Engine::Mysql | Engine::Mariadb => Self::Mysql,
+            Engine::Mysql | Engine::Mariadb | Engine::Singlestore => Self::Mysql,
             Engine::Mongodb => Self::Mongodb,
             Engine::Sqlite => Self::Sqlite,
             _ => return None,
@@ -237,12 +237,14 @@ pub struct ServerVersion {
     pub major: u32,
     pub minor: u32,
     pub mariadb: bool,
+    /// `SingleStore`, whose version numbers are its own, not `MySQL`'s.
+    pub singlestore: bool,
 }
 
 impl ServerVersion {
     pub fn parse(text: &str) -> Option<Self> {
         let (major, minor) = tools::version_numbers(text)?;
-        Some(Self { major, minor, mariadb: text.contains("MariaDB") })
+        Some(Self { major, minor, mariadb: text.contains("MariaDB"), singlestore: text.starts_with("SingleStore") })
     }
 }
 
@@ -251,6 +253,10 @@ pub fn version_warning(tool: Tool, version: &ToolVersion, server: Option<ServerV
     let server = server?;
     let name = tool.id();
     match tool {
+        Tool::Mysqldump | Tool::Mysql if server.singlestore => (version.mariadb || version.major >= 9).then(|| format!(
+            "SingleStore logs clients in with mysql_native_password, which {name} {} lacks. If it fails, install a MySQL 8 client (macOS: brew install mysql-client@8.4) or choose it in Settings → Engines.",
+            version.text
+        )),
         Tool::PgDump if version.major < server.major => Some(format!(
             "{name} {} is older than the server (PostgreSQL {}): pg_dump refuses to back up newer servers. Install the PostgreSQL {} client tools or choose a newer {name} in Settings → Engines.",
             version.text, server.major, server.major
@@ -567,6 +573,9 @@ mod tests {
         assert!(version_warning(Tool::Mysqldump, &mysql_tool, maria).unwrap().contains("MariaDB"));
         let maria_tool = tool_version("mariadb-dump from 11.4.2-MariaDB, client 10.19 for osx10.19 (arm64)");
         assert!(version_warning(Tool::Mysqldump, &maria_tool, maria).is_none());
+        let s2 = ServerVersion::parse("SingleStore 9.1.1");
+        assert!(version_warning(Tool::Mysqldump, &mysql_tool, s2).unwrap().contains("mysql-client@8.4"));
+        assert!(version_warning(Tool::Mysqldump, &tool_version("mysqldump  Ver 8.4.11 for macos"), s2).is_none());
         let mysql84 = ServerVersion::parse("MySQL 8.4.3");
         assert!(version_warning(Tool::Mysqldump, &mysql_tool, mysql84).unwrap().contains("mysql-client@8.4"));
         assert!(version_warning(Tool::Mysqldump, &tool_version("mysqldump  Ver 8.4.11 for macos"), mysql84).is_none());

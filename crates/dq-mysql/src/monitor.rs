@@ -75,6 +75,11 @@ async fn has_process_privilege(conn: &mut Conn) -> bool {
     })
 }
 
+/// SingleStore has no `InnoDB` and no view of row locks.
+fn no_lock_views() -> DbError {
+    DbError::unsupported("SingleStore does not expose row locks or lock waits.")
+}
+
 /// (waiting thread, blocking thread) pairs from `InnoDB`.
 async fn lock_waits(conn: &mut Conn, flavor: Flavor) -> DbResult<Vec<(i64, i64)>> {
     let sql = match flavor {
@@ -88,6 +93,7 @@ async fn lock_waits(conn: &mut Conn, flavor: Flavor) -> DbResult<Vec<(i64, i64)>
              JOIN information_schema.INNODB_TRX r ON r.trx_id = w.requesting_trx_id \
              JOIN information_schema.INNODB_TRX b ON b.trx_id = w.blocking_trx_id"
         }
+        Flavor::Singlestore => return Err(no_lock_views()),
     };
     let rows: Vec<Row> = conn.query(sql).await.map_err(my)?;
     Ok(rows.iter().filter_map(|r| Some((number(r, 0)?, number(r, 1)?))).collect())
@@ -107,6 +113,7 @@ async fn locks(conn: &mut Conn, flavor: Flavor) -> DbResult<Vec<LockInfo>> {
                     l.lock_table \
              FROM information_schema.INNODB_LOCKS l JOIN information_schema.INNODB_TRX x ON x.trx_id = l.lock_trx_id LIMIT 500"
         }
+        Flavor::Singlestore => return Err(no_lock_views()),
     };
     let rows: Vec<Row> = conn.query(sql).await.map_err(my)?;
     Ok(rows
@@ -173,12 +180,16 @@ impl Monitor for MySession {
             unavailable.push(format!("Locks: {}", e.message));
             Vec::new()
         });
-        let replication = match replication(&mut conn).await {
-            Ok(r) => Some(r),
-            Err(e) => {
-                unavailable.push(format!("Replication: {}", e.message));
-                None
-            }
+        // SingleStore replicates partitions inside the cluster; servers have no primary / replica role.
+        let replication = match flavor {
+            Flavor::Singlestore => None,
+            Flavor::Mysql | Flavor::Mariadb => match replication(&mut conn).await {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    unavailable.push(format!("Replication: {}", e.message));
+                    None
+                }
+            },
         };
         let long_ms = i64::from(long_running_secs) * 1000;
         Ok(MonitorSnapshot {
@@ -202,7 +213,7 @@ impl Monitor for MySession {
         // `SHOW … LIKE ?` cannot be prepared; MySQL 8 moved the table to performance_schema.
         let table = match self.flavor() {
             Flavor::Mysql => "performance_schema.global_variables",
-            Flavor::Mariadb => "information_schema.GLOBAL_VARIABLES",
+            Flavor::Mariadb | Flavor::Singlestore => "information_schema.GLOBAL_VARIABLES",
         };
         let sql = format!(
             "SELECT LOWER(VARIABLE_NAME), VARIABLE_VALUE FROM {table} WHERE LOWER(VARIABLE_NAME) LIKE LOWER(?) ORDER BY 1"

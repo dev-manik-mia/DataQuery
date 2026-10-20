@@ -60,7 +60,9 @@ async fn current_account(conn: &mut Conn) -> DbResult<AccountRef> {
 /// (member, role) pairs.
 async fn memberships(conn: &mut Conn, flavor: Flavor) -> DbResult<Vec<(AccountRef, AccountRef)>> {
     let sql = match flavor {
-        Flavor::Mysql => "SELECT TO_USER, TO_HOST, FROM_USER, FROM_HOST FROM mysql.role_edges ORDER BY 3, 4",
+        Flavor::Mysql | Flavor::Singlestore => {
+            "SELECT TO_USER, TO_HOST, FROM_USER, FROM_HOST FROM mysql.role_edges ORDER BY 3, 4"
+        }
         Flavor::Mariadb => "SELECT User, Host, Role, '' FROM mysql.roles_mapping ORDER BY 3",
     };
     let rows: Vec<Row> = conn.query(sql).await.map_err(my)?;
@@ -77,6 +79,8 @@ impl MySession {
     fn has_roles(&self) -> bool {
         match self.flavor() {
             Flavor::Mariadb => true,
+            // Never asked: SingleStore sessions offer no `UserAdmin`.
+            Flavor::Singlestore => false,
             // `info.version` reads like `MySQL 8.4.3`.
             Flavor::Mysql => {
                 let number =
@@ -98,7 +102,7 @@ impl UserAdmin for MySession {
         let mut conn = self.catalog_conn().await?;
         let current = current_account(&mut conn).await?;
         let sql = match flavor {
-            Flavor::Mysql => {
+            Flavor::Mysql | Flavor::Singlestore => {
                 "SELECT User, Host, account_locked, password_expired, plugin, max_questions, max_updates, \
                         max_connections, max_user_connections, \
                         account_locked = 'Y' AND password_expired = 'Y' AND authentication_string = '' \

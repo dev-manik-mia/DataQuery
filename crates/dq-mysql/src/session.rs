@@ -1,4 +1,4 @@
-//! An open MySQL / MariaDB session.
+//! An open MySQL / MariaDB / SingleStore session.
 //!
 //! User statements run on a dedicated query connection that keeps at most one
 //! unfinished result open. Catalog reads, table pages and exports use a small
@@ -6,16 +6,16 @@
 //! runs. Grid edits and imports use a second pool of write connections.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
 use dq_core::schema::{Dependencies, SchemaModel, TableStructure};
-use dq_core::sql::{Dialect, MysqlDialect, SqlFlavor, command_tag, split_statements};
+use dq_core::sql::{Dialect, MysqlDialect, SqlFlavor, StatementInfo, command_tag, split_statements};
 use dq_core::value::CellLimits;
-use dq_core::{DbError, DbResult};
+use dq_core::{DbError, DbResult, ErrorKind};
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinaryProtocol, Column, Conn, Pool, QueryResult, Row, TextProtocol, TxOpts, Value};
 use tokio::sync::Mutex;
@@ -73,6 +73,11 @@ fn bind(values: &[Option<String>]) -> mysql_async::Params {
     mysql_async::Params::Positional(
         values.iter().map(|p| p.as_ref().map_or(Value::NULL, |v| Value::Bytes(v.as_bytes().to_vec()))).collect(),
     )
+}
+
+fn read_only_error() -> DbError {
+    DbError::new(ErrorKind::Permission, "This connection is read-only.")
+        .with_action(Some("Edit the connection and turn off Read-only to change data."))
 }
 
 impl MySession {
@@ -147,8 +152,37 @@ impl MySession {
 
     async fn set_timeout(&self, q: &mut QueryConnection, secs: u32) -> DbResult<()> {
         if q.timeout_secs != Some(secs) {
-            q.conn.query_drop(self.flavor.timeout_statement(secs)).await.map_err(|e| self.err(&e))?;
+            if let Some(statement) = self.flavor.timeout_statement(secs) {
+                q.conn.query_drop(statement).await.map_err(|e| self.err(&e))?;
+            }
             q.timeout_secs = Some(secs);
+        }
+        Ok(())
+    }
+
+    /// Runs `work`, interrupting it with `KILL QUERY` after `secs` (`0`: never)
+    /// on servers without a statement time limit of their own.
+    async fn client_timeout<T>(&self, secs: u32, work: impl Future<Output = DbResult<T>>) -> DbResult<T> {
+        if secs == 0 || self.flavor.timeout_statement(secs).is_some() {
+            return work.await;
+        }
+        tokio::pin!(work);
+        tokio::select! {
+            result = &mut work => result,
+            () = tokio::time::sleep(Duration::from_secs(u64::from(secs))) => {
+                self.kill_query().await?;
+                // The statement ends with "interrupted"; report the timeout instead.
+                let _ = work.await;
+                Err(DbError::new(ErrorKind::Timeout, format!("The statement ran longer than {secs} s and was stopped."))
+                    .with_action(Some("Narrow the query or raise the statement timeout in Settings.")))
+            }
+        }
+    }
+
+    /// Refuses writing statements where the server ignores read-only sessions.
+    fn check_read_only(&self, statements: &[StatementInfo], read_only: bool) -> DbResult<()> {
+        if read_only && !self.flavor.enforces_read_only() && statements.iter().any(|s| s.writes) {
+            return Err(read_only_error());
         }
         Ok(())
     }
@@ -266,6 +300,7 @@ impl MySession {
         limits: CellLimits,
         on_batch: &mut BatchFn<'_>,
     ) -> DbResult<u64> {
+        self.check_read_only(&split_statements(sql, SqlFlavor::Mysql), true)?;
         let mut conn = self.catalog().await?;
         let (columns, _) = self.start(&mut conn, sql, params).await?;
         let columns = columns.unwrap_or_default();
@@ -298,29 +333,35 @@ impl Session for MySession {
 
     async fn list_children(&self, parent: Option<&ObjectRef>) -> DbResult<Vec<Node>> {
         match parent {
-            None => catalog::databases(&mut self.catalog().await?, &self.info.database).await,
-            Some(p) if p.kind == NodeKind::Database => catalog::relations(&mut self.catalog().await?, &p.name).await,
-            Some(p) if p.kind == NodeKind::Table => catalog::table_children(&mut self.catalog().await?, p).await,
+            None => catalog::databases(&mut self.catalog().await?, self.flavor, &self.info.database).await,
+            Some(p) if p.kind == NodeKind::Database => {
+                catalog::relations(&mut self.catalog().await?, self.flavor, &p.name).await
+            }
+            Some(p) if p.kind == NodeKind::Table => {
+                catalog::table_children(&mut self.catalog().await?, self.flavor, p).await
+            }
             Some(p) if p.kind == NodeKind::Group => catalog::group_children(&mut self.catalog().await?, p).await,
             Some(_) => Ok(Vec::new()),
         }
     }
 
     async fn search(&self, query: &str, limit: u32) -> DbResult<Vec<Node>> {
-        catalog::search(&mut self.catalog().await?, query, limit).await
+        catalog::search(&mut self.catalog().await?, self.flavor, query, limit).await
     }
 
     async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult> {
         // The driver always enables multi-statement mode; never let one call run two.
-        if split_statements(sql, SqlFlavor::Mysql).len() > 1 {
+        let statements = split_statements(sql, SqlFlavor::Mysql);
+        if statements.len() > 1 {
             return Err(DbError::invalid("Run one statement at a time."));
         }
+        self.check_read_only(&statements, self.params.config.read_only)?;
         let options = options.clamped();
         let mut q = self.query.lock().await;
         self.close_cursor(&mut q).await;
         self.set_timeout(&mut q, options.timeout_secs).await?;
         self.running.store(true, Ordering::SeqCst);
-        let result = self.run(&mut q, sql, params, options).await;
+        let result = self.client_timeout(options.timeout_secs, self.run(&mut q, sql, params, options)).await;
         self.running.store(false, Ordering::SeqCst);
         result
     }
@@ -351,7 +392,7 @@ impl Session for MySession {
     }
 
     async fn structure(&self, object: &ObjectRef) -> DbResult<TableStructure> {
-        catalog::structure(&mut self.catalog().await?, object, self.flavor == Flavor::Mariadb).await
+        catalog::structure(&mut self.catalog().await?, self.flavor, object).await
     }
 
     async fn ddl(&self, object: &ObjectRef) -> DbResult<String> {
@@ -359,13 +400,13 @@ impl Session for MySession {
     }
 
     async fn dependencies(&self, object: &ObjectRef) -> DbResult<Dependencies> {
-        catalog::dependencies(&mut self.catalog().await?, object).await
+        catalog::dependencies(&mut self.catalog().await?, self.flavor, object).await
     }
 
     /// MySQL has no schemas: the database is the container, so `schema` is ignored.
     async fn schema_model(&self, database: &str, _schema: Option<&str>) -> DbResult<SchemaModel> {
         let database = if database.is_empty() { self.info.database.as_str() } else { database };
-        catalog::schema_model(&mut self.catalog().await?, database).await
+        catalog::schema_model(&mut self.catalog().await?, self.flavor, database).await
     }
 
     /// Generated SQL is fully qualified, so one pool serves every database.
@@ -405,6 +446,9 @@ impl Session for MySession {
 
     /// Generated SQL is fully qualified, so one pool serves every database.
     async fn run_in_transaction(&self, _database: &str, statements: &mut StatementIter<'_>) -> DbResult<Vec<u64>> {
+        if self.params.config.read_only && !self.flavor.enforces_read_only() {
+            return Err(read_only_error());
+        }
         let mut conn = self.write.get_conn().await.map_err(|e| self.err(&e))?;
         let result = self.transact(&mut conn, statements).await;
         if result.is_err() {
@@ -418,8 +462,9 @@ impl Session for MySession {
         Some(self)
     }
 
+    /// SingleStore keeps accounts, roles and groups outside the `mysql` schema, with its own grammar.
     fn users(&self) -> Option<&dyn dq_core::users::UserAdmin> {
-        Some(self)
+        (self.flavor != Flavor::Singlestore).then_some(self as _)
     }
 
     async fn close(&self) {

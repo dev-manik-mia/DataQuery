@@ -210,6 +210,8 @@ fn rank(tool: Tool, v: &ToolVersion, engine: Engine, server: Option<ServerVersio
     let mariadb = server.map_or(engine == Engine::Mariadb, |s| s.mariadb);
     let Some(s) = server else { return (v.mariadb == mariadb, true, number) };
     let fits = match tool {
+        // SingleStore uses mysql_native_password too and reads dumps of any older MySQL client: the newest of those.
+        Tool::Mysqldump | Tool::Mysql if s.singlestore => return (!v.mariadb, v.major < 9, number),
         // MySQL 9 clients dropped mysql_native_password, which MariaDB servers use.
         Tool::Mysqldump | Tool::Mysql if v.mariadb != s.mariadb => !s.mariadb || v.major < 9,
         Tool::Mysqldump | Tool::Mysql => (v.major, v.minor) >= (s.major, s.minor),
@@ -336,6 +338,7 @@ mod tests {
             my84,
             "MySQL 9 cannot log in"
         );
+        assert_eq!(best(Tool::Mysqldump, Engine::Singlestore, "SingleStore 9.1.1", &[my92, my57, my84, maria]), my84);
         let pg = |n: &str| format!("pg_dump (PostgreSQL) {n}");
         let (pg14, pg17, pg18) = (pg("14.9"), pg("17.4"), pg("18.4"));
         let all = [pg14.as_str(), pg17.as_str(), pg18.as_str()];

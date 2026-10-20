@@ -149,7 +149,7 @@ pub trait Session: Send + Sync {
 
     /// Plans one statement. `analyze` runs it; callers only allow that for
     /// read-only statements. The default runs the engine's `EXPLAIN` on the
-    /// query connection.
+    /// query connection, then its plan statement where the plan comes separately.
     async fn explain(
         &self,
         sql: &str,
@@ -160,7 +160,10 @@ pub trait Session: Send + Sync {
         let dialect = ExplainDialect::new(self.dialect().flavor(), &self.info().version)
             .ok_or_else(|| DbError::unsupported("Query plans are not available for this engine."))?;
         let options = ExecOptions { row_limit: 10_000, timeout_secs };
-        let result = self.execute(&dialect.statement(sql, analyze), params, options).await?;
+        let mut result = self.execute(&dialect.statement(sql, analyze), params, options).await?;
+        if let Some(plan) = dialect.plan_statement(analyze) {
+            result = self.execute(plan, &[], options).await?;
+        }
         let raw = result
             .rows
             .iter()
