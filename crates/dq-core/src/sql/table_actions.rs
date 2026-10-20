@@ -75,6 +75,7 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
         }
         SqlFlavor::Sqlite => Some("SQLite has no TRUNCATE: every row is deleted with DELETE."),
         SqlFlavor::Cql => Some("Every node of the cluster must be up."),
+        SqlFlavor::Bigquery => Some("TRUNCATE TABLE keeps the schema, partitioning and clustering."),
         SqlFlavor::Clickhouse | SqlFlavor::Snowflake | SqlFlavor::Duckdb | SqlFlavor::Oracle | SqlFlavor::Postgres => {
             None
         }
@@ -105,6 +106,9 @@ pub fn table_actions(flavor: SqlFlavor, engine: Option<Engine>) -> TableActions 
         SqlFlavor::Snowflake => {
             ActionSupport::yes(Some("With rows: a zero-copy CLONE. Structure only: CREATE TABLE … LIKE."))
         }
+        SqlFlavor::Bigquery => ActionSupport::yes(Some(
+            "With rows: CREATE TABLE … COPY (partitioning, clustering and options too). Structure only: CREATE TABLE … LIKE.",
+        )),
         SqlFlavor::Sqlite | SqlFlavor::Duckdb => ActionSupport::yes(Some(
             "Copies the table definition (columns, keys, constraints, defaults). Indexes and triggers are not copied.",
         )),
@@ -221,11 +225,11 @@ pub(super) fn truncate(
 pub(super) fn empty(d: &dyn Dialect, table: &ObjectRef) -> DbResult<Vec<String>> {
     only_tables(table)?;
     let name = d.quoted_name(table);
-    // ClickHouse's lightweight DELETE needs a WHERE clause.
-    Ok(vec![if d.flavor() == SqlFlavor::Clickhouse {
-        format!("DELETE FROM {name} WHERE 1")
-    } else {
-        format!("DELETE FROM {name}")
+    // ClickHouse's lightweight DELETE and BigQuery's DELETE need a WHERE clause.
+    Ok(vec![match d.flavor() {
+        SqlFlavor::Clickhouse => format!("DELETE FROM {name} WHERE 1"),
+        SqlFlavor::Bigquery => format!("DELETE FROM {name} WHERE TRUE"),
+        _ => format!("DELETE FROM {name}"),
     }])
 }
 
@@ -320,6 +324,9 @@ pub(super) fn duplicate(
         }
         SqlFlavor::Snowflake => {
             vec![format!("CREATE TABLE {copy} {} {source}", if with_data { "CLONE" } else { "LIKE" })]
+        }
+        SqlFlavor::Bigquery => {
+            vec![format!("CREATE TABLE {copy} {} {source}", if with_data { "COPY" } else { "LIKE" })]
         }
         SqlFlavor::Sqlite | SqlFlavor::Duckdb => {
             let definition =

@@ -25,7 +25,9 @@
     "db:up:search": "docker compose -p dataquery --profile search up -d elasticsearch neo4j",
     "test:integration:wide": "DATAQUERY_TEST_CASSANDRA=localhost:59042 DATAQUERY_TEST_SCYLLA=localhost:59043 cargo test -p dq-cassandra --test cassandra",
     "test:integration:search": "DATAQUERY_TEST_ELASTICSEARCH=localhost:59200 DATAQUERY_TEST_NEO4J=localhost:57474 cargo test -p dq-elasticsearch -p dq-neo4j",
-    "db:down": "docker compose -p dataquery --profile wide --profile search down -v"
+    "db:up:bigquery": "docker compose -p dataquery --profile bigquery up -d bigquery",
+    "test:integration:bigquery": "DATAQUERY_TEST_BIGQUERY=http://localhost:59050 cargo test -p dq-bigquery --test bigquery -- --test-threads=1",
+    "db:down": "docker compose -p dataquery --profile wide --profile search --profile bigquery down -v"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",

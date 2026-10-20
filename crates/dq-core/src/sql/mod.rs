@@ -16,11 +16,11 @@ pub mod table_actions;
 pub mod users;
 
 pub use analyze::{
-    DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, command_tag, named_params, redact_literals,
-    split_statements, transaction_effect,
+    DestructiveReason, StatementInfo, StatementKind, TxEffect, analyze, bind_named, command_tag, named_params,
+    redact_literals, split_statements, transaction_effect,
 };
 pub use dialect::{
-    ClickhouseDialect, CqlDialect, CypherDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect, OracleDialect,
-    PartiqlDialect, PostgresDialect, QueryDslDialect, RedisDialect, SnowflakeDialect, SqlFlavor, SqlServerDialect,
-    SqliteDialect,
+    BigQueryDialect, ClickhouseDialect, CqlDialect, CypherDialect, Dialect, DuckdbDialect, MongoDialect, MysqlDialect,
+    OracleDialect, PartiqlDialect, PostgresDialect, QueryDslDialect, RedisDialect, SnowflakeDialect, SqlFlavor,
+    SqlServerDialect, SqliteDialect,
 };

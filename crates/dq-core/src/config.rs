@@ -338,6 +338,55 @@ impl ConnConfig {
         Ok(())
     }
 
+    /// `BigQuery`: the billing project in `database`, an optional default
+    /// `dataset` and `location`, and credentials: a service-account `key_file`
+    /// or the Google Cloud CLI ([`AuthMethod::GcpIam`]). An emulator
+    /// `endpoint` (base URL) may run without credentials.
+    fn validate_bigquery(&self) -> DbResult<()> {
+        let name_ok = |s: &str, max: usize, extra: &str| {
+            !s.is_empty() && s.len() <= max && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
+        };
+        if !name_ok(self.database.trim(), 128, "-.:_") {
+            return Err(DbError::invalid("Enter the Google Cloud project ID, e.g. my-project-123."));
+        }
+        if self.property("dataset").is_some_and(|d| !name_ok(d, 1024, "_")) {
+            return Err(DbError::invalid("A dataset name has letters, digits and underscores only."));
+        }
+        if self.property("location").is_some_and(|l| !name_ok(l, 64, "-")) {
+            return Err(DbError::invalid("Enter a BigQuery location such as US, EU or europe-west1."));
+        }
+        let endpoint = self.property("endpoint");
+        if let Some(e) = endpoint {
+            let url = Url::parse(e).ok().filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
+            if url.is_none_or(|u| !u.username().is_empty() || u.password().is_some()) {
+                return Err(DbError::invalid("The endpoint is a base URL such as http://localhost:9050."));
+            }
+        }
+        let key_file = self.property("key_file");
+        if let Some(path) = key_file {
+            validate_path(path, "The key file")?;
+        }
+        match self.auth {
+            AuthMethod::GcpIam => {}
+            AuthMethod::Password if key_file.is_some() || endpoint.is_some() => {}
+            AuthMethod::Password => {
+                return Err(DbError::invalid(
+                    "Choose a service account key file, or sign in with the Google Cloud CLI.",
+                ));
+            }
+            AuthMethod::AwsIam { .. } | AuthMethod::AzureAd => {
+                return Err(DbError::invalid("BigQuery signs in with a service account key or the Google Cloud CLI."));
+            }
+        }
+        if self.ssh.is_some() {
+            return Err(DbError::invalid("BigQuery is reached over HTTPS; SSH tunnels are not used."));
+        }
+        if self.connect_timeout_secs == 0 || self.connect_timeout_secs > Self::MAX_TIMEOUT_SECS {
+            return Err(DbError::invalid("Connect timeout must be between 1 and 300 seconds."));
+        }
+        self.options.validate()
+    }
+
     fn validate_properties(&self) -> DbResult<()> {
         for (key, value) in &self.properties {
             let key_ok =
@@ -357,6 +406,9 @@ impl ConnConfig {
                 return Err(DbError::invalid("Connect timeout must be between 1 and 300 seconds."));
             }
             return self.validate_file();
+        }
+        if self.engine == Engine::Bigquery {
+            return self.validate_bigquery();
         }
         if self.engine == Engine::Dynamodb {
             self.validate_dynamodb()?;
@@ -733,6 +785,30 @@ mod tests {
         ConnConfig { username: String::new(), auth: profile, ..dynamo }.validate().unwrap();
         let mongo = ConnConfig { engine: Engine::Mongodb, host: "a:1,b:2".into(), ..ConnConfig::default() };
         mongo.validate().unwrap();
+    }
+
+    #[test]
+    fn bigquery_rules() {
+        let key = if cfg!(windows) { "C:\\keys\\sa.json" } else { "/keys/sa.json" };
+        let bq = ConnConfig {
+            engine: Engine::Bigquery,
+            host: String::new(),
+            port: 0,
+            database: "my-project-123".into(),
+            properties: [("key_file".to_owned(), key.to_owned()), ("location".to_owned(), "EU".to_owned())].into(),
+            ..ConnConfig::default()
+        };
+        bq.validate().unwrap();
+        assert!(ConnConfig { properties: BTreeMap::new(), ..bq.clone() }.validate().is_err(), "needs credentials");
+        ConnConfig { properties: BTreeMap::new(), auth: AuthMethod::GcpIam, ..bq.clone() }.validate().unwrap();
+        let emulator = [("endpoint".to_owned(), "http://localhost:59050".to_owned())].into();
+        ConnConfig { properties: emulator, ..bq.clone() }.validate().unwrap();
+        let bad_endpoint = [("endpoint".to_owned(), "ftp://x".to_owned())].into();
+        assert!(ConnConfig { properties: bad_endpoint, ..bq.clone() }.validate().is_err());
+        assert!(ConnConfig { database: "my project".into(), ..bq.clone() }.validate().is_err());
+        let mut dataset = bq.clone();
+        dataset.properties.insert("dataset".into(), "sales-2024".into());
+        assert!(dataset.validate().is_err());
     }
 
     #[test]

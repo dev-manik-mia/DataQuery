@@ -474,6 +474,9 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
     transactions: 'ClickHouse has no multi-statement transactions.',
   },
   sqlite: { monitoring: NO_SERVER },
+  bigquery: {
+    transactions: 'BigQuery transactions run inside one script (BEGIN TRANSACTION … COMMIT TRANSACTION in the editor); there is no interactive session to commit later.',
+  },
   redis: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   valkey: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
   dragonfly: { explain: NO_PLANNER, schema_diff: SCHEMALESS },
@@ -504,6 +507,7 @@ const NO_BACKUP: Partial<Record<Engine, string>> = {
   clickhouse: `Backups (the BACKUP statement, to server disks or object storage) ${SERVER_SIDE}`,
   duckdb: 'Copy the database file, or run EXPORT DATABASE in the editor.',
   snowflake: 'Snowflake keeps history with Time Travel and zero-copy clones; there is no dump tool.',
+  bigquery: 'BigQuery keeps 7 days of Time Travel; copy tables with snapshots or clones, or export to Cloud Storage. There is no dump tool.',
   redis: SNAPSHOTS,
   valkey: SNAPSHOTS,
   dragonfly: SNAPSHOTS,

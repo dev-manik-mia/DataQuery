@@ -25,6 +25,8 @@ pub enum SqlFlavor {
     Sqlite,
     /// Snowflake SQL and Snowflake Scripting.
     Snowflake,
+    /// `BigQuery` `GoogleSQL` and its scripting statements.
+    Bigquery,
     /// `MongoDB` shell statements: `db.orders.find({ … })`, `show collections`, `use app`.
     Mongodb,
     /// `PartiQL` as `DynamoDB` runs it: `SELECT * FROM "orders" WHERE "pk" = ?`.
@@ -105,7 +107,8 @@ pub trait Dialect: Send + Sync {
             | SqlFlavor::Sqlserver
             | SqlFlavor::Oracle
             | SqlFlavor::Duckdb
-            | SqlFlavor::Snowflake => object.schema.as_deref(),
+            | SqlFlavor::Snowflake
+            | SqlFlavor::Bigquery => object.schema.as_deref(),
         }
         .filter(|c| !c.is_empty())
     }
@@ -230,6 +233,7 @@ pub struct ClickhouseDialect;
 pub struct DuckdbDialect;
 pub struct SqliteDialect;
 pub struct SnowflakeDialect;
+pub struct BigQueryDialect;
 pub struct MongoDialect;
 pub struct PartiqlDialect;
 pub struct RedisDialect;
@@ -865,6 +869,115 @@ impl Dialect for SnowflakeDialect {
     }
 }
 
+/// The type without parameters or element types: `STRING(10)` → `STRING`, `ARRAY<INT64>` → `ARRAY`.
+fn bigquery_base(data_type: &str) -> String {
+    data_type.trim().split(['(', '<', ' ']).next().unwrap_or_default().to_ascii_uppercase()
+}
+
+/// `GoogleSQL`: `` `project`.`dataset`.`table` `` paths, backslash escapes in
+/// quoted names and strings, `@name` and `?` parameters.
+impl Dialect for BigQueryDialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Bigquery
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        format!("`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
+    }
+
+    fn needs_quotes(&self, ident: &str) -> bool {
+        let simple = ident.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        !simple || is_reserved(ident, BIGQUERY_RESERVED)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n"))
+    }
+
+    /// Named `@pN` parameters, sent as `STRING` and cast to the column's type.
+    fn placeholder(&self, index: usize, column_type: &str) -> String {
+        match bigquery_base(column_type).as_str() {
+            "TEXT" | "STRING" => format!("@p{index}"),
+            _ => format!("CAST(@p{index} AS {})", column_type.trim()),
+        }
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        format!("CAST({quoted_column} AS STRING)")
+    }
+
+    fn text_expr(&self, quoted_column: &str, data_type: &str) -> String {
+        match bigquery_base(data_type).as_str() {
+            "STRUCT" | "RECORD" | "ARRAY" | "JSON" => format!("TO_JSON_STRING({quoted_column})"),
+            "GEOGRAPHY" => format!("ST_ASTEXT({quoted_column})"),
+            _ => self.cast_to_text(quoted_column),
+        }
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        !matches!(bigquery_base(data_type).as_str(), "STRUCT" | "RECORD" | "ARRAY" | "JSON" | "GEOGRAPHY")
+    }
+
+    /// `FORMAT('%t', …)` prints any type, structs and arrays too; `LIKE` escapes with `\`.
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        format!("LOWER(FORMAT('%t', {quoted_column})) LIKE LOWER({placeholder})")
+    }
+
+    /// The connection's project only pays for queries; names carry their own project.
+    fn qualifies_database(&self) -> bool {
+        true
+    }
+
+    fn template_placeholder(&self, n: usize) -> String {
+        format!("@p{n}")
+    }
+
+    fn commit_transaction(&self) -> &'static str {
+        "COMMIT TRANSACTION"
+    }
+
+    fn rollback_transaction(&self) -> &'static str {
+        "ROLLBACK TRANSACTION"
+    }
+
+    fn begin_transaction(&self) -> &'static str {
+        "BEGIN TRANSACTION"
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        let mut out = String::with_capacity(hex.len() * 2 + 3);
+        out.push_str("b'");
+        for pair in hex.as_bytes().chunks(2) {
+            out.push_str("\\x");
+            out.push_str(std::str::from_utf8(pair).unwrap_or_default());
+        }
+        out.push('\'');
+        out
+    }
+
+    /// Query parameters one request may carry.
+    fn max_params(&self) -> usize {
+        10_000
+    }
+
+    /// Keeps one `INSERT` well inside the 1 MB query text limit.
+    fn max_insert_rows(&self) -> usize {
+        1_000
+    }
+
+    fn insert_defaults(&self, table: &str, first_column: Option<&str>) -> String {
+        match first_column {
+            Some(c) => format!("INSERT INTO {table} ({c}) VALUES (DEFAULT)"),
+            None => format!("INSERT INTO {table} DEFAULT VALUES"),
+        }
+    }
+}
+
 /// `MongoDB` shell syntax. Names are JSON strings (`db.getCollection("a.b")`);
 /// the SQL builders are never used for it, so the SQL-only methods return
 /// harmless shell text.
@@ -1319,6 +1432,7 @@ pub fn dialect_for(flavor: SqlFlavor) -> &'static dyn Dialect {
         SqlFlavor::Duckdb => &DuckdbDialect,
         SqlFlavor::Sqlite => &SqliteDialect,
         SqlFlavor::Snowflake => &SnowflakeDialect,
+        SqlFlavor::Bigquery => &BigQueryDialect,
         SqlFlavor::Mongodb => &MongoDialect,
         SqlFlavor::Partiql => &PartiqlDialect,
         SqlFlavor::Redis => &RedisDialect,
@@ -1717,6 +1831,106 @@ const CLICKHOUSE_RESERVED: &[&str] = &[
     "having", "if", "ilike", "in", "inner", "interval", "into", "is", "join", "key", "left", "like", "limit", "not",
     "null", "offset", "on", "or", "order", "outer", "prewhere", "right", "sample", "select", "settings", "table",
     "then", "to", "true", "union", "using", "when", "where", "with",
+];
+
+/// `GoogleSQL` reserved keywords.
+const BIGQUERY_RESERVED: &[&str] = &[
+    "all",
+    "and",
+    "any",
+    "array",
+    "as",
+    "asc",
+    "assert_rows_modified",
+    "at",
+    "between",
+    "by",
+    "case",
+    "cast",
+    "collate",
+    "contains",
+    "create",
+    "cross",
+    "cube",
+    "current",
+    "default",
+    "define",
+    "desc",
+    "distinct",
+    "else",
+    "end",
+    "enum",
+    "escape",
+    "except",
+    "exclude",
+    "exists",
+    "extract",
+    "false",
+    "fetch",
+    "following",
+    "for",
+    "from",
+    "full",
+    "group",
+    "grouping",
+    "groups",
+    "hash",
+    "having",
+    "if",
+    "ignore",
+    "in",
+    "inner",
+    "intersect",
+    "interval",
+    "into",
+    "is",
+    "join",
+    "lateral",
+    "left",
+    "like",
+    "limit",
+    "lookup",
+    "merge",
+    "natural",
+    "new",
+    "no",
+    "not",
+    "null",
+    "nulls",
+    "of",
+    "on",
+    "or",
+    "order",
+    "outer",
+    "over",
+    "partition",
+    "preceding",
+    "proto",
+    "qualify",
+    "range",
+    "recursive",
+    "respect",
+    "right",
+    "rollup",
+    "rows",
+    "select",
+    "set",
+    "some",
+    "struct",
+    "tablesample",
+    "then",
+    "to",
+    "treat",
+    "true",
+    "unbounded",
+    "union",
+    "unnest",
+    "using",
+    "when",
+    "where",
+    "window",
+    "with",
+    "within",
 ];
 
 const SNOWFLAKE_RESERVED: &[&str] = &[
@@ -2162,6 +2376,23 @@ mod tests {
         assert_eq!(snow.quoted_name(&obj("DB", Some("PUBLIC"), "ORDERS")), "\"DB\".\"PUBLIC\".\"ORDERS\"");
         assert_eq!(snow.quote_literal("a\\b'c"), "'a\\\\b''c'");
         assert_eq!(snow.text_expr("\"V\"", "VARIANT"), "TO_JSON(\"V\")");
+    }
+
+    #[test]
+    fn bigquery_paths_params_and_literals() {
+        let bq = BigQueryDialect;
+        let t = obj("my-project", Some("sales"), "orders");
+        assert_eq!(bq.quoted_name(&t), "`my-project`.`sales`.`orders`");
+        assert_eq!(bq.display_name(&t), "sales.orders");
+        assert_eq!(bq.quote_ident("a`b\\c"), "`a\\`b\\\\c`");
+        assert_eq!(bq.display_ident("select"), "`select`");
+        assert_eq!(bq.placeholder(1, "STRING(10)"), "@p1");
+        assert_eq!(bq.placeholder(2, "INT64"), "CAST(@p2 AS INT64)");
+        assert_eq!(bq.quote_literal("it's \\"), "'it\\'s \\\\'");
+        assert_eq!(bq.binary_literal("00ff"), "b'\\x00\\xff'");
+        assert_eq!(bq.text_expr("`s`", "STRUCT<a INT64>"), "TO_JSON_STRING(`s`)");
+        assert!(!bq.comparable("ARRAY<STRING>") && !bq.comparable("GEOGRAPHY") && bq.comparable("NUMERIC(10, 2)"));
+        assert_eq!(bq.paginate("SELECT 1", false, 20, 10), "SELECT 1 LIMIT 10 OFFSET 20");
     }
 
     #[test]

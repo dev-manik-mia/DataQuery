@@ -5,6 +5,7 @@ import type { StatementInfo } from '@/bindings/StatementInfo';
 
 import { binaryLabel, cellText, hexDump, isSensitiveColumn, parseClipboardGrid, splitTemporal } from './cells';
 import { serializeRows, serializeRowsChunked } from './clipboard';
+import { connectsByApi, databaseLabel, defaultSslMode, flavorOf, hasSchemas, placeholderLabel } from './engines';
 import { formatCount, formatDuration, formatTimer } from './format';
 import { statementAt } from './sql';
 
@@ -81,6 +82,17 @@ describe('statementAt', () => {
 
   it('uses the first statement before any text', () => {
     expect(statementAt([s(5, 9)], 0)).toEqual({ from: 5, to: 9 });
+  });
+});
+
+describe('engines', () => {
+  it('reaches BigQuery through its API with GoogleSQL', () => {
+    expect(flavorOf('bigquery')).toBe('bigquery');
+    expect(connectsByApi('bigquery') && !connectsByApi('snowflake')).toBe(true);
+    expect(databaseLabel('bigquery')).toBe('Project ID');
+    expect(defaultSslMode('bigquery')).toBe('verify-full');
+    expect(placeholderLabel('bigquery', 2)).toBe('@… #2');
+    expect(hasSchemas('bigquery')).toBe(true);
   });
 });
 

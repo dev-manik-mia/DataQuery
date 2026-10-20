@@ -1555,6 +1555,7 @@ name = "dataquery"
 version = "0.2.4"
 dependencies = [
  "base64 0.22.1",
+ "dq-bigquery",
  "dq-cassandra",
  "dq-clickhouse",
  "dq-core",
@@ -1883,6 +1884,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "dq-bigquery"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dq-core",
+ "reqwest 0.12.28",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

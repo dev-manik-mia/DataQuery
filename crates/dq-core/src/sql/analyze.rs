@@ -161,8 +161,9 @@ pub fn transaction_effect(sql: &str, flavor: SqlFlavor) -> TxEffect {
             "COMMIT" | "ROLLBACK" => TxEffect::End,
             _ => TxEffect::None,
         },
-        // No transactions; a CQL `BEGIN BATCH … APPLY BATCH` is one statement.
-        SqlFlavor::Clickhouse | SqlFlavor::Cql | SqlFlavor::QueryDsl => TxEffect::None,
+        // No transactions; a CQL `BEGIN BATCH … APPLY BATCH` is one statement, and a
+        // BigQuery `BEGIN TRANSACTION … COMMIT` is one script.
+        SqlFlavor::Clickhouse | SqlFlavor::Cql | SqlFlavor::QueryDsl | SqlFlavor::Bigquery => TxEffect::None,
         SqlFlavor::Redis => match word(0) {
             "MULTI" => TxEffect::Begin,
             "EXEC" | "DISCARD" => TxEffect::End,
@@ -280,11 +281,15 @@ struct Block {
     declare: bool,
     /// A CQL `BEGIN … BATCH`, open until `APPLY BATCH`.
     batch: bool,
+    /// A `BigQuery` script that declares variables or temporary objects: open to the end.
+    script: bool,
+    /// A `BigQuery` `BEGIN TRANSACTION`, open until `COMMIT` or `ROLLBACK`.
+    transaction: bool,
 }
 
 impl Block {
     fn inside(&self) -> bool {
-        self.routine || self.depth > 0 || self.declare || self.batch
+        self.routine || self.depth > 0 || self.declare || self.batch || self.script || self.transaction
     }
 
     fn observe(&mut self, src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) {
@@ -295,6 +300,10 @@ impl Block {
         }
         if flavor == SqlFlavor::Snowflake {
             self.observe_scripting(src, tokens, i, &word);
+            return;
+        }
+        if flavor == SqlFlavor::Bigquery {
+            self.observe_bigquery(src, tokens, i, &word);
             return;
         }
         if flavor == SqlFlavor::Cql {
@@ -369,6 +378,40 @@ impl Block {
     }
 }
 
+impl Block {
+    /// `BigQuery` runs a script as one job, so its blocks stay one statement:
+    /// `BEGIN … END`, statement `IF`/`LOOP`/`WHILE`/`REPEAT`/`FOR` … `END …` and
+    /// `BEGIN TRANSACTION … COMMIT`. A script that starts with `DECLARE` or creates
+    /// temporary tables or functions runs to the end of the text, where they stay visible.
+    fn observe_bigquery(&mut self, src: &str, tokens: &[Token], i: usize, word: &str) {
+        let next = tokens[i + 1..].iter().find(|t| !t.is_trivia());
+        let opens_transaction = next.is_none_or(|t| t.kind == TokenKind::Semicolon)
+            || next.is_some_and(|t| t.is_keyword(src, "TRANSACTION"));
+        let previous = tokens[..i].iter().rev().find(|t| !t.is_trivia());
+        // A statement starts here: after `;`, at the start, or as a block's first statement.
+        let at_statement = previous.is_none_or(|t| {
+            t.kind == TokenKind::Semicolon
+                || ["THEN", "ELSE", "DO", "BEGIN", "LOOP", "REPEAT"].iter().any(|k| t.is_keyword(src, k))
+        });
+        // `END CASE`, `END IF`, …: the keyword after `END` closes, it does not open.
+        if previous.is_some_and(|t| t.is_keyword(src, "END")) {
+            return;
+        }
+        match word {
+            "DECLARE" if self.head.len() == 1 => self.script = true,
+            "TEMP" | "TEMPORARY" if self.head.len() <= 4 && self.head.first().is_some_and(|w| w == "CREATE") => {
+                self.script = true;
+            }
+            "BEGIN" if opens_transaction => self.transaction = self.transaction || self.depth == 0,
+            "BEGIN" | "CASE" => self.depth += 1,
+            "IF" | "LOOP" | "WHILE" | "REPEAT" | "FOR" if at_statement => self.depth += 1,
+            "END" => self.depth = self.depth.saturating_sub(1),
+            "COMMIT" | "ROLLBACK" if self.depth == 0 => self.transaction = false,
+            _ => {}
+        }
+    }
+}
+
 /// The statement's first words open a routine body (T-SQL) or a PL/SQL unit (Oracle).
 fn starts_routine(head: &[String], flavor: SqlFlavor) -> bool {
     let words: Vec<&str> = head
@@ -400,6 +443,7 @@ fn is_separator_line(src: &str, tokens: &[Token], i: usize, flavor: SqlFlavor) -
         | SqlFlavor::Duckdb
         | SqlFlavor::Sqlite
         | SqlFlavor::Snowflake
+        | SqlFlavor::Bigquery
         | SqlFlavor::Mongodb
         | SqlFlavor::Partiql
         | SqlFlavor::Redis
@@ -455,18 +499,24 @@ fn push_statement(
         writes,
         destructive,
         has_params: sig.iter().any(|t| t.kind == TokenKind::Param),
-        param_count: param_count(src, &sig),
+        param_count: param_count(src, &sig, flavor),
     });
 }
 
-/// Distinct named parameters in order of first appearance: `ClickHouse` `{name:Type}`
-/// and Cypher `$name`.
+/// `BigQuery` `@name`.
+fn at_name(text: &str, flavor: SqlFlavor) -> Option<&str> {
+    text.strip_prefix('@').filter(|n| flavor == SqlFlavor::Bigquery && !n.is_empty())
+}
+
+/// Distinct named parameters in order of first appearance: `ClickHouse` `{name:Type}`,
+/// Cypher `$name` and `BigQuery` `@name`.
 pub fn named_params(sql: &str, flavor: SqlFlavor) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for t in tokenize(sql, flavor).iter().filter(|t| t.kind == TokenKind::Param) {
         let text = t.text(sql);
         let cypher = text.strip_prefix('$').filter(|n| flavor == SqlFlavor::Cypher && !n.is_empty());
-        if let Some(name) = text.strip_prefix('{').and_then(|r| r.split(':').next()).or(cypher)
+        if let Some(name) =
+            text.strip_prefix('{').and_then(|r| r.split(':').next()).or(cypher).or_else(|| at_name(text, flavor))
             && !names.iter().any(|n| n == name)
         {
             names.push(name.to_owned());
@@ -475,17 +525,42 @@ pub fn named_params(sql: &str, flavor: SqlFlavor) -> Vec<String> {
     names
 }
 
-fn param_count(src: &str, sig: &[Token]) -> u32 {
+/// Pairs `values` with the named parameters of `sql`: `p1`, `p2`, … by number
+/// (as generated SQL names them), any other names in order of first appearance.
+pub fn bind_named(
+    sql: &str,
+    flavor: SqlFlavor,
+    values: &[Option<String>],
+) -> crate::error::DbResult<Vec<(String, Option<String>)>> {
+    let names = named_params(sql, flavor);
+    if names.len() != values.len() {
+        return Err(crate::error::DbError::invalid(format!(
+            "The statement has {} parameter(s) but {} value(s) were given.",
+            names.len(),
+            values.len()
+        )));
+    }
+    let numbered = |n: &String| {
+        n.strip_prefix('p').and_then(|d| d.parse::<usize>().ok()).filter(|i| (1..=values.len()).contains(i))
+    };
+    if names.iter().all(|n| numbered(n).is_some()) {
+        return Ok(names.iter().map(|n| (n.clone(), values[numbered(n).unwrap_or(1) - 1].clone())).collect());
+    }
+    Ok(names.into_iter().zip(values.iter().cloned()).collect())
+}
+
+fn param_count(src: &str, sig: &[Token], flavor: SqlFlavor) -> u32 {
     let params = sig.iter().filter(|t| t.kind == TokenKind::Param).map(|t| t.text(src));
     let mut questions = 0;
     let mut highest = 0;
     let mut names: Vec<&str> = Vec::new();
     for p in params {
-        // `{name:Type}` (ClickHouse) and `$name` (Cypher) count once per name.
+        // `{name:Type}` (ClickHouse), `$name` (Cypher) and `@name` (BigQuery) count once per name.
         let named = p
             .strip_prefix('{')
             .and_then(|r| r.split(':').next())
-            .or_else(|| p.strip_prefix('$').filter(|n| n.chars().next().is_some_and(|c| !c.is_ascii_digit())));
+            .or_else(|| p.strip_prefix('$').filter(|n| n.chars().next().is_some_and(|c| !c.is_ascii_digit())))
+            .or_else(|| at_name(p, flavor));
         if let Some(name) = named {
             if !names.contains(&name) {
                 names.push(name);
@@ -546,6 +621,10 @@ fn classify(src: &str, sig: &[Token], flavor: SqlFlavor) -> (StatementKind, bool
             kind = StatementKind::Call;
         }
         (SqlFlavor::Oracle, "SET") if word(1).as_deref() == Some("TRANSACTION") => kind = StatementKind::Transaction,
+        // A BigQuery script (a transaction too) runs as one job.
+        (SqlFlavor::Bigquery, "DECLARE" | "BEGIN" | "IF" | "LOOP" | "WHILE" | "REPEAT" | "FOR") => {
+            kind = StatementKind::Call;
+        }
         _ => {}
     }
 
@@ -909,6 +988,29 @@ mod tests {
         assert_eq!(analyze(sql, CH).unwrap().param_count, 2);
         assert_eq!(named_params(sql, CH), ["a", "b"]);
         assert_eq!(transaction_effect("BEGIN TRANSACTION", SqlFlavor::Duckdb), TxEffect::Begin);
+    }
+
+    #[test]
+    fn bigquery_scripts_stay_whole() {
+        const BQ: SqlFlavor = SqlFlavor::Bigquery;
+        assert_eq!(texts("SELECT 1; # c;\nSELECT \"a;b\" -- c;\n;", BQ), vec!["SELECT 1", "SELECT \"a;b\""]);
+        let block = "BEGIN\n  SELECT 1;\n  IF TRUE THEN SELECT 2; ELSE SELECT CASE WHEN x THEN 1 END; END IF;\nEXCEPTION WHEN ERROR THEN\n  SELECT @@error.message;\nEND";
+        assert_eq!(texts(&format!("{block};\nSELECT 3"), BQ), vec![block, "SELECT 3"]);
+        let tx = "BEGIN TRANSACTION;\nINSERT INTO t VALUES (1);\nCOMMIT TRANSACTION";
+        assert_eq!(texts(&format!("{tx};\nSELECT 1;"), BQ), vec![tx, "SELECT 1"]);
+        let control = "WHILE n < 3 DO\n  SET n = n + 1;\nEND WHILE";
+        assert_eq!(texts(&format!("SELECT IF(a, 1, 2) FROM t FOR SYSTEM_TIME AS OF x;\n{control};"), BQ).len(), 2);
+        let script = "DECLARE n INT64 DEFAULT 1;\nSET n = 2;\nSELECT n;";
+        assert_eq!(texts(script, BQ), vec![script]);
+        let temp = "CREATE TEMP FUNCTION f(x INT64) AS (x + 1);\nSELECT f(1)";
+        assert_eq!(texts(temp, BQ), vec![temp]);
+        assert_eq!(split_statements(tx, BQ)[0].kind, StatementKind::Call);
+        assert!(split_statements(script, BQ)[0].writes);
+        assert_eq!(transaction_effect("BEGIN TRANSACTION", BQ), TxEffect::None);
+        let params = "SELECT * FROM t WHERE a = @a AND b = @b OR a = @a AND c = @@row_count";
+        assert_eq!(analyze(params, BQ).unwrap().param_count, 2);
+        assert_eq!(named_params(params, BQ), ["a", "b"]);
+        assert_eq!(analyze("SELECT ?, ?", BQ).unwrap().param_count, 2);
     }
 
     #[test]

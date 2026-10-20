@@ -23,6 +23,7 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
   duckdb: ['monitoring'],
   sqlite: ['monitoring'],
   snowflake: ['monitoring'],
+  bigquery: ['transactions'],
   redis: ['explain', 'schema_diff'],
   valkey: ['explain', 'schema_diff'],
   dragonfly: ['explain', 'schema_diff'],
@@ -36,7 +37,7 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
 
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
   ({
-    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: e === 'snowflake' || e === 'dynamodb', file_based: port === null,
+    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: ['snowflake', 'dynamodb', 'bigquery'].includes(e), file_based: e === 'sqlite' || e === 'duckdb',
     capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])), backup: BACKUP.has(e) } : none,
   }) as EngineInfo;
 
@@ -54,6 +55,7 @@ const ENGINES: EngineInfo[] = [
   engine('clickhouse', 'ClickHouse', 'Ch', 95, 'analytical', 'SQL', 8123, '8123 · SQL', 'P1', true),
   engine('duckdb', 'DuckDB', 'Dk', 85, 'analytical', 'SQL', null, 'local file · SQL', 'P2', true),
   engine('snowflake', 'Snowflake', 'Sf', 210, 'analytical', 'SQL', 443, 'HTTPS · SQL', 'P2', true),
+  engine('bigquery', 'BigQuery', 'Bq', 235, 'analytical', 'GoogleSQL', null, 'HTTPS · GoogleSQL', 'P2', true),
   engine('redis', 'Redis', 'Rd', 25, 'key_value', 'Commands', 6379, '6379 · commands · v6–7', 'P1', true),
   engine('valkey', 'Valkey', 'Vk', 175, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),
   engine('dragonfly', 'Dragonfly', 'Df', 265, 'key_value', 'Commands', 6379, '6379 · Redis-compatible', 'P2', true),

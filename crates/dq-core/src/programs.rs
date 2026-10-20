@@ -66,6 +66,39 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command 
     command
 }
 
+const CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The cloud CLI `name` on `PATH`, in the usual install directories or in the Google Cloud SDK.
+fn find_cloud_cli(name: &str) -> Option<PathBuf> {
+    let sdk = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("google-cloud-sdk/bin"));
+    find(&search_path(sdk), name)
+}
+
+/// Runs a cloud CLI (`aws`, `az`, `gcloud`) that prints a short-lived token and
+/// returns that output, trimmed. The CLIs handle credential chains, SSO and MFA.
+/// Errors carry only the CLI's first error line, never its output.
+pub async fn cloud_cli_token(cli: &str, args: &[&str], install_hint: &str) -> crate::DbResult<String> {
+    use crate::{DbError, ErrorKind};
+    let path = find_cloud_cli(cli).ok_or_else(|| {
+        DbError::new(ErrorKind::Auth, format!("The `{cli}` command was not found.")).with_action(Some(install_hint))
+    })?;
+    let output = tokio::time::timeout(CLI_TIMEOUT, command(&path).args(args).output())
+        .await
+        .map_err(|_| DbError::new(ErrorKind::Timeout, format!("`{cli}` did not answer within 60 seconds.")))?
+        .map_err(|e| DbError::new(ErrorKind::Auth, format!("Cannot run `{cli}`: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("no error output");
+        return Err(DbError::new(ErrorKind::Auth, format!("`{cli}` failed: {first}"))
+            .with_action(Some(format!("Sign in with the {cli} CLI, then connect again."))));
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if token.is_empty() {
+        return Err(DbError::new(ErrorKind::Auth, format!("`{cli}` returned no token.")));
+    }
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

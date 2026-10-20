@@ -23,6 +23,7 @@ dq-clickhouse.workspace = true
 dq-duckdb.workspace = true
 dq-sqlite.workspace = true
 dq-snowflake.workspace = true
+dq-bigquery.workspace = true
 dq-mongodb.workspace = true
 dq-dynamodb.workspace = true
 dq-redis.workspace = true

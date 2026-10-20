@@ -66,6 +66,7 @@ impl ExplainDialect {
             | SqlFlavor::Duckdb
             | SqlFlavor::Sqlite
             | SqlFlavor::Snowflake
+            | SqlFlavor::Bigquery
             | SqlFlavor::Mongodb
             | SqlFlavor::Partiql
             | SqlFlavor::Redis
