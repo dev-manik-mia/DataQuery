@@ -16,9 +16,11 @@ import type { ColumnMapping } from '@/bindings/ColumnMapping';
 import type { ColumnValue } from '@/bindings/ColumnValue';
 import type { Confirmation } from '@/bindings/Confirmation';
 import type { ConnectionDraft } from '@/bindings/ConnectionDraft';
+import type { ConnectionImport } from '@/bindings/ConnectionImport';
 import type { ConnectionImportReport } from '@/bindings/ConnectionImportReport';
 import type { ConnectionList } from '@/bindings/ConnectionList';
 import type { Dependencies } from '@/bindings/Dependencies';
+import type { DetectedSource } from '@/bindings/DetectedSource';
 import type { DiffSide } from '@/bindings/DiffSide';
 import type { DocIndex } from '@/bindings/DocIndex';
 import type { DocumentChange } from '@/bindings/DocumentChange';
@@ -31,6 +33,7 @@ import type { ExportReport } from '@/bindings/ExportReport';
 import type { ExportSource } from '@/bindings/ExportSource';
 import type { FindRequest } from '@/bindings/FindRequest';
 import type { Folder } from '@/bindings/Folder';
+import type { ForeignPreview } from '@/bindings/ForeignPreview';
 import type { FrameworkMigrations } from '@/bindings/FrameworkMigrations';
 import type { Guarded } from '@/bindings/Guarded';
 import type { HistoryPage } from '@/bindings/HistoryPage';
@@ -68,6 +71,7 @@ import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { ServerSetting } from '@/bindings/ServerSetting';
 import type { SessionInfo } from '@/bindings/SessionInfo';
 import type { SessionOption } from '@/bindings/SessionOption';
+import type { SourceApp } from '@/bindings/SourceApp';
 import type { Settings } from '@/bindings/Settings';
 import type { Snippet } from '@/bindings/Snippet';
 import type { SnippetDraft } from '@/bindings/SnippetDraft';
@@ -129,6 +133,9 @@ export const api = {
   trustHostKey: (host: string, port: number, fingerprint: string) => call<void>('trust_host_key', { host, port, fingerprint }),
   exportConnections: (path: string, ids: string[] | null) => call<number>('export_connections', { path, ids }),
   importConnections: (path: string) => call<ConnectionImportReport>('import_connections', { path }),
+  detectConnectionSources: () => call<DetectedSource[]>('detect_connection_sources'),
+  readConnectionSource: (app: SourceApp, path: string) => call<ForeignPreview>('read_connection_source', { app, path }),
+  importConnectionList: (connections: ConnectionImport[]) => call<ConnectionImportReport>('import_connection_list', { connections }),
 
   // sessions
   connect: (connectionId: string) => call<SessionInfo>('connect', { connectionId }),

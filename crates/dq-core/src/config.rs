@@ -46,7 +46,8 @@ impl SslMode {
         }
     }
 
-    fn parse(s: &str) -> Option<Self> {
+    /// Reads libpq, `MySQL` and JDBC spellings (`require`, `REQUIRED`, `verify_identity`, `true`…).
+    pub fn parse(s: &str) -> Option<Self> {
         Some(match s.to_ascii_lowercase().replace('_', "-").as_str() {
             "disable" | "disabled" | "false" => Self::Disable,
             "prefer" | "preferred" | "allow" => Self::Prefer,

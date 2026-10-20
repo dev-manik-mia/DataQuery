@@ -4,6 +4,7 @@
 //! Passwords live only in the OS keychain through [`SecretStore`]; no type in
 //! this crate that is written to disk has a field that could hold one.
 
+pub mod import;
 mod model;
 mod secrets;
 mod store;

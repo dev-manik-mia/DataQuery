@@ -1,0 +1,10 @@
+<application>
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="cache" uuid="6bd28f1e-9d70-4cf1-8e8f-c01dac9b8a7f">
+      <driver-ref>redis</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>jdbc.RedisDriver</jdbc-driver>
+      <jdbc-url>jdbc:redis://cache.internal:6379/0</jdbc-url>
+    </data-source>
+  </component>
+</application>

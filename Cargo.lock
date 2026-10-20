@@ -2147,11 +2147,14 @@ version = "0.2.4"
 dependencies = [
  "dq-core",
  "keyring",
+ "plist",
+ "quick-xml",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "ts-rs",
+ "url",
  "uuid",
 ]
 

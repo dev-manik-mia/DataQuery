@@ -1,0 +1,176 @@
+{
+	"folders": {
+		"Production": {},
+		"Production/EU": {
+			"parent": "Production",
+			"description": "EU region"
+		}
+	},
+	"connections": {
+		"postgres-jdbc-18c4f3a1b2c-6f3e2d1c0b9a8f7e": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "EU orders",
+			"save-password": true,
+			"read-only": true,
+			"folder": "Production/EU",
+			"configuration": {
+				"host": "orders.eu.example.com",
+				"port": "5432",
+				"database": "orders",
+				"url": "jdbc:postgresql://orders.eu.example.com:5432/orders",
+				"configurationType": "MANUAL",
+				"home": "",
+				"type": "prod",
+				"user": "orders_app",
+				"closeIdleConnection": true,
+				"provider-properties": {
+					"@dbeaver-show-non-default-db@": "false",
+					"@dbeaver-show-template-db@": "false"
+				},
+				"auth-model": "native",
+				"handlers": {
+					"ssh_tunnel": {
+						"type": "TUNNEL",
+						"enabled": true,
+						"save-password": false,
+						"user": "tunnel",
+						"properties": {
+							"host": "bastion.eu.example.com",
+							"port": 22,
+							"authType": "PUBLIC_KEY",
+							"keyPath": "/Users/ada/.ssh/eu_bastion",
+							"implementation": "sshj",
+							"localHost": "",
+							"remoteHost": "",
+							"aliveInterval": "0",
+							"sshConnectTimeout": "10000"
+						}
+					},
+					"postgre_ssl": {
+						"type": "CONFIG",
+						"enabled": true,
+						"save-password": false,
+						"properties": {
+							"sslMode": "verify-full",
+							"ssl.ca": "/Users/ada/certs/eu-ca.pem",
+							"sslFactory": ""
+						}
+					}
+				}
+			}
+		},
+		"mysql8-18c4f3a7d01-2a9b8c7d6e5f4a3b": {
+			"provider": "mysql",
+			"driver": "mysql8",
+			"name": "Shop",
+			"save-password": true,
+			"configuration": {
+				"host": "shop-db.internal",
+				"port": "3306",
+				"database": "shop",
+				"url": "jdbc:mysql://shop-db.internal:3306/shop",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"auth-model": "native",
+				"handlers": {
+					"ssh_tunnel": {
+						"type": "TUNNEL",
+						"enabled": true,
+						"properties": {
+							"host": "jump.internal",
+							"port": "2222",
+							"user": "ops",
+							"authType": "AGENT",
+							"implementation": "sshj"
+						}
+					},
+					"mysql_ssl": {
+						"type": "CONFIG",
+						"enabled": true,
+						"properties": {
+							"ssl.require": "true",
+							"ssl.verify.server": "false",
+							"ssl.public.key.retrieve": "false"
+						}
+					},
+					"proxy": {
+						"type": "PROXY",
+						"enabled": false,
+						"properties": {}
+					}
+				}
+			}
+		},
+		"microsoft-18c4f3b2e44-1b2c3d4e5f6a7b8c": {
+			"provider": "sqlserver",
+			"driver": "microsoft",
+			"name": "ERP",
+			"save-password": false,
+			"configuration": {
+				"url": "jdbc:sqlserver://erp.corp.local:1433;databaseName=erp;encrypt=true;trustServerCertificate=true",
+				"configurationType": "URL",
+				"type": "dev",
+				"user": "erp_reader",
+				"auth-model": "sqlserver_database"
+			}
+		},
+		"sqlite_jdbc-18c4f3c0a19-0f1e2d3c4b5a6978": {
+			"provider": "generic",
+			"driver": "sqlite_jdbc",
+			"name": "Notes",
+			"configuration": {
+				"database": "/Users/ada/notes.sqlite",
+				"url": "jdbc:sqlite:/Users/ada/notes.sqlite",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"auth-model": "native"
+			}
+		},
+		"db2_iseries-18c4f3c5b77-a1b2c3d4e5f60718": {
+			"provider": "db2",
+			"driver": "db2_iseries",
+			"name": "Mainframe",
+			"configuration": {
+				"host": "as400.corp.local",
+				"port": "446",
+				"user": "QSECOFR",
+				"configurationType": "MANUAL",
+				"type": "prod"
+			}
+		},
+		"mariaDB-18c4f3d1e02-9a8b7c6d5e4f3a2b": {
+			"provider": "mysql",
+			"driver": "mariaDB",
+			"name": "Mariadb staging",
+			"configuration": {
+				"host": "maria.staging.internal",
+				"port": "3306",
+				"database": "app",
+				"user": "app",
+				"configurationType": "MANUAL",
+				"type": "test",
+				"properties": {
+					"useSSL": "false",
+					"allowPublicKeyRetrieval": "true"
+				}
+			}
+		}
+	},
+	"connection-types": {
+		"dev": {
+			"name": "Development",
+			"color": "255,255,255",
+			"description": "Regular development database",
+			"auto-commit": true,
+			"confirm-execute": false,
+			"confirm-data-change": false,
+			"smart-commit": false,
+			"smart-commit-recover": false,
+			"auto-close-transactions": true,
+			"close-transactions-period": 1800,
+			"auto-close-connections": true,
+			"close-connections-period": 14400
+		}
+	}
+}

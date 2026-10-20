@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use dq_core::config::{ConnConfig, Environment};
 use dq_core::result::ServerInfo;
 use dq_core::{DbError, ErrorKind};
-use dq_store::{ConnectionDraft, Folder, PasswordChange, SavedConnection};
+use dq_store::import::{self, DetectedSource, ForeignPreview, SourceApp, UserDirs};
+use dq_store::{ConnectionDraft, ConnectionImport, ConnectionImportReport, Folder, PasswordChange, SavedConnection};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use ts_rs::TS;
@@ -142,29 +142,14 @@ pub async fn trust_host_key(state: State<'_, AppState>, host: String, port: u16,
 
 const EXPORT_FORMAT: &str = "dataquery-connections";
 const MAX_IMPORT_BYTES: u64 = 4 * 1024 * 1024;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ExportedConnection {
-    name: String,
-    folder: Option<String>,
-    environment: Environment,
-    favorite: bool,
-    config: ConnConfig,
-}
+/// Most connections created by one import.
+const MAX_IMPORT_CONNECTIONS: usize = 5000;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ExportFile {
     format: String,
     version: u32,
-    connections: Vec<ExportedConnection>,
-}
-
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct ConnectionImportReport {
-    pub imported: u32,
-    /// One line per connection that was not imported, with the reason.
-    pub skipped: Vec<String>,
+    connections: Vec<ConnectionImport>,
 }
 
 fn absolute(path: &str) -> CmdResult<PathBuf> {
@@ -183,11 +168,11 @@ pub async fn export_connections(state: State<'_, AppState>, path: String, ids: O
     state
         .with_store(move |s| {
             let folders = s.folders()?;
-            let connections: Vec<ExportedConnection> = s
+            let connections: Vec<ConnectionImport> = s
                 .connections()?
                 .into_iter()
                 .filter(|c| ids.as_ref().is_none_or(|ids| ids.contains(&c.id)))
-                .map(|c| ExportedConnection {
+                .map(|c| ConnectionImport {
                     folder: c.folder_id.and_then(|f| folders.iter().find(|x| x.id == f).map(|x| x.name.clone())),
                     name: c.name,
                     environment: c.environment,
@@ -221,36 +206,47 @@ pub async fn import_connections(state: State<'_, AppState>, path: String) -> Cmd
             if file.format != EXPORT_FORMAT || file.version != 1 {
                 return Err(DbError::invalid("This is not a DataQuery connection export (version 1)."));
             }
-            let mut report = ConnectionImportReport { imported: 0, skipped: Vec::new() };
-            for c in file.connections {
-                if let Err(e) = c.config.validate() {
-                    report.skipped.push(format!("{}: {}", c.name, e.message));
-                    continue;
-                }
-                let folder_id = match c.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
-                    Some(name) => Some(match s.folders()?.into_iter().find(|f| f.name == name) {
-                        Some(f) => f.id,
-                        None => s.create_folder(name)?.id,
-                    }),
-                    None => None,
-                };
-                let draft = ConnectionDraft {
-                    id: None,
-                    name: c.name.clone(),
-                    folder_id,
-                    environment: c.environment,
-                    favorite: c.favorite,
-                    config: c.config,
-                    password: PasswordChange::Clear,
-                    ssh_secrets: Vec::new(),
-                };
-                let hops = draft.config.ssh.as_ref().map_or(0, |t| t.hops().count());
-                match s.save_connection(&draft, false, &vec![false; hops]) {
-                    Ok(_) => report.imported += 1,
-                    Err(e) => report.skipped.push(format!("{}: {}", c.name, e.message)),
-                }
-            }
-            Ok(report)
+            s.import_connections(file.connections)
         })
         .await
+}
+
+// ---------------------------------------------------------------------------
+// Import from other apps (TablePlus, DBeaver, Sequel Ace / Pro, DataGrip)
+// ---------------------------------------------------------------------------
+
+/// Connection files of other database clients found at their usual places.
+#[tauri::command]
+pub async fn detect_connection_sources() -> CmdResult<Vec<DetectedSource>> {
+    blocking(|| Ok(import::detect(&UserDirs::current()?))).await
+}
+
+/// Reads another app's connections for the preview. Secrets are never read;
+/// connections matching a saved one are marked as duplicates.
+#[tauri::command]
+pub async fn read_connection_source(
+    state: State<'_, AppState>,
+    app: SourceApp,
+    path: String,
+) -> CmdResult<ForeignPreview> {
+    let path = absolute(&path)?;
+    state
+        .with_store(move |s| {
+            let mut preview = import::read(app, &path, &UserDirs::current()?)?;
+            import::mark_duplicates(&mut preview, &s.connections()?);
+            Ok(preview)
+        })
+        .await
+}
+
+/// Creates the connections chosen in a preview as new connections without passwords.
+#[tauri::command]
+pub async fn import_connection_list(
+    state: State<'_, AppState>,
+    connections: Vec<ConnectionImport>,
+) -> CmdResult<ConnectionImportReport> {
+    if connections.len() > MAX_IMPORT_CONNECTIONS {
+        return Err(DbError::invalid(format!("At most {MAX_IMPORT_CONNECTIONS} connections can be imported at once.")));
+    }
+    state.with_store(move |s| s.import_connections(connections)).await
 }

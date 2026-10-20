@@ -52,6 +52,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 quick-xml = "0.42"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip"] }
 oracle = "0.6"
+plist = { version = "1.7", default-features = false }
 duckdb = { version = "1.10506", features = ["bundled", "json", "parquet"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "net", "process"] }
 tokio-postgres = "0.7"
