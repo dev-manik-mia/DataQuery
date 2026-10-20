@@ -10,8 +10,9 @@ use ts_rs::TS;
 use super::builder::validate_filter;
 use super::dialect::{Dialect, SqlFlavor};
 use super::lexer::{TokenKind, tokenize};
+use super::table_actions::{self, TruncateOptions};
 use crate::error::{DbError, DbResult};
-use crate::node::ObjectRef;
+use crate::node::{NodeKind, ObjectRef};
 use crate::schema::{ColumnInfo, ConstraintKind, KeyRole, KeyRoleKind, TableStructure};
 
 /// A column in a create-table or add-column form.
@@ -115,6 +116,23 @@ pub enum SchemaChange {
         name: String,
         kind: ConstraintKind,
     },
+    /// Removes every row with `TRUNCATE` (`SQLite`: `DELETE`).
+    TruncateTable {
+        table: ObjectRef,
+        restart_identity: bool,
+        cascade: bool,
+        disable_foreign_keys: bool,
+    },
+    /// Deletes every row with `DELETE`: fires triggers, works where `TRUNCATE` is blocked.
+    EmptyTable {
+        table: ObjectRef,
+    },
+    /// Copies the table under a new name in the same schema.
+    DuplicateTable {
+        table: ObjectRef,
+        new_name: String,
+        with_data: bool,
+    },
 }
 
 impl SchemaChange {
@@ -132,15 +150,38 @@ impl SchemaChange {
             | Self::AddForeignKey { table, .. }
             | Self::AddUnique { table, .. }
             | Self::AddCheck { table, .. }
-            | Self::DropConstraint { table, .. } => table,
+            | Self::DropConstraint { table, .. }
+            | Self::TruncateTable { table, .. }
+            | Self::EmptyTable { table }
+            | Self::DuplicateTable { table, .. } => table,
         }
     }
 
     /// The change needs the table's current structure (MySQL `MODIFY COLUMN`,
-    /// SQL Server `ALTER COLUMN`, which restate the type).
+    /// SQL Server `ALTER COLUMN`, which restate the type; copied columns).
     pub fn needs_structure(&self, flavor: SqlFlavor) -> bool {
-        matches!(flavor, SqlFlavor::Mysql | SqlFlavor::Sqlserver | SqlFlavor::Clickhouse)
-            && matches!(self, Self::AlterColumn { data_type, nullable, .. } if data_type.is_some() || nullable.is_some())
+        match self {
+            Self::AlterColumn { data_type, nullable, .. } => {
+                matches!(flavor, SqlFlavor::Mysql | SqlFlavor::Sqlserver | SqlFlavor::Clickhouse)
+                    && (data_type.is_some() || nullable.is_some())
+            }
+            Self::DuplicateTable { .. } => !matches!(flavor, SqlFlavor::Clickhouse | SqlFlavor::Snowflake),
+            _ => false,
+        }
+    }
+
+    /// The change needs the table's `CREATE TABLE` text ([`crate::adapter::Session::ddl`]).
+    pub fn needs_definition(&self, flavor: SqlFlavor) -> bool {
+        match self {
+            Self::DuplicateTable { .. } => table_actions::needs_definition(flavor),
+            Self::TruncateTable { restart_identity, .. } => *restart_identity && flavor == SqlFlavor::Sqlite,
+            _ => false,
+        }
+    }
+
+    /// Removes rows: confirmed as destructive whatever SQL the engine runs.
+    pub fn deletes_rows(&self) -> bool {
+        matches!(self, Self::TruncateTable { .. } | Self::EmptyTable { .. })
     }
 }
 
@@ -464,7 +505,34 @@ fn alter_column(
 /// Builds the statements for one change. `structure` is required when
 /// [`SchemaChange::needs_structure`] says so.
 pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&TableStructure>) -> DbResult<Vec<String>> {
+    statements_with(d, change, structure, None)
+}
+
+/// [`statements`] with the table's `CREATE TABLE` text, required when
+/// [`SchemaChange::needs_definition`] says so.
+pub fn statements_with(
+    d: &dyn Dialect,
+    change: &SchemaChange,
+    structure: Option<&TableStructure>,
+    definition: Option<&str>,
+) -> DbResult<Vec<String>> {
     let flavor = d.flavor();
+    table_actions::table_actions(flavor, None).check(change)?;
+    match change {
+        SchemaChange::TruncateTable { table, restart_identity, cascade, disable_foreign_keys } => {
+            let options = TruncateOptions {
+                restart_identity: *restart_identity,
+                cascade: *cascade,
+                disable_foreign_keys: *disable_foreign_keys,
+            };
+            return table_actions::truncate(d, table, options, definition);
+        }
+        SchemaChange::EmptyTable { table } => return table_actions::empty(d, table),
+        SchemaChange::DuplicateTable { table, new_name, with_data } => {
+            return table_actions::duplicate(d, table, new_name, *with_data, structure, definition);
+        }
+        _ => {}
+    }
     if flavor.is_document() {
         return Err(DbError::unsupported("Document collections have no SQL schema to change."));
     }
@@ -509,13 +577,18 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 vec![format!("CREATE TABLE {table} (\n  {}\n)", lines.join(",\n  "))]
             }
         }
-        SchemaChange::DropTable { cascade, .. } => {
+        SchemaChange::DropTable { table: t, cascade } => {
+            let what = match t.kind {
+                NodeKind::View => "VIEW",
+                NodeKind::MaterializedView if flavor != SqlFlavor::Clickhouse => "MATERIALIZED VIEW",
+                _ => "TABLE",
+            };
             let cascade = match flavor {
                 SqlFlavor::Postgres | SqlFlavor::Duckdb | SqlFlavor::Snowflake if *cascade => " CASCADE",
-                SqlFlavor::Oracle if *cascade => " CASCADE CONSTRAINTS",
+                SqlFlavor::Oracle if *cascade && what == "TABLE" => " CASCADE CONSTRAINTS",
                 _ => "",
             };
-            vec![format!("DROP TABLE {table}{cascade}")]
+            vec![format!("DROP {what} {table}{cascade}")]
         }
         SchemaChange::RenameTable { table: t, new_name } => {
             name(new_name, "The new name")?;
@@ -676,6 +749,10 @@ pub fn statements(d: &dyn Dialect, change: &SchemaChange, structure: Option<&Tab
                 _ => format!("DROP CONSTRAINT {q}"),
             })]
         }
+        // Built by `table_actions` above.
+        SchemaChange::TruncateTable { .. } | SchemaChange::EmptyTable { .. } | SchemaChange::DuplicateTable { .. } => {
+            return Err(DbError::internal("table action reached the schema change builder"));
+        }
     })
 }
 
@@ -798,7 +875,10 @@ fn cql_statements(d: &dyn Dialect, change: &SchemaChange) -> DbResult<Option<Vec
                 .collect();
             Some(vec![cql_create_table(d, t, columns, &[], &keys)?])
         }
-        SchemaChange::DropTable { .. } => None,
+        SchemaChange::DropTable { .. }
+        | SchemaChange::TruncateTable { .. }
+        | SchemaChange::EmptyTable { .. }
+        | SchemaChange::DuplicateTable { .. } => None,
         SchemaChange::AddColumn { column, .. } => alter(format!("ADD {}", column_def(d, column)?)),
         SchemaChange::DropColumn { column, .. } => {
             name(column, "The column")?;
@@ -849,7 +929,6 @@ pub fn preview(statements: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::NodeKind;
     use crate::sql::dialect::{MysqlDialect, PostgresDialect};
 
     fn pg_table() -> ObjectRef {
@@ -1143,6 +1222,35 @@ mod tests {
             "RENAME TABLE `shop`.`orders` TO `shop`.`sales`"
         );
         assert_eq!(preview(&["SELECT 1".into(), "SELECT 2".into()]), "SELECT 1;\n\nSELECT 2;\n");
+    }
+
+    #[test]
+    fn drops_views_and_table_actions() {
+        let view = ObjectRef { kind: NodeKind::View, ..pg_table() };
+        let drop = SchemaChange::DropTable { table: view, cascade: true };
+        assert_eq!(statements(&PostgresDialect, &drop, None).unwrap(), [r#"DROP VIEW "public"."orders" CASCADE"#]);
+        let mv = SchemaChange::DropTable {
+            table: ObjectRef { kind: NodeKind::MaterializedView, ..pg_table() },
+            cascade: false,
+        };
+        assert_eq!(statements(&PostgresDialect, &mv, None).unwrap(), [r#"DROP MATERIALIZED VIEW "public"."orders""#]);
+        let empty = SchemaChange::EmptyTable { table: my_table() };
+        assert!(empty.deletes_rows() && !empty.needs_structure(SqlFlavor::Mysql));
+        assert_eq!(statements(&MysqlDialect, &empty, None).unwrap(), ["DELETE FROM `shop`.`orders`"]);
+        let duplicate = SchemaChange::DuplicateTable { table: my_table(), new_name: "copy".into(), with_data: false };
+        assert!(duplicate.needs_structure(SqlFlavor::Mysql) && !duplicate.needs_definition(SqlFlavor::Mysql));
+        assert!(duplicate.needs_definition(SqlFlavor::Sqlite));
+        let truncate = SchemaChange::TruncateTable {
+            table: pg_table(),
+            restart_identity: true,
+            cascade: false,
+            disable_foreign_keys: false,
+        };
+        assert!(truncate.needs_definition(SqlFlavor::Sqlite) && !truncate.needs_definition(SqlFlavor::Postgres));
+        assert_eq!(
+            statements(&PostgresDialect, &truncate, None).unwrap(),
+            [r#"TRUNCATE TABLE "public"."orders" RESTART IDENTITY"#]
+        );
     }
 
     #[test]

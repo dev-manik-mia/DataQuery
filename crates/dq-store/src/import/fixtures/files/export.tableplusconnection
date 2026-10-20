@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Connections</key>
+	<array>
+		<dict>
+			<key>ConnectionName</key>
+			<string>Team API</string>
+			<key>DatabaseHost</key>
+			<string>api-db.internal</string>
+			<key>DatabaseName</key>
+			<string>api</string>
+			<key>DatabasePort</key>
+			<string>5432</string>
+			<key>DatabaseUser</key>
+			<string>api</string>
+			<key>Driver</key>
+			<string>PostgreSQL</string>
+			<key>GroupID</key>
+			<string>G-1</string>
+			<key>ID</key>
+			<string>C-1</string>
+		</dict>
+	</array>
+	<key>Groups</key>
+	<array>
+		<dict>
+			<key>ID</key>
+			<string>G-1</string>
+			<key>Name</key>
+			<string>Team</string>
+		</dict>
+	</array>
+</dict>
+</plist>

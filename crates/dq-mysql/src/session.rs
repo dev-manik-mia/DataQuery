@@ -91,7 +91,7 @@ impl MySession {
         })
     }
 
-    fn err(&self, e: &mysql_async::Error) -> DbError {
+    pub(crate) fn err(&self, e: &mysql_async::Error) -> DbError {
         map_error(e, self.params.password())
     }
 
@@ -102,6 +102,11 @@ impl MySession {
     /// A pooled read-only catalog connection, for monitoring.
     pub(crate) async fn catalog_conn(&self) -> DbResult<Conn> {
         self.catalog().await
+    }
+
+    /// A pooled write connection, for account changes.
+    pub(crate) async fn write_conn(&self) -> DbResult<Conn> {
+        self.write.get_conn().await.map_err(|e| self.err(&e))
     }
 
     pub(crate) fn flavor(&self) -> Flavor {
@@ -410,6 +415,10 @@ impl Session for MySession {
     }
 
     fn monitor(&self) -> Option<&dyn dq_core::monitor::Monitor> {
+        Some(self)
+    }
+
+    fn users(&self) -> Option<&dyn dq_core::users::UserAdmin> {
         Some(self)
     }
 

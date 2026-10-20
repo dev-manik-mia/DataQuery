@@ -227,6 +227,7 @@ export function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }
             <SqlEditor
               ref={editor}
               value={tab.sql}
+              vimMode={settings.editor_vim}
               flavor={flavor}
               errorAt={tab.run.errorAt}
               active={active}

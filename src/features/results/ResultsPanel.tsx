@@ -11,6 +11,7 @@ import { useSettings } from '@/stores/settings';
 import { useUi } from '@/stores/ui';
 import { useWorkspace, type QueryTab, type ResultSet, type ResultsTab, type RunMessage } from '@/stores/workspace';
 
+import { ChartView } from './ChartView';
 import { PlanView } from './PlanView';
 import styles from './Results.module.css';
 
@@ -22,6 +23,7 @@ export function ResultsPanel({ tab }: { tab: QueryTab }) {
   const rowLimit = useSettings((s) => s.settings.row_limit);
   const result = typeof run.active === 'number' ? run.results[run.active] : undefined;
   const hasError = run.messages.some((m) => m.kind === 'error');
+  const [chart, setChart] = useState(false);
 
   const items: TabItem<ResultsTab>[] = [
     ...run.results.map((r, i) => ({ id: i, label: `Result ${i + 1}`, count: `${formatCount(r.rows.length)}${r.hasMore ? '+' : ''}` })),
@@ -31,7 +33,7 @@ export function ResultsPanel({ tab }: { tab: QueryTab }) {
 
   return (
     <section className={styles.panel} aria-label="Results">
-      <Tabs label="Results" items={items} value={run.active} onChange={(id) => setActive(tab.id, id)} trailing={result && <ResultActions result={result} index={run.active as number} />} />
+      <Tabs label="Results" items={items} value={run.active} onChange={(id) => setActive(tab.id, id)} trailing={result && <ResultActions result={result} index={run.active as number} chart={chart} onChart={setChart} />} />
       {run.status === 'running' && <RunningBar startedAt={run.startedAt} />}
       {run.status === 'running' && !result ? (
         <RunningSkeleton />
@@ -39,6 +41,8 @@ export function ResultsPanel({ tab }: { tab: QueryTab }) {
         <PlanView plan={run.plan} />
       ) : run.active === 'messages' || run.active === 'plan' ? (
         <MessagesView messages={run.messages} idle={run.status === 'idle'} />
+      ) : result && chart ? (
+        <ChartView key={`${tab.id}:${run.active}:${result.sql}`} columns={result.columns} rows={result.rows} />
       ) : result ? (
         <ResultGrid result={result} />
       ) : (
@@ -71,7 +75,7 @@ function ResultGrid({ result }: { result: ResultSet }) {
   return <DataGrid label="Query result" columns={columns} rows={rows} emptyText="The statement returned no rows." />;
 }
 
-function ResultActions({ result, index }: { result: ResultSet; index: number }) {
+function ResultActions({ result, index, chart, onChart }: { result: ResultSet; index: number; chart: boolean; onChart: (on: boolean) => void }) {
   const toast = useUi((s) => s.toast);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
   const [copying, setCopying] = useState(false);
@@ -101,6 +105,9 @@ function ResultActions({ result, index }: { result: ResultSet; index: number }) 
   const base = `result-${index + 1}`;
   return (
     <div className={styles.tabActions}>
+      <Button size="xs" aria-pressed={chart} title={chart ? 'Show the rows' : 'Chart the loaded rows (bar, line, pie, scatter)'} onClick={() => onChart(!chart)}>
+        {chart ? 'Grid' : 'Chart'}
+      </Button>
       <Button
         size="xs"
         busy={copying}

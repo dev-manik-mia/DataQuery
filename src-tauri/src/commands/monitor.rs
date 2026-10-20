@@ -20,6 +20,7 @@ pub async fn monitor_snapshot(
     session_id: String,
     long_running_secs: u32,
 ) -> CmdResult<MonitorSnapshot> {
+    super::license::require_pro(&state, "Monitoring").await?;
     let open = state.session(&session_id).await?;
     monitor(&*open.session)?.snapshot(long_running_secs.clamp(1, 86_400)).await
 }
@@ -30,6 +31,7 @@ pub async fn server_settings(
     session_id: String,
     search: Option<String>,
 ) -> CmdResult<Vec<ServerSetting>> {
+    super::license::require_pro(&state, "Monitoring").await?;
     let open = state.session(&session_id).await?;
     let search = search.map(|s| s.trim().chars().take(100).collect::<String>()).filter(|s| !s.is_empty());
     monitor(&*open.session)?.server_settings(search.as_deref()).await
@@ -42,6 +44,7 @@ pub async fn largest_tables(
     database: String,
     limit: u32,
 ) -> CmdResult<Vec<ObjectSize>> {
+    super::license::require_pro(&state, "Monitoring").await?;
     let open = state.session(&session_id).await?;
     monitor(&*open.session)?.largest_tables(&database, limit).await
 }
@@ -58,6 +61,7 @@ pub async fn kill_process(
     terminate: bool,
     confirmation: Option<Confirmation>,
 ) -> CmdResult<Guarded<bool>> {
+    super::license::require_pro(&state, "Monitoring").await?;
     let open = state.session(&session_id).await?;
     let connection = state.connection(&open.connection_id).await?;
     let request = safety::kill_request(&connection, pid, user.as_deref(), terminate);

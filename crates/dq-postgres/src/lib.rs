@@ -9,6 +9,7 @@ mod error;
 mod monitor;
 mod session;
 mod tls;
+mod users;
 pub mod values;
 
 use std::sync::Arc;
@@ -50,6 +51,7 @@ impl PostgresAdapter {
         monitoring: true,
         transactions: true,
         schema_diff: true,
+        backup: true,
     };
 }
 
@@ -68,7 +70,8 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Self::CAPABILITIES
+        // CockroachDB rejects pg_dump (see `dq_core::backup::BackupFamily::of`).
+        Capabilities { backup: self.engine == Engine::Postgres, ..Self::CAPABILITIES }
     }
 
     async fn test(&self, params: &ConnectParams) -> DbResult<ServerInfo> {

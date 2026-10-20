@@ -7,4 +7,8 @@ export type Capabilities = { explorer: boolean, query_editor: boolean, grid_edit
 /**
  * Databases contain schemas (`PostgreSQL`) rather than being the schema (`MySQL`).
  */
-schemas: boolean, materialized_views: boolean, explain: boolean, monitoring: boolean, transactions: boolean, schema_diff: boolean, };
+schemas: boolean, materialized_views: boolean, explain: boolean, monitoring: boolean, transactions: boolean, schema_diff: boolean, 
+/**
+ * Backup and restore, see [`crate::backup::BackupFamily`].
+ */
+backup: boolean, };

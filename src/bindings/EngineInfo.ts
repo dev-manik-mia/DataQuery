@@ -22,6 +22,10 @@ summary: string, versions: string, priority: Priority,
  */
 available: boolean, 
 /**
+ * Tested only against an emulator, not the real service (see `Engine::is_beta`).
+ */
+beta: boolean, 
+/**
  * Connects to a local file instead of host and port.
  */
 file_based: boolean, capabilities: Capabilities, };

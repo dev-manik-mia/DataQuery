@@ -76,7 +76,7 @@ export function EnginePicker() {
                         <span className={styles.name}>{e.name}</span>
                         <span className={`${styles.engineSub} ellipsis`}>{e.summary}</span>
                       </span>
-                      <PriorityChip priority={e.priority} available={e.available} />
+                      <PriorityChip priority={e.priority} available={e.available} beta={e.beta} />
                     </button>
                   ))}
                 </section>

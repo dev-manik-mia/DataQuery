@@ -41,6 +41,7 @@ impl OracleAdapter {
         monitoring: true,
         transactions: true,
         schema_diff: true,
+        backup: false,
     };
 }
 

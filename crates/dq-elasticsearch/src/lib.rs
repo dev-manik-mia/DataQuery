@@ -39,6 +39,7 @@ impl ElasticsearchAdapter {
         monitoring: true,
         transactions: false,
         schema_diff: false,
+        backup: false,
     };
 }
 

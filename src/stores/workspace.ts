@@ -10,6 +10,7 @@ import type { RunReport } from '@/bindings/RunReport';
 import type { SessionInfo } from '@/bindings/SessionInfo';
 import type { TxAction } from '@/bindings/TxAction';
 import type { TxStatus } from '@/bindings/TxStatus';
+import { t } from '@/i18n';
 import { toAppError } from '@/lib/errors';
 import { formatCount, plural } from '@/lib/format';
 import { uid } from '@/lib/id';
@@ -17,6 +18,7 @@ import { api } from '@/lib/ipc';
 
 import { useCompletion } from './completion';
 import { useExplorer } from './explorer';
+import { withinFreeLimit } from './license';
 import { useSettings } from './settings';
 import { guarded, useUi } from './ui';
 
@@ -96,9 +98,10 @@ export interface ContainerTab {
   schema: string | null;
 }
 
+/** A server page: Monitoring, or Users & roles. */
 export interface MonitorTab {
   id: string;
-  kind: 'monitor';
+  kind: 'monitor' | 'users';
   title: string;
 }
 
@@ -156,6 +159,7 @@ interface WorkspaceState {
   setTableMatches: (id: string, matches: ColumnValue[] | undefined) => void;
   openContainerTab: (kind: ContainerTab['kind'], database: string, schema: string | null) => void;
   openMonitorTab: () => void;
+  openUsersTab: () => void;
   toggleSplit: () => void;
   focusPane: (pane: 'left' | 'right') => void;
   moveToOtherPane: (id: string) => void;
@@ -167,6 +171,8 @@ interface WorkspaceState {
   cycleTab: (step: 1 | -1) => void;
   updateSql: (id: string, sql: string) => void;
   markSaved: (id: string, patch: { title?: string; scriptId?: string | null; filePath?: string | null }) => void;
+  /** Replaces a query tab's text or script link, e.g. after its script changed on disk. */
+  patchQueryTab: (id: string, patch: Partial<Pick<QueryTab, 'sql' | 'savedSql' | 'scriptId' | 'title'>>) => void;
   setTableView: (id: string, view: TableView) => void;
   run: (tabId: string, sql: string, base: number, params?: (string | null)[] | null) => Promise<void>;
   fetchMore: (tabId: string) => Promise<void>;
@@ -262,8 +268,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     else set({ activeTabId: id });
   };
   const addTab = (tab: Tab) => {
+    if (!withinFreeLimit('tabs', get().tabs.length)) return;
     set({ tabs: [...get().tabs, tab] });
     showTab(tab.id);
+  };
+  /** Server pages are opened once per session and shown again after that. */
+  const openServerPage = (kind: MonitorTab['kind'], title: string) => {
+    const existing = get().tabs.find((tab) => tab.kind === kind);
+    if (existing) return showTab(existing.id);
+    addTab({ id: uid('tab'), kind, title });
   };
 
   return {
@@ -377,11 +390,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       addTab({ id: uid('tab'), kind, database, schema, title: kind === 'diagram' ? `ER · ${where}` : kind === 'console' ? `Console · db ${where}` : `Migrations · ${where}` });
     },
 
-    openMonitorTab: () => {
-      const existing = get().tabs.find((t) => t.kind === 'monitor');
-      if (existing) return showTab(existing.id);
-      addTab({ id: uid('tab'), kind: 'monitor', title: 'Monitoring' });
-    },
+    openMonitorTab: () => openServerPage('monitor', 'Monitoring'),
+    openUsersTab: () => openServerPage('users', t('nav.users')),
 
     toggleSplit: () => {
       const { split, tabs, activeTabId } = get();
@@ -474,6 +484,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
 
     markSaved: (id, patch) =>
       patchTab(id, (t) => (t.kind === 'query' ? { ...t, savedSql: t.sql, title: patch.title ?? t.title, scriptId: patch.scriptId === undefined ? t.scriptId : patch.scriptId, filePath: patch.filePath === undefined ? t.filePath : patch.filePath } : t)),
+
+    patchQueryTab: (id, patch) => patchTab(id, (t) => (t.kind === 'query' ? { ...t, ...patch } : t)),
 
     setTableView: (id, view) => patchTab(id, (t) => (t.kind === 'table' ? { ...t, view } : t)),
 
@@ -635,13 +647,17 @@ function scheduleAutosave(tabId: string) {
       const tab = useWorkspace.getState().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
       if (!tab?.scriptId || tab.sql === tab.savedSql) return;
       const sql = tab.sql;
+      // The base makes the backend refuse to overwrite a script that changed elsewhere (its file in the scripts folder).
       api
-        .updateScriptSql(tab.scriptId, sql)
+        .updateScriptSql(tab.scriptId, sql, tab.savedSql)
         .then(() => {
           const now = useWorkspace.getState().tabs.find((t): t is QueryTab => t.id === tabId && t.kind === 'query');
           if (now?.sql === sql) useWorkspace.getState().markSaved(tabId, {});
         })
-        .catch((e) => console.warn('autosave failed', e));
+        .catch((e) => {
+          if (toAppError(e).info.code === 'script_conflict') void import('@/features/history/scriptConflicts').then((m) => m.resolveScriptConflict(tabId));
+          else console.warn('autosave failed', e);
+        });
     }, 1200),
   );
 }

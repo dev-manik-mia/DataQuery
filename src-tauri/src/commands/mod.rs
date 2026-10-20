@@ -3,19 +3,24 @@
 //! the UI thread.
 
 pub mod ai;
+pub mod backup;
 pub mod connections;
+pub mod data_compare;
 pub mod documents;
 pub mod explorer;
 pub mod history;
 pub mod keys;
+pub mod license;
 pub mod monitor;
 pub mod query;
 pub mod schema;
 pub mod session;
 pub mod settings;
+pub mod sync;
 pub mod system;
 pub mod table;
 pub mod transfer;
+pub mod users;
 
 use dq_core::DbResult;
 use serde::Serialize;

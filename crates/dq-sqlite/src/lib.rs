@@ -3,6 +3,7 @@
 //! The explorer goes database (`main`, plus any `ATTACH`ed ones) → tables
 //! and views → indexes and triggers, like `MySQL`.
 
+mod backup;
 mod catalog;
 mod error;
 mod explain;
@@ -38,6 +39,7 @@ impl SqliteAdapter {
         monitoring: false,
         transactions: true,
         schema_diff: true,
+        backup: true,
     };
 }
 

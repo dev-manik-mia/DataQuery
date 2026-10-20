@@ -13,8 +13,10 @@ import type { SavedConnection } from '@/bindings/SavedConnection';
 
 type Args = Record<string, unknown>;
 
-const caps = { explorer: true, query_editor: true, grid_edit: true, import_export: true, cancel: true, ddl: true, schemas: true, materialized_views: true, explain: true, monitoring: true, transactions: true, schema_diff: true };
+const caps = { explorer: true, query_editor: true, grid_edit: true, import_export: true, cancel: true, ddl: true, schemas: true, materialized_views: true, explain: true, monitoring: true, transactions: true, schema_diff: true, backup: true };
 const none = { ...caps, explorer: false, query_editor: false, grid_edit: false, import_export: false, cancel: false, ddl: false };
+/** Engines with backup and restore (`dq_core::backup::BackupFamily::of`). */
+const BACKUP = new Set(['postgres', 'mysql', 'mariadb', 'sqlite', 'mongodb']);
 /** Capabilities each adapter lacks, as the Rust adapters report them. */
 const GAPS: Record<string, (keyof typeof caps)[]> = {
   clickhouse: ['grid_edit', 'transactions'],
@@ -34,9 +36,12 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
 
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
   ({
-    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, file_based: port === null,
-    capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])) } : none,
+    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: e === 'snowflake' || e === 'dynamodb', file_based: port === null,
+    capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])), backup: BACKUP.has(e) } : none,
   }) as EngineInfo;
+
+const FREE = { plan: 'free', source_build: false, claims: null, limits: { tabs: 4, windows: 4, filters: 4 } };
+let license: unknown = FREE;
 
 const ENGINES: EngineInfo[] = [
   engine('postgres', 'PostgreSQL', 'Pg', 250, 'relational', 'SQL', 5432, '5432 · SQL · v12–17', 'MVP', true),
@@ -171,9 +176,17 @@ function split(sql: string) {
 }
 
 const handlers: Record<string, (a: Args) => unknown> = {
-  app_info: () => ({ name: 'DataQuery', version: '0.1.0', os: 'macos', arch: 'aarch64', license: 'MIT OR Apache-2.0' }),
+  app_info: () => ({ name: 'DataQuery', version: '0.1.0', os: 'macos', arch: 'aarch64', license: 'Proprietary' }),
   list_engines: () => ENGINES,
   keychain_status: () => ({ available: true, backend: 'macOS Keychain', detail: null }),
+  license_status: () => license,
+  license_activate: (a) => {
+    if (!String(a.key).startsWith('DQ1.')) throw { kind: 'invalid_input', code: null, message: 'This licence token is not valid.', detail: null, hint: null, action: null, position: null };
+    license = { plan: 'pro', source_build: false, limits: null, claims: { v: 1, plan: 'pro', name: 'Preview User', email: 'preview@example.com', order: '1', instance: null, issued: '2026-10-20' } };
+    return license;
+  },
+  license_deactivate: () => (license = FREE),
+  open_pricing: () => null,
   analyze_sql: (a) => split(String(a.sql)),
   format_sql: (a) => String(a.sql),
   get_settings: () => ({
@@ -188,6 +201,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     editor_font_family: 'JetBrains Mono',
     editor_line_height: 150,
     editor_ligatures: false,
+    editor_vim: false,
     keymap: {},
     page_size: 100,
     manual_commit: false,
@@ -203,8 +217,23 @@ const handlers: Record<string, (a: Args) => unknown> = {
     ai_endpoint: 'http://localhost:11434/v1',
     check_updates_on_launch: true,
     auto_install_updates: false,
+    sync_folder: '',
+    scripts_folder: '',
+    backup_tools: {},
   }),
+  sync_status: () => ({ folder: null, has_passphrase: false, running: false, last_synced_at: null, error: null, warnings: [], changed: false, connections: 0 }),
+  sync_now: () => ({ folder: null, has_passphrase: false, running: false, last_synced_at: null, error: null, warnings: [], changed: false, connections: 0 }),
+  scripts_folder_status: () => ({ folder: null, report: null, error: null }),
+  scripts_folder_sync: () => ({ folder: null, report: null, error: null }),
   save_settings: (a) => a.settings,
+  backup_tools: () =>
+    ['pg_dump', 'pg_restore', 'psql', 'mysqldump', 'mysql', 'mongodump', 'mongorestore'].map((tool) => ({ tool, path: `/opt/homebrew/bin/${tool}`, version: '18.4', custom: false, error: null })),
+  backup_plan: () => ({
+    family: 'postgres',
+    formats: ['custom', 'plain', 'directory', 'tar'],
+    tools: ['pg_dump', 'pg_restore', 'psql'].map((tool) => ({ tool, path: `/opt/homebrew/bin/${tool}`, version: '18.4', custom: false, error: null })),
+    warnings: [],
+  }),
   get_ui_state: () => null,
   set_ui_state: () => null,
   list_connections: () => ({ connections: CONNECTIONS, folders: [{ id: 'f1', name: 'Kestrel' }] }),

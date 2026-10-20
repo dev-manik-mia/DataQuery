@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
+use crate::backup::NativeBackup;
 use crate::config::ConnConfig;
 use crate::document::DocumentStore;
 use crate::edit::BoundStatement;
@@ -22,6 +23,7 @@ use crate::node::{Node, ObjectRef};
 use crate::result::{ColumnMeta, ExecOptions, Row, RowsPage, ServerInfo, StatementResult};
 use crate::schema::{Dependencies, KeyRole, SchemaModel, TableStructure};
 use crate::sql::Dialect;
+use crate::users::UserAdmin;
 use crate::value::CellLimits;
 
 /// Receives streamed rows in batches.
@@ -173,6 +175,11 @@ pub trait Session: Send + Sync {
         None
     }
 
+    /// User and role management, when the engine supports it.
+    fn users(&self) -> Option<&dyn UserAdmin> {
+        None
+    }
+
     /// Document operations, for document engines (`MongoDB`, `DynamoDB`).
     /// Their tables open in the Documents view, and table exports and imports
     /// go through these instead of generated SQL.
@@ -200,6 +207,11 @@ pub trait Session: Send + Sync {
 
     /// Key browser operations, for key-value engines (Redis, Valkey, Dragonfly).
     fn keys(&self) -> Option<&dyn KeyValueStore> {
+        None
+    }
+
+    /// Backup and restore without external tools, for embedded engines (`SQLite`).
+    fn native_backup(&self) -> Option<&dyn NativeBackup> {
         None
     }
 

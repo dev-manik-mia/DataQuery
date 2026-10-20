@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 
 import { Button, Dialog, TextField } from '@/components/ui';
 import { t } from '@/i18n';
+import { BackupDialog } from '@/features/transfer/BackupDialog';
+import { useBackupRequest } from '@/features/transfer/backup';
 import { ExportDialog } from '@/features/transfer/ExportDialog';
 import { useExportRequest } from '@/features/transfer/exportData';
 import { useUi } from '@/stores/ui';
@@ -93,13 +95,35 @@ function QuestionDialog() {
   );
 }
 
+/** A question with several answers (e.g. a script changed on disk while edited). */
+function ChoiceDialog() {
+  const choice = useUi((s) => s.choice);
+  if (!choice) return null;
+  return (
+    <Dialog
+      title={choice.title}
+      onClose={() => choice.resolve(null)}
+      footer={choice.choices.map((c) => (
+        <Button key={c.value} variant={c.variant} onClick={() => choice.resolve(c.value)}>
+          {c.label}
+        </Button>
+      ))}
+    >
+      <p>{choice.body}</p>
+    </Dialog>
+  );
+}
+
 export function GlobalDialogs() {
   const exporting = useExportRequest((s) => s.request);
+  const backingUp = useBackupRequest((s) => s.request);
   return (
     <>
       {exporting && <ExportDialog key={exporting.baseName + exporting.format} />}
+      {backingUp && <BackupDialog key={`${backingUp.mode}:${backingUp.database}:${backingUp.schema ?? ''}`} />}
       <ConfirmationDialog />
       <QuestionDialog />
+      <ChoiceDialog />
     </>
   );
 }

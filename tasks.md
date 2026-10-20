@@ -284,6 +284,26 @@ no telemetry. Shared logic goes in `dq-core` (`ops`, `sql`) and `src/lib`; adapt
 
 ---
 
+## 28. Free and Pro; TablePlus parity
+
+- [x] T28.1 **Free and Pro plans**: Pro is an Ed25519-signed token verified offline (`src-tauri/src/license.rs`); a Lemon Squeezy licence key is exchanged once at the website's activation endpoint (`DataQueryWebsite/functions/api/license/[action].js`), or a `DQ1.…` token from `scripts/license-token.mjs` is pasted directly. Settings → License activates and deactivates (frees the seat). Official builds (`DATAQUERY_OFFICIAL_BUILD`, set in CI) limit Free to 4 tabs, 4 windows and 4 filter conditions; monitoring, schema diff and data compare are Pro (ProGate page in the UI, refused in the backend). Builds from source have every feature.
+- [x] T28.2 **Import connections from other apps**: TablePlus (`Connections.plist`, groups), DBeaver (`data-sources*.json`), Sequel Ace / Sequel Pro (`Favorites.plist`), DataGrip and other JetBrains IDEs (`dataSources.xml`, JDBC URLs, `sshConfigs.xml`); detected at their standard paths per OS or picked by hand; preview with duplicates marked; never imports secrets (`dq_store::import`).
+- [x] T28.3 **Backup and restore**: `pg_dump`/`pg_restore`/`psql`, `mysqldump`/`mariadb-dump` + client, `mongodump`/`mongorestore`, SQLite online backup API; tool discovery with version matching and per-tool overrides in Settings; passwords via environment or a 0600 option file; SSH tunnels; progress and cancel; restore is destructive-confirmed and refused on read-only profiles (`dq_core::backup`).
+- [x] T28.4 **Row details panel** (Space) in every grid: the active row as a form with types, editing into pending changes, NULL, inspect, FK links, column filter; ⇧Space opens the cell inspector.
+- [x] T28.5 **Table actions**: Truncate (dialect options), Empty, Duplicate (structure or with rows) for every SQL engine that can; multi-select in the explorer (⌘/Ctrl-click, Shift ranges, keyboard) with bulk Drop / Truncate / Empty / Copy names; all through preview → confirm → run (`dq_core::sql::table_actions`).
+- [x] T28.6 **Data compare**: merge-join of two key-ordered streams (bounded memory, same or different SQL engines), value normalisation across engines, filters, tolerance; counts, differing rows, sync SQL (INSERT / UPDATE / DELETE) to copy, save, open or apply in one transaction (`dq_core::data_compare`).
+- [x] T28.7 **Charts from a result**: bar, line, pie (small slices folded into "Other"), scatter; aggregation per x value; validated categorical palette in both themes; tooltips and crosshair.
+- [x] T28.8 **Vim mode** in the SQL editor (`@replit/codemirror-vim`, `:w` saves), Settings → Editor.
+- [x] T28.9 **Users and roles** for PostgreSQL, CockroachDB, MySQL and MariaDB: accounts and attributes, privileges, create / alter / rename / drop, password changes (masked in previews and history; SCRAM hash on PostgreSQL), grant / revoke and role membership (`dq_core::users`).
+- [x] T28.10 **Stable / Beta labels** in the engine picker; Snowflake and DynamoDB are Beta (tested only against fakesnow and DynamoDB Local).
+- [x] T28.11 **Connection sync** through an encrypted file (`DataQuery.connections.dqsync`, Argon2id + AES-256-GCM) in a folder the user picks; last writer wins per item, tombstones, conflicted copies merged; no secrets in the file.
+- [x] T28.12 **Scripts folder**: saved scripts mirrored two-way as plain `.sql` files (sub-folders = script folders, optional `-- dataquery:` header), watched for changes; unsaved tabs ask before reloading.
+- [x] T28.13 README and website: why DataQuery, Free vs Pro, TablePlus Free vs DataQuery Free and TablePlus paid vs DataQuery Pro (from TablePlus's pricing page and docs index, 2026-10-20), licence setup.
+
+Not verified: TablePlus on Windows (path and format undocumented), DBeaver TLS property variants, DataGrip `ssl-config` values; backup tools on Windows and with TLS files; data compare writes into ClickHouse, SQL Server and Oracle targets; users and roles on SQL Server (not built). The TablePlus importer was checked against a real macOS `Connections.plist` (9 connections, MySQL and PostgreSQL, SSH).
+
+---
+
 ## Verification
 
 | Area | How it was verified |

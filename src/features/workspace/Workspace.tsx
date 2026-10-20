@@ -8,10 +8,12 @@ import { QueryTabView } from '@/features/editor/QueryTabView';
 import { Explorer } from '@/features/explorer/Explorer';
 import { Console } from '@/features/keys/Console';
 import { KeyBrowser } from '@/features/keys/KeyBrowser';
+import { ProGate } from '@/features/license/ProGate';
 import { MonitorView } from '@/features/monitor/MonitorView';
 import { DiagramView } from '@/features/schema/DiagramView';
 import { MigrationsView } from '@/features/schema/MigrationsView';
 import { TableTabView } from '@/features/table/TableTabView';
+import { UsersView } from '@/features/users/UsersView';
 import { t } from '@/i18n';
 import { shortcutLabel } from '@/lib/platform';
 import { LAYOUT_LIMITS, useLayout } from '@/stores/layout';
@@ -34,7 +36,13 @@ const TabContent = memo(function TabContent({ tab, active }: { tab: Tab; active:
     case 'console':
       return <Console full />;
     case 'monitor':
-      return <MonitorView active={active} />;
+      return (
+        <ProGate feature="Monitoring" summary="Watch the server live: connections against the limit, running queries you can cancel or terminate, locks and blocking chains, replication lag, server settings and the largest tables.">
+          <MonitorView active={active} />
+        </ProGate>
+      );
+    case 'users':
+      return <UsersView active={active} />;
   }
 });
 

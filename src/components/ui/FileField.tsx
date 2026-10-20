@@ -16,12 +16,14 @@ interface FileFieldProps {
   allowCreate?: boolean;
   /** The path can also be typed (e.g. `:memory:`). */
   typed?: boolean;
+  /** Choose a folder instead of a file. */
+  directory?: boolean;
 }
 
 /** A path chosen with the native file dialog. Only the path is kept, never the contents. */
-export function FileField({ label, value, onChange, hint, error, filters, className, allowCreate, typed }: FileFieldProps) {
+export function FileField({ label, value, onChange, hint, error, filters, className, allowCreate, typed, directory = false }: FileFieldProps) {
   const browse = async () => {
-    const chosen = await open({ multiple: false, directory: false, filters });
+    const chosen = await open({ multiple: false, directory, filters });
     if (typeof chosen === 'string') onChange(chosen);
   };
   const create = async () => {
@@ -37,7 +39,7 @@ export function FileField({ label, value, onChange, hint, error, filters, classN
             className="dq-input dq-input--mono"
             readOnly={!typed}
             value={value ?? ''}
-            placeholder="No file"
+            placeholder={directory ? 'No folder' : 'No file'}
             aria-describedby={describedBy}
             onChange={(e) => onChange(e.target.value || null)}
           />

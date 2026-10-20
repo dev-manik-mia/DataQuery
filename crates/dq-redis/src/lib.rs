@@ -44,6 +44,7 @@ impl RedisAdapter {
         monitoring: true,
         transactions: true,
         schema_diff: false,
+        backup: false,
     };
 }
 

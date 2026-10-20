@@ -67,6 +67,8 @@ pub struct Capabilities {
     pub monitoring: bool,
     pub transactions: bool,
     pub schema_diff: bool,
+    /// Backup and restore, see [`crate::backup::BackupFamily`].
+    pub backup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -87,6 +89,8 @@ pub struct EngineInfo {
     pub priority: Priority,
     /// True when an adapter for this engine ships in this build.
     pub available: bool,
+    /// Tested only against an emulator, not the real service (see `Engine::is_beta`).
+    pub beta: bool,
     /// Connects to a local file instead of host and port.
     pub file_based: bool,
     pub capabilities: Capabilities,
@@ -374,6 +378,7 @@ pub fn catalog(capabilities_of: impl Fn(Engine) -> Option<Capabilities>) -> Vec<
                 versions: s.versions,
                 priority: s.priority,
                 available: caps.is_some(),
+                beta: s.engine.is_beta(),
                 file_based: s.engine.is_file_based(),
                 capabilities: caps.unwrap_or_default(),
             }
@@ -388,6 +393,12 @@ impl Engine {
 
     pub fn default_port(self) -> Option<u16> {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
+    }
+
+    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`), never
+    /// a real account; the engine picker labels them "Beta".
+    pub fn is_beta(self) -> bool {
+        matches!(self, Self::Snowflake | Self::Dynamodb)
     }
 
     /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.

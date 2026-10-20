@@ -1,0 +1,8 @@
+<application>
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="KEY_PAIR" host="bastion.prod.example.com" id="7d3a1f42-9c8b-4e6d-a5f4-0c1b2a3d4e5f" keyPath="$USER_HOME$/.ssh/prod_ed25519" port="22" nameFormat="DESCRIPTIVE" username="ec2-user" useOpenSSHConfig="false" />
+      <sshConfig authType="OPEN_SSH" host="jump.corp.local" id="8e4b2053-ad9c-4f7e-b6a5-1d2c3b4a5f6e" port="2200" nameFormat="DESCRIPTIVE" username="me" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</application>

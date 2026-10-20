@@ -5,6 +5,8 @@ mod ai_client;
 mod cloud_auth;
 mod commands;
 mod connector;
+mod folder_sync;
+mod license;
 mod registry;
 mod safety;
 mod state;
@@ -36,12 +38,19 @@ pub fn run() {
             let store = Store::open(&data_dir.join("dataquery.db")).map_err(|e| e.message)?;
             let known_hosts = dq_ssh::KnownHosts::new(data_dir.join("known_hosts"));
             app.manage(AppState::new(store, Arc::new(KeyringSecrets), known_hosts));
+            app.manage(folder_sync::FolderSync::default());
+            folder_sync::start(app.handle());
+            app.manage(commands::data_compare::DataCompares::default());
             app.set_menu(menu(app.handle())?)?;
             spawn_idle_reaper(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::ai::ai_disclosure,
+            commands::license::license_status,
+            commands::license::license_activate,
+            commands::license::license_deactivate,
+            commands::license::open_pricing,
             commands::ai::ai_ask,
             commands::ai::ai_providers,
             commands::ai::ai_models,
@@ -71,6 +80,9 @@ pub fn run() {
             commands::connections::trust_host_key,
             commands::connections::export_connections,
             commands::connections::import_connections,
+            commands::connections::detect_connection_sources,
+            commands::connections::read_connection_source,
+            commands::connections::import_connection_list,
             commands::session::connect,
             commands::session::reconnect,
             commands::session::disconnect,
@@ -89,10 +101,20 @@ pub fn run() {
             commands::monitor::server_settings,
             commands::monitor::largest_tables,
             commands::monitor::kill_process,
+            commands::users::user_accounts,
+            commands::users::user_privileges,
+            commands::users::user_change_preview,
+            commands::users::apply_user_change,
             commands::schema::schema_change_preview,
             commands::schema::apply_schema_changes,
             commands::schema::schema_diff,
             commands::schema::framework_migrations,
+            commands::data_compare::data_compare_plan,
+            commands::data_compare::data_compare,
+            commands::data_compare::data_compare_sql,
+            commands::data_compare::data_compare_save,
+            commands::data_compare::data_compare_apply,
+            commands::data_compare::data_compare_discard,
             commands::table::table_structure,
             commands::table::table_ddl,
             commands::table::table_page,
@@ -121,6 +143,10 @@ pub fn run() {
             commands::transfer::import_preview,
             commands::transfer::import_data,
             commands::transfer::cancel_transfer,
+            commands::backup::backup_tools,
+            commands::backup::backup_plan,
+            commands::backup::backup_database,
+            commands::backup::restore_database,
             commands::history::list_history,
             commands::history::clear_history,
             commands::history::apply_history_retention,
@@ -131,6 +157,13 @@ pub fn run() {
             commands::history::list_snippets,
             commands::history::save_snippet,
             commands::history::delete_snippet,
+            commands::sync::sync_status,
+            commands::sync::sync_configure,
+            commands::sync::sync_disable,
+            commands::sync::sync_now,
+            commands::sync::scripts_folder_status,
+            commands::sync::set_scripts_folder,
+            commands::sync::scripts_folder_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running DataQuery");

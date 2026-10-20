@@ -5,20 +5,32 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 
+import type { AccountList } from '@/bindings/AccountList';
+import type { AccountPrivileges } from '@/bindings/AccountPrivileges';
+import type { AccountRef } from '@/bindings/AccountRef';
 import type { AiAnswer } from '@/bindings/AiAnswer';
 import type { AiDisclosure } from '@/bindings/AiDisclosure';
 import type { AiProvider } from '@/bindings/AiProvider';
 import type { AiRequest } from '@/bindings/AiRequest';
 import type { AppInfo } from '@/bindings/AppInfo';
+import type { BackupOptions } from '@/bindings/BackupOptions';
+import type { BackupPlan } from '@/bindings/BackupPlan';
+import type { BackupReport } from '@/bindings/BackupReport';
 import type { ApplyReport } from '@/bindings/ApplyReport';
 import type { Cell } from '@/bindings/Cell';
 import type { ColumnMapping } from '@/bindings/ColumnMapping';
 import type { ColumnValue } from '@/bindings/ColumnValue';
 import type { Confirmation } from '@/bindings/Confirmation';
 import type { ConnectionDraft } from '@/bindings/ConnectionDraft';
+import type { ConnectionImport } from '@/bindings/ConnectionImport';
 import type { ConnectionImportReport } from '@/bindings/ConnectionImportReport';
 import type { ConnectionList } from '@/bindings/ConnectionList';
 import type { Dependencies } from '@/bindings/Dependencies';
+import type { CompareTable } from '@/bindings/CompareTable';
+import type { ComparePlan } from '@/bindings/ComparePlan';
+import type { DataCompareOptions } from '@/bindings/DataCompareOptions';
+import type { DataCompareResult } from '@/bindings/DataCompareResult';
+import type { DetectedSource } from '@/bindings/DetectedSource';
 import type { DiffSide } from '@/bindings/DiffSide';
 import type { DocIndex } from '@/bindings/DocIndex';
 import type { DocumentChange } from '@/bindings/DocumentChange';
@@ -31,6 +43,7 @@ import type { ExportReport } from '@/bindings/ExportReport';
 import type { ExportSource } from '@/bindings/ExportSource';
 import type { FindRequest } from '@/bindings/FindRequest';
 import type { Folder } from '@/bindings/Folder';
+import type { ForeignPreview } from '@/bindings/ForeignPreview';
 import type { FrameworkMigrations } from '@/bindings/FrameworkMigrations';
 import type { Guarded } from '@/bindings/Guarded';
 import type { HistoryPage } from '@/bindings/HistoryPage';
@@ -43,6 +56,7 @@ import type { ConsoleReply } from '@/bindings/ConsoleReply';
 import type { KeychainStatus } from '@/bindings/KeychainStatus';
 import type { KeyRole } from '@/bindings/KeyRole';
 import type { KeyWrite } from '@/bindings/KeyWrite';
+import type { LicenseStatus } from '@/bindings/LicenseStatus';
 import type { MonitorSnapshot } from '@/bindings/MonitorSnapshot';
 import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
@@ -50,6 +64,7 @@ import type { ObjectSize } from '@/bindings/ObjectSize';
 import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import type { ProviderInfo } from '@/bindings/ProviderInfo';
 import type { QueryAnalysis } from '@/bindings/QueryAnalysis';
+import type { RestoreOptions } from '@/bindings/RestoreOptions';
 import type { RowChange } from '@/bindings/RowChange';
 import type { RowCount } from '@/bindings/RowCount';
 import type { RowFilter } from '@/bindings/RowFilter';
@@ -64,21 +79,27 @@ import type { SchemaChange } from '@/bindings/SchemaChange';
 import type { SchemaDiff } from '@/bindings/SchemaDiff';
 import type { SchemaModel } from '@/bindings/SchemaModel';
 import type { ScriptDraft } from '@/bindings/ScriptDraft';
+import type { ScriptsFolderStatus } from '@/bindings/ScriptsFolderStatus';
 import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { ServerSetting } from '@/bindings/ServerSetting';
 import type { SessionInfo } from '@/bindings/SessionInfo';
 import type { SessionOption } from '@/bindings/SessionOption';
+import type { SourceApp } from '@/bindings/SourceApp';
 import type { Settings } from '@/bindings/Settings';
 import type { Snippet } from '@/bindings/Snippet';
 import type { SnippetDraft } from '@/bindings/SnippetDraft';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { StatementInfo } from '@/bindings/StatementInfo';
+import type { SyncKinds } from '@/bindings/SyncKinds';
+import type { SyncStatus } from '@/bindings/SyncStatus';
 import type { TablePage } from '@/bindings/TablePage';
 import type { TablePageRequest } from '@/bindings/TablePageRequest';
 import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
+import type { ToolStatus } from '@/bindings/ToolStatus';
 import type { TxAction } from '@/bindings/TxAction';
 import type { TxStatus } from '@/bindings/TxStatus';
+import type { UserChange } from '@/bindings/UserChange';
 import type { ValuePage } from '@/bindings/ValuePage';
 import type { ValueRequest } from '@/bindings/ValueRequest';
 
@@ -110,6 +131,12 @@ export const api = {
   readSqlFile: (path: string) => call<string>('read_sql_file', { path }),
   writeSqlFile: (path: string, contents: string) => call<void>('write_sql_file', { path, contents }),
 
+  // licence
+  licenseStatus: () => call<LicenseStatus>('license_status'),
+  licenseActivate: (key: string) => call<LicenseStatus>('license_activate', { key }),
+  licenseDeactivate: () => call<LicenseStatus>('license_deactivate'),
+  openPricing: () => call<void>('open_pricing'),
+
   // settings and UI state
   getSettings: () => call<Settings>('get_settings'),
   saveSettings: (settings: Settings) => call<Settings>('save_settings', { settings }),
@@ -129,6 +156,9 @@ export const api = {
   trustHostKey: (host: string, port: number, fingerprint: string) => call<void>('trust_host_key', { host, port, fingerprint }),
   exportConnections: (path: string, ids: string[] | null) => call<number>('export_connections', { path, ids }),
   importConnections: (path: string) => call<ConnectionImportReport>('import_connections', { path }),
+  detectConnectionSources: () => call<DetectedSource[]>('detect_connection_sources'),
+  readConnectionSource: (app: SourceApp, path: string) => call<ForeignPreview>('read_connection_source', { app, path }),
+  importConnectionList: (connections: ConnectionImport[]) => call<ConnectionImportReport>('import_connection_list', { connections }),
 
   // sessions
   connect: (connectionId: string) => call<SessionInfo>('connect', { connectionId }),
@@ -211,12 +241,32 @@ export const api = {
   frameworkMigrations: ({ sessionId }: Sid, database: string, schema: string | null) =>
     call<FrameworkMigrations[]>('framework_migrations', { sessionId, database, schema }),
 
+  // data compare
+  dataComparePlan: (source: CompareTable, target: CompareTable, options: DataCompareOptions | null) =>
+    call<ComparePlan>('data_compare_plan', { source, target, options }),
+  dataCompare: (source: CompareTable, target: CompareTable, options: DataCompareOptions, jobId: string) =>
+    call<DataCompareResult>('data_compare', { source, target, options, jobId }),
+  /** `null` when the script is too large to show; save it to a file instead. */
+  dataCompareSql: (compareId: string, kinds: SyncKinds) => call<string | null>('data_compare_sql', { compareId, kinds }),
+  dataCompareSave: (compareId: string, kinds: SyncKinds, path: string) => call<number>('data_compare_save', { compareId, kinds, path }),
+  dataCompareApply: (compareId: string, kinds: SyncKinds, jobId: string, confirmation: Confirmation | null) =>
+    call<Guarded<ApplyReport>>('data_compare_apply', { compareId, kinds, jobId, confirmation }),
+  dataCompareDiscard: (compareId: string) => call<void>('data_compare_discard', { compareId }),
+
   // monitoring
   monitorSnapshot: ({ sessionId }: Sid, longRunningSecs: number) => call<MonitorSnapshot>('monitor_snapshot', { sessionId, longRunningSecs }),
   serverSettings: ({ sessionId }: Sid, search: string | null) => call<ServerSetting[]>('server_settings', { sessionId, search }),
   largestTables: ({ sessionId }: Sid, database: string, limit: number) => call<ObjectSize[]>('largest_tables', { sessionId, database, limit }),
   killProcess: ({ sessionId }: Sid, pid: number, user: string | null, terminate: boolean, confirmation: Confirmation | null) =>
     call<Guarded<boolean>>('kill_process', { sessionId, pid, user, terminate, confirmation }),
+
+  // users and roles
+  userAccounts: ({ sessionId }: Sid) => call<AccountList>('user_accounts', { sessionId }),
+  userPrivileges: ({ sessionId }: Sid, account: AccountRef, database: string) =>
+    call<AccountPrivileges>('user_privileges', { sessionId, account, database }),
+  userChangePreview: ({ sessionId }: Sid, change: UserChange) => call<string>('user_change_preview', { sessionId, change }),
+  applyUserChange: ({ sessionId }: Sid, change: UserChange, confirmation: Confirmation | null) =>
+    call<Guarded<number>>('apply_user_change', { sessionId, change, confirmation }),
 
   // import / export
   exportData: ({ sessionId }: Sid, source: ExportSource, format: ExportFormat, options: ExportOptions, path: string, jobId: string) =>
@@ -233,17 +283,35 @@ export const api = {
   ) => call<Guarded<ImportReport>>('import_data', { sessionId, object: objectRef(object), source, mapping, options, jobId, confirmation }),
   cancelTransfer: (jobId: string) => call<boolean>('cancel_transfer', { jobId }),
 
+  // backup / restore (cancelled with cancelTransfer)
+  backupTools: () => call<ToolStatus[]>('backup_tools'),
+  backupPlan: ({ sessionId }: Sid) => call<BackupPlan>('backup_plan', { sessionId }),
+  backupDatabase: ({ sessionId }: Sid, options: BackupOptions, path: string, jobId: string) =>
+    call<BackupReport>('backup_database', { sessionId, options, path, jobId }),
+  restoreDatabase: ({ sessionId }: Sid, options: RestoreOptions, path: string, jobId: string, confirmation: Confirmation | null) =>
+    call<Guarded<BackupReport>>('restore_database', { sessionId, options, path, jobId, confirmation }),
+
   // history, scripts, snippets
   listHistory: (query: HistoryQuery) => call<HistoryPage>('list_history', { query }),
   clearHistory: (connectionId: string | null) => call<void>('clear_history', { connectionId }),
   applyHistoryRetention: () => call<void>('apply_history_retention'),
   listScripts: () => call<SavedScript[]>('list_scripts'),
   saveScript: (draft: ScriptDraft) => call<SavedScript>('save_script', { draft }),
-  updateScriptSql: (id: string, sql: string) => call<void>('update_script_sql', { id, sql }),
+  /** With `base`, fails with code `script_conflict` when the script no longer has that SQL. */
+  updateScriptSql: (id: string, sql: string, base: string | null = null) => call<void>('update_script_sql', { id, sql, base }),
   deleteScript: (id: string) => call<void>('delete_script', { id }),
   listSnippets: () => call<Snippet[]>('list_snippets'),
   saveSnippet: (draft: SnippetDraft) => call<Snippet>('save_snippet', { draft }),
   deleteSnippet: (id: string) => call<void>('delete_snippet', { id }),
+
+  // folder sync: connections (encrypted file) and scripts (.sql files)
+  syncStatus: () => call<SyncStatus>('sync_status'),
+  syncConfigure: (folder: string, passphrase: string | null) => call<Settings>('sync_configure', { folder, passphrase }),
+  syncDisable: () => call<Settings>('sync_disable'),
+  syncNow: () => call<SyncStatus>('sync_now'),
+  scriptsFolderStatus: () => call<ScriptsFolderStatus>('scripts_folder_status'),
+  setScriptsFolder: (folder: string | null) => call<Settings>('set_scripts_folder', { folder }),
+  scriptsFolderSync: () => call<ScriptsFolderStatus>('scripts_folder_sync'),
 
   // AI assistant (opt-in; never runs SQL)
   aiDisclosure: ({ sessionId }: Sid, request: AiRequest) => call<AiDisclosure>('ai_disclosure', { sessionId, request }),

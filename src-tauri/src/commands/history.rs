@@ -1,7 +1,8 @@
 use dq_store::{HistoryPage, HistoryQuery, Retention, SavedScript, ScriptDraft, Snippet, SnippetDraft};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::CmdResult;
+use crate::folder_sync::scripts_changed;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -29,19 +30,33 @@ pub async fn list_scripts(state: State<'_, AppState>) -> CmdResult<Vec<SavedScri
 }
 
 #[tauri::command]
-pub async fn save_script(state: State<'_, AppState>, draft: ScriptDraft) -> CmdResult<SavedScript> {
-    state.with_store(move |s| s.save_script(&draft)).await
+pub async fn save_script(app: AppHandle, state: State<'_, AppState>, draft: ScriptDraft) -> CmdResult<SavedScript> {
+    let saved = state.with_store(move |s| s.save_script(&draft)).await?;
+    scripts_changed(&app);
+    Ok(saved)
 }
 
-/// Autosave: writes a linked tab's SQL back to its script.
+/// Autosave: writes a linked tab's SQL back to its script. With `base` (the
+/// SQL the tab last loaded or saved) it fails with `script_conflict` instead
+/// of overwriting a script that changed meanwhile, e.g. in the scripts folder.
 #[tauri::command]
-pub async fn update_script_sql(state: State<'_, AppState>, id: String, sql: String) -> CmdResult<()> {
-    state.with_store(move |s| s.update_script_sql(&id, &sql)).await
+pub async fn update_script_sql(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    sql: String,
+    base: Option<String>,
+) -> CmdResult<()> {
+    state.with_store(move |s| s.update_script_sql(&id, &sql, base.as_deref())).await?;
+    scripts_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_script(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    state.with_store(move |s| s.delete_script(&id)).await
+pub async fn delete_script(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.with_store(move |s| s.delete_script(&id)).await?;
+    scripts_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]

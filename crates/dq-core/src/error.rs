@@ -1,7 +1,7 @@
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::redact::redact;
+use crate::redact::{redact, redact_known};
 
 pub type DbResult<T> = Result<T, DbError>;
 
@@ -100,6 +100,15 @@ impl DbError {
         if let Some(action) = action {
             self.action = Some(action.into());
         }
+        self
+    }
+
+    /// Masks every occurrence of `secret` (e.g. a password the failed statement carried).
+    #[must_use]
+    pub fn without_secret(mut self, secret: &str) -> Self {
+        self.message = redact_known(&self.message, secret);
+        self.detail = self.detail.map(|d| redact_known(&d, secret));
+        self.hint = self.hint.map(|h| redact_known(&h, secret));
         self
     }
 

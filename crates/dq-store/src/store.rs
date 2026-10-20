@@ -11,8 +11,9 @@ use dq_core::{DbError, DbResult, ErrorKind};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::model::{
-    ConnectionDraft, Folder, HistoryEntry, HistoryPage, HistoryQuery, HistoryStatus, NewHistoryEntry, Retention,
-    SavedConnection, SavedScript, ScriptDraft, Settings, Snippet, SnippetDraft,
+    ConnectionDraft, ConnectionImport, ConnectionImportReport, Folder, HistoryEntry, HistoryPage, HistoryQuery,
+    HistoryStatus, NewHistoryEntry, PasswordChange, Retention, SavedConnection, SavedScript, ScriptDraft, Settings,
+    Snippet, SnippetDraft,
 };
 
 const MIGRATIONS: &[&str] = &[
@@ -196,6 +197,19 @@ impl Store {
         self.with(|db| db.execute("UPDATE folders SET name = ?2 WHERE id = ?1", params![id, name])).map(drop)
     }
 
+    /// Inserts or renames a folder with a known id (from sync).
+    pub fn put_folder(&self, folder: &Folder) -> DbResult<()> {
+        let name = require_name(&folder.name, "Folder")?;
+        self.with(|db| {
+            db.execute(
+                "INSERT INTO folders (id, name, position) VALUES (?1, ?2, (SELECT coalesce(max(position), 0) + 1 FROM folders)) \
+                 ON CONFLICT (id) DO UPDATE SET name = ?2",
+                params![folder.id, name],
+            )
+        })
+        .map(drop)
+    }
+
     /// Deletes a folder; its connections move to "no folder".
     pub fn delete_folder(&self, id: &str) -> DbResult<()> {
         self.with(|db| db.execute("DELETE FROM folders WHERE id = ?1", params![id])).map(drop)
@@ -280,6 +294,45 @@ impl Store {
     pub fn touch_connection(&self, id: &str) -> DbResult<()> {
         self.with(|db| db.execute("UPDATE connections SET last_used_at = ?2 WHERE id = ?1", params![id, now_ms()]))
             .map(drop)
+    }
+
+    /// Creates each connection under a new id, without secrets, and the folders
+    /// they name. Invalid connections are reported, not saved.
+    pub fn import_connections(&self, items: Vec<ConnectionImport>) -> DbResult<ConnectionImportReport> {
+        let mut report = ConnectionImportReport::default();
+        let mut folders = self.folders()?;
+        for c in items {
+            if let Err(e) = c.config.validate() {
+                report.skipped.push(format!("{}: {}", c.name, e.message));
+                continue;
+            }
+            let folder_id = match c.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+                Some(name) => Some(if let Some(f) = folders.iter().find(|f| f.name == name) {
+                    f.id.clone()
+                } else {
+                    let folder = self.create_folder(name)?;
+                    folders.push(folder.clone());
+                    folder.id
+                }),
+                None => None,
+            };
+            let hops = c.config.ssh.as_ref().map_or(0, |t| t.hops().count());
+            let draft = ConnectionDraft {
+                id: None,
+                name: c.name,
+                folder_id,
+                environment: c.environment,
+                favorite: c.favorite,
+                config: c.config,
+                password: PasswordChange::Clear,
+                ssh_secrets: Vec::new(),
+            };
+            match self.save_connection(&draft, false, &vec![false; hops]) {
+                Ok(_) => report.imported += 1,
+                Err(e) => report.skipped.push(format!("{}: {}", draft.name, e.message)),
+            }
+        }
+        Ok(report)
     }
 
     // ------------------------------------------------------------------ history
@@ -462,15 +515,26 @@ impl Store {
     }
 
     /// Updates only the SQL of a saved script (autosave from an open tab).
-    pub fn update_script_sql(&self, id: &str, sql: &str) -> DbResult<()> {
+    /// With `base`, the update only applies while the stored SQL is still
+    /// `base`; otherwise it fails with code `script_conflict` (the script was
+    /// changed elsewhere, e.g. its file in the scripts folder).
+    pub fn update_script_sql(&self, id: &str, sql: &str, base: Option<&str>) -> DbResult<()> {
         if sql.len() > MAX_SQL_BYTES {
             return Err(DbError::invalid("Scripts are limited to 1 MB."));
         }
         let changed = self.with(|db| {
-            db.execute("UPDATE scripts SET sql = ?2, updated_at = ?3 WHERE id = ?1", params![id, sql, now_ms()])
+            db.execute(
+                "UPDATE scripts SET sql = ?2, updated_at = ?3 WHERE id = ?1 AND (?4 IS NULL OR sql = ?4)",
+                params![id, sql, now_ms(), base],
+            )
         })?;
         if changed == 0 {
-            return Err(DbError::not_found("The script no longer exists."));
+            let exists = self
+                .with(|db| db.query_row("SELECT 1 FROM scripts WHERE id = ?1", params![id], |_| Ok(())).optional())?;
+            return Err(match exists {
+                Some(()) => DbError::invalid("The script changed outside this tab.").with_code("script_conflict"),
+                None => DbError::not_found("The script no longer exists."),
+            });
         }
         Ok(())
     }
@@ -569,7 +633,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PasswordChange;
     use dq_core::config::SslMode;
     use dq_core::engine::Engine;
 
@@ -593,6 +656,24 @@ mod tests {
             password: PasswordChange::Set { value: "hunter2-secret".into() },
             ssh_secrets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn imports_connections_into_shared_folders() {
+        let store = Store::in_memory().unwrap();
+        let item = |name: &str, user: &str| ConnectionImport {
+            name: name.into(),
+            folder: Some("Team".into()),
+            environment: Environment::Staging,
+            favorite: false,
+            config: ConnConfig { username: user.into(), ..draft(name).config },
+        };
+        let report = store.import_connections(vec![item("a", "app"), item("b", "app"), item("c", "")]).unwrap();
+        assert_eq!((report.imported, report.skipped), (2, vec!["c: Username is required.".to_owned()]));
+        let folders = store.folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        let saved = store.connections().unwrap();
+        assert!(saved.iter().all(|c| c.folder_id.as_deref() == Some(folders[0].id.as_str()) && !c.has_password));
     }
 
     #[test]
@@ -815,9 +896,12 @@ mod tests {
             (scripts[1].folder.as_deref(), scripts[1].tags.clone()),
             (Some("Reports"), vec!["a".to_owned(), "b".to_owned()])
         );
-        store.update_script_sql(&script.id, "select 4").unwrap();
+        store.update_script_sql(&script.id, "select 4", None).unwrap();
         assert_eq!(store.scripts().unwrap()[1].sql, "select 4");
-        assert!(store.update_script_sql("missing", "x").is_err());
+        assert!(store.update_script_sql("missing", "x", None).is_err());
+        let stale = store.update_script_sql(&script.id, "select 5", Some("select 2")).unwrap_err();
+        assert_eq!(stale.code.as_deref(), Some("script_conflict"));
+        store.update_script_sql(&script.id, "select 5", Some("select 4")).unwrap();
 
         let snippet = store
             .save_snippet(&SnippetDraft {

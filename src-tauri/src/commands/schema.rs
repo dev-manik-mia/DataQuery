@@ -23,25 +23,10 @@ use crate::connector;
 use crate::safety::{self, Confirmation, Intent};
 use crate::state::AppState;
 
-const MAX_CHANGES: usize = 200;
 /// Tables compared per side; each needs a structure read.
 const MAX_DIFF_TABLES: usize = 500;
 /// Tables whose structure is read at the same time while snapshotting a side.
 const DIFF_READ_CONCURRENCY: usize = 8;
-
-async fn build(session: &dyn Session, changes: &[SchemaChange]) -> DbResult<Vec<String>> {
-    if changes.is_empty() || changes.len() > MAX_CHANGES {
-        return Err(DbError::invalid(format!("Between 1 and {MAX_CHANGES} changes can be applied at once.")));
-    }
-    let d = session.dialect();
-    let mut out = Vec::new();
-    for change in changes {
-        let structure =
-            if change.needs_structure(d.flavor()) { Some(session.structure(change.table()).await?) } else { None };
-        out.extend(ddl::statements(d, change, structure.as_ref())?);
-    }
-    Ok(out)
-}
 
 /// SQL the changes would run, for review.
 #[tauri::command]
@@ -51,7 +36,7 @@ pub async fn schema_change_preview(
     changes: Vec<SchemaChange>,
 ) -> CmdResult<String> {
     let open = state.session(&session_id).await?;
-    Ok(ddl::preview(&build(&*open.session, &changes).await?))
+    Ok(ddl::preview(&ops::schema_statements(&*open.session, &changes).await?))
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -62,8 +47,9 @@ pub struct SchemaApplyReport {
     pub duration_ms: u64,
 }
 
-/// Applies reviewed schema changes. PostgreSQL runs them in one transaction;
-/// MySQL commits each DDL statement on its own (server behaviour).
+/// Applies reviewed schema changes, including the explorer's table actions
+/// (truncate, empty, duplicate, bulk drops). PostgreSQL runs them in one
+/// transaction; MySQL commits each DDL statement on its own (server behaviour).
 #[tauri::command]
 pub async fn apply_schema_changes(
     state: State<'_, AppState>,
@@ -72,13 +58,12 @@ pub async fn apply_schema_changes(
     confirmation: Option<Confirmation>,
 ) -> CmdResult<Guarded<SchemaApplyReport>> {
     let open = state.session(&session_id).await?;
-    let statements = build(&*open.session, &changes).await?;
+    let statements = ops::schema_statements(&*open.session, &changes).await?;
     let sql = ddl::preview(&statements);
     let (connection, settings) = tokio::try_join!(state.connection(&open.connection_id), state.settings())?;
     let analysed = split_statements(&sql, open.session.dialect().flavor());
-    if let Some(request) =
-        safety::check(&connection, &settings, &Intent::from_statements(&analysed), confirmation.as_ref())?
-    {
+    let intent = Intent::schema_changes(&analysed, changes.iter().any(SchemaChange::deletes_rows));
+    if let Some(request) = safety::check(&connection, &settings, &intent, confirmation.as_ref())? {
         return Ok(Guarded::NeedsConfirmation { request });
     }
     let started = Instant::now();
@@ -135,6 +120,7 @@ async fn diff_table(session: &dyn Session, object: &ObjectRef) -> DbResult<DiffT
 /// that makes `target` match `source`. Opens its own sessions and closes them.
 #[tauri::command]
 pub async fn schema_diff(state: State<'_, AppState>, source: DiffSide, target: DiffSide) -> CmdResult<SchemaDiff> {
+    super::license::require_pro(&state, "Schema diff").await?;
     let open_side = |side: DiffSide| {
         let state = &state;
         async move {

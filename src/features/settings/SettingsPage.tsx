@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { AppInfo } from '@/bindings/AppInfo';
@@ -14,15 +14,19 @@ import { openNewWindow } from '@/features/commands/commands';
 import { languages, t } from '@/i18n';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
+import { useLicense } from '@/stores/license';
 import { useSettings } from '@/stores/settings';
 import { useUi, type SettingsSection } from '@/stores/ui';
 import { useUpdates } from '@/stores/updates';
 
+import { BackupToolsCard } from './BackupTools';
 import { KeyboardSettings } from './KeyboardSettings';
+import { Row } from './Row';
 import styles from './Settings.module.css';
+import { SyncSettings } from './SyncSettings';
 import { UpdatesCard } from './Updates';
 
-const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results', 'history', 'security', 'ai', 'engines', 'about'];
+const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results', 'history', 'sync', 'security', 'ai', 'engines', 'license', 'about'];
 
 export function SettingsPage({ section }: { section: SettingsSection }) {
   const navigate = useUi((s) => s.navigate);
@@ -45,24 +49,14 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
           {section === 'keyboard' && <KeyboardSettings />}
           {section === 'results' && <Results />}
           {section === 'history' && <History />}
+          {section === 'sync' && <SyncSettings />}
           {section === 'security' && <Security />}
           {section === 'ai' && <AiSettings />}
           {section === 'engines' && <Engines />}
+          {section === 'license' && <License />}
           {section === 'about' && <About />}
         </div>
       </div>
-    </div>
-  );
-}
-
-function Row({ title, help, children }: { title: ReactNode; help?: ReactNode; children?: ReactNode }) {
-  return (
-    <div className={styles.row}>
-      <div className={styles.rowText}>
-        <span className={styles.rowTitle}>{title}</span>
-        {help && <span className={styles.rowHelp}>{help}</span>}
-      </div>
-      {children}
     </div>
   );
 }
@@ -154,6 +148,7 @@ function Editor() {
         </div>
         <div className={styles.check}>
           <Checkbox label="Font ligatures" help="Combine characters such as -> and != when the font supports it." checked={settings.editor_ligatures} onChange={(v) => void update({ editor_ligatures: v })} />
+          <Checkbox label="Vim mode" help="Vim key bindings in the SQL editor (normal, insert and visual modes, :w saves)." checked={settings.editor_vim} onChange={(v) => void update({ editor_vim: v })} />
         </div>
       </Card>
       <Card title="Autocomplete" flush>
@@ -458,6 +453,7 @@ const CAPABILITY_COLUMNS: { key: keyof Capabilities; label: string }[] = [
   { key: 'monitoring', label: 'Monitoring' },
   { key: 'transactions', label: 'Transactions' },
   { key: 'schema_diff', label: 'Schema diff' },
+  { key: 'backup', label: 'Backup' },
 ];
 
 type CapabilityKey = keyof Capabilities;
@@ -496,6 +492,28 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
   },
 };
 
+const SERVER_SIDE = 'are written by the server itself; there is no client dump tool to run from this computer.';
+const SNAPSHOTS = `Snapshots (SAVE, BGSAVE, AOF) ${SERVER_SIDE}`;
+const CQL_SNAPSHOTS = `Snapshots (nodetool snapshot) ${SERVER_SIDE}`;
+
+/** Why an engine has no Backup and Restore (`dq_core::backup::BackupFamily::of`). */
+const NO_BACKUP: Partial<Record<Engine, string>> = {
+  cockroachdb: 'CockroachDB rejects pg_dump; back up with its BACKUP statement to cloud or nodelocal storage.',
+  sqlserver: `Backups (BACKUP DATABASE … TO DISK) ${SERVER_SIDE}`,
+  oracle: `Data Pump dump files (expdp) ${SERVER_SIDE}`,
+  clickhouse: `Backups (the BACKUP statement, to server disks or object storage) ${SERVER_SIDE}`,
+  duckdb: 'Copy the database file, or run EXPORT DATABASE in the editor.',
+  snowflake: 'Snowflake keeps history with Time Travel and zero-copy clones; there is no dump tool.',
+  redis: SNAPSHOTS,
+  valkey: SNAPSHOTS,
+  dragonfly: SNAPSHOTS,
+  dynamodb: 'DynamoDB backups are managed by AWS (on-demand backups, point-in-time recovery).',
+  cassandra: CQL_SNAPSHOTS,
+  scylladb: CQL_SNAPSHOTS,
+  elasticsearch: `Snapshot repositories ${SERVER_SIDE}`,
+  neo4j: `Dumps (neo4j-admin database dump) ${SERVER_SIDE}`,
+};
+
 function CapabilityCell({ engine, name, capability, supported, available, priority }: {
   engine: Engine;
   name: string;
@@ -519,7 +537,7 @@ function CapabilityCell({ engine, name, capability, supported, available, priori
       </span>
     );
   }
-  const reason = NOT_OFFERED[engine]?.[capability.key] ?? `${name} does not offer this.`;
+  const reason = NOT_OFFERED[engine]?.[capability.key] ?? (capability.key === 'backup' ? NO_BACKUP[engine] : undefined) ?? `${name} does not offer this.`;
   return (
     <span className={styles.no} title={reason} aria-label={`Not offered: ${reason}`}>
       —
@@ -570,6 +588,76 @@ function Engines() {
           </table>
         </div>
       </Card>
+      <BackupToolsCard />
+    </>
+  );
+}
+
+function License() {
+  const { status, activate, deactivate } = useLicense();
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toast = useUi((s) => s.toast);
+  const run = async (action: () => Promise<void>, done: string) => {
+    setBusy(true);
+    try {
+      await action();
+      setKey('');
+      toast(done, 'positive');
+    } catch (e) {
+      useUi.getState().toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const claims = status?.claims;
+  return (
+    <>
+      <PageHead eyebrow="Settings" title="License" />
+      <Card flush>
+        <Row
+          title="Plan"
+          help={
+            status?.source_build
+              ? 'Built from source: every feature is on. Official builds need a licence for Pro.'
+              : claims
+                ? `Pro, licensed to ${claims.name || claims.email} (order ${claims.order}, ${claims.issued}). Lifetime updates.`
+                : `Free: ER diagrams, backups, users and roles, every engine, ${status?.limits?.tabs ?? 4} tabs, ${status?.limits?.windows ?? 4} windows and ${status?.limits?.filters ?? 4} filter conditions.`
+          }
+        >
+          <Chip tone={status?.plan === 'free' ? 'mute' : 'positive'}>{status?.plan === 'free' ? 'Free' : 'Pro'}</Chip>
+        </Row>
+        {claims && !status?.source_build && (
+          <Row title="This device" help="Frees the seat so you can use the licence on another device (3 devices per licence).">
+            <Button size="sm" disabled={busy} onClick={() => void run(deactivate, 'Licence removed from this device.')}>
+              Deactivate
+            </Button>
+          </Row>
+        )}
+      </Card>
+      {status?.plan === 'free' && (
+        <Card
+          title="Activate Pro"
+          footer={
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <Button size="sm" onClick={() => void api.openPricing().catch(useUi.getState().toastError)}>
+                Get Pro — $59 once
+              </Button>
+              <Button size="sm" variant="primary" disabled={busy || !key.trim()} onClick={() => void run(() => activate(key), 'DataQuery Pro is active. Thank you!')}>
+                Activate
+              </Button>
+            </div>
+          }
+        >
+          <TextField
+            label="Licence key"
+            hint="The key from your purchase email. Activation checks it once online; after that it works offline. A DQ1 token works without internet."
+            value={key}
+            spellCheck={false}
+            onChange={(e) => setKey(e.target.value)}
+          />
+        </Card>
+      )}
     </>
   );
 }
@@ -586,7 +674,7 @@ function About() {
       <Card flush>
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
-        <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
+        <Row title="Licence" help={`${info?.license ?? 'Proprietary'}. Free, no account. DataQuery Pro is a one-time licence (Settings → License).`} />
       </Card>
       <UpdatesCard />
     </>

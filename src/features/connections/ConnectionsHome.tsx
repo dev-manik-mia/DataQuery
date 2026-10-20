@@ -21,6 +21,7 @@ import {
   type MenuEntry,
 } from '@/components/ui';
 import { exportConnections, importConnections } from '@/features/connections/transfer';
+import { ImportAppsDialog } from '@/features/connections/ImportAppsDialog';
 import { formatCount, formatDuration, formatRelative, plural } from '@/lib/format';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
@@ -47,6 +48,7 @@ export function ConnectionsHome() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [prompt, setPrompt] = useState<{ kind: 'new' } | { kind: 'rename'; id: string; name: string } | null>(null);
   const [failedId, setFailedId] = useState<string | null>(null);
+  const [importingApps, setImportingApps] = useState(false);
   const rowMenu = useContextMenu<SavedConnection>();
   const folderMenu = useContextMenu<Group>();
 
@@ -111,6 +113,7 @@ export function ConnectionsHome() {
           title="Connections"
           actions={
             <>
+              <Button onClick={() => setImportingApps(true)}>Import from another app…</Button>
               <Button onClick={() => void importConnections()}>Import…</Button>
               <Button disabled={connections.length === 0} onClick={() => void exportConnections(null)}>
                 Export…
@@ -153,10 +156,11 @@ export function ConnectionsHome() {
         {loaded && connections.length === 0 ? (
           <EmptyState title="No connections yet">
             Add a connection to PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, CockroachDB, ClickHouse, Snowflake, MongoDB, DynamoDB, Redis, Valkey, Dragonfly, Cassandra, ScyllaDB, Elasticsearch, Neo4j or a DuckDB file to start. Passwords are stored in your system keychain.
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center' }}>
               <Button variant="primary" onClick={() => navigate({ name: 'engines' })}>
                 New connection
               </Button>
+              <Button onClick={() => setImportingApps(true)}>Import from TablePlus, DBeaver, Sequel Ace or DataGrip…</Button>
             </div>
           </EmptyState>
         ) : groups.length === 0 && loaded ? (
@@ -254,6 +258,7 @@ export function ConnectionsHome() {
           ]}
         />
       )}
+      {importingApps && <ImportAppsDialog onClose={() => setImportingApps(false)} />}
       {prompt && (
         <PromptDialog
           title={prompt.kind === 'new' ? 'New folder' : 'Rename folder'}

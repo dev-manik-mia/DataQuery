@@ -6,7 +6,9 @@
 //! this crate rather than written by hand.
 
 pub mod adapter;
+pub mod backup;
 pub mod config;
+pub mod data_compare;
 pub mod diff;
 pub mod document;
 pub mod edit;
@@ -18,6 +20,7 @@ pub mod migrations;
 pub mod monitor;
 pub mod node;
 pub mod ops;
+pub mod programs;
 pub mod redact;
 pub mod result;
 pub mod schema;
@@ -26,6 +29,7 @@ pub mod sql;
 pub mod table;
 pub mod tls;
 pub mod transfer;
+pub mod users;
 pub mod value;
 
 pub use error::{DbError, DbResult, ErrorKind};

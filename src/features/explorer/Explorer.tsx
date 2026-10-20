@@ -1,22 +1,28 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { Node } from '@/bindings/Node';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { TableStructure } from '@/bindings/TableStructure';
 import type { TemplateKind } from '@/bindings/TemplateKind';
+import { comparesData, dataCompareAvailable, openDataCompare } from '@/features/datacompare/entry';
 import { CreateTableDialog, StructureEditDialog, type StructureEdit } from '@/features/schema/forms';
+import { TableActionDialog, type TableAction } from '@/features/schema/TableActionDialog';
+import { openBackup } from '@/features/transfer/backup';
 import { Icon, IconButton, Input, Menu, Skeleton, useContextMenu, type MenuEntry } from '@/components/ui';
+import { t } from '@/i18n';
 import { copyText } from '@/lib/clipboard';
 import { formatCount } from '@/lib/format';
 import { api } from '@/lib/ipc';
+import { isMac } from '@/lib/platform';
 import { isRelation, KIND_LABEL, KIND_MARK, objectName } from '@/lib/objects';
 import { nodeKey, useExplorer } from '@/stores/explorer';
 import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
 
 import styles from './Explorer.module.css';
+import { bulkTargets, clickSelection, extendSelection, selectSiblings, toggleKey, visibleSelection } from './selection';
 import { TREE_PADDING, TREE_ROW_HEIGHT } from './tree';
 
 type Item =
@@ -24,6 +30,7 @@ type Item =
   | { type: 'loading'; key: string; depth: number }
   | { type: 'error'; key: string; depth: number; parent: Node | null; message: string }
   | { type: 'empty'; key: string; depth: number };
+type NodeItem = Extract<Item, { type: 'node' }>;
 
 function compactCount(n: number): string {
   if (n < 1000) return formatCount(n);
@@ -74,7 +81,9 @@ const TEMPLATE_WORDS: Partial<Record<SqlFlavor, [string, string, string, string]
 };
 
 export function Explorer({ width }: { width: number }) {
-  const { expanded, selected, filter, toggle, refresh, select, setFilter } = useExplorer(useShallow((s) => ({ expanded: s.expanded, selected: s.selected, filter: s.filter, toggle: s.toggle, refresh: s.refresh, select: s.select, setFilter: s.setFilter })));
+  const { expanded, selected, selection, filter, toggle, refresh, select, setSelection, setFilter } = useExplorer(
+    useShallow((s) => ({ expanded: s.expanded, selected: s.selected, selection: s.selection, filter: s.filter, toggle: s.toggle, refresh: s.refresh, select: s.select, setSelection: s.setSelection, setFilter: s.setFilter })),
+  );
   const session = useWorkspace((s) => s.session);
   const { openTableTab, openQueryTab, openContainerTab } = useWorkspace(useShallow((s) => ({ openTableTab: s.openTableTab, openQueryTab: s.openQueryTab, openContainerTab: s.openContainerTab })));
   const toast = useUi((s) => s.toast);
@@ -84,7 +93,10 @@ export function Explorer({ width }: { width: number }) {
   const context = useContextMenu<Node>();
   const [creating, setCreating] = useState<Node | null>(null);
   const [editing, setEditing] = useState<{ node: Node; edit: StructureEdit; structure: TableStructure } | null>(null);
-  const nodes = items.filter((i): i is Extract<Item, { type: 'node' }> => i.type === 'node');
+  const [tableAction, setTableAction] = useState<{ action: TableAction; objects: Node[] } | null>(null);
+  const nodes = useMemo(() => items.filter((i): i is NodeItem => i.type === 'node'), [items]);
+  const order = useMemo(() => nodes.map((n) => n.key), [nodes]);
+  const selectedKeys = useMemo(() => new Set(visibleSelection(selection, order)), [selection, order]);
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => tree.current,
@@ -105,6 +117,69 @@ export function Explorer({ width }: { width: number }) {
   const sid = session ? { sessionId: session.session_id } : null;
   const caps = session?.capabilities;
 
+  /** The container row above `key`, refreshed after its children change. */
+  const parentOf = (key: string): Node | null => {
+    const index = nodes.findIndex((n) => n.key === key);
+    const depth = nodes[index]?.depth ?? 0;
+    return nodes.slice(0, Math.max(index, 0)).reverse().find((n) => n.depth < depth && n.node.expandable && !isRelation(n.node))?.node ?? null;
+  };
+
+  /** Refreshes each distinct container of `objects` once (row counts, renamed, new or dropped objects). */
+  const refreshParents = (objects: Node[]) => {
+    const parents = new Map<string, Node | null>();
+    for (const o of objects) {
+      const parent = parentOf(nodeKey(o));
+      parents.set(nodeKey(parent), parent);
+    }
+    parents.forEach((parent) => refresh(parent));
+  };
+
+  /** ⌘/Ctrl- and Shift-clicks change the selection; a plain click opens the row. */
+  const onRowClick = (e: MouseEvent, item: NodeItem) => {
+    const toggleMod = isMac ? e.metaKey : e.ctrlKey;
+    if (!toggleMod && !e.shiftKey) {
+      activate(item.node);
+      return;
+    }
+    setSelection(clickSelection(selection, item.key, order, { toggle: toggleMod, range: e.shiftKey }), item.key);
+  };
+
+  /** Menu entry for a table action, disabled with the engine's reason when it cannot run. */
+  const tableActionEntry = (action: TableAction, label: string, objects: Node[], danger = true): MenuEntry => {
+    const support = action === 'drop' ? null : session?.table_actions[action];
+    const reason =
+      support && !support.available
+        ? (support.note ?? 'Not supported by this engine.')
+        : action !== 'drop' && objects.some((o) => o.kind !== 'table')
+          ? 'Only tables can be truncated, emptied or duplicated.'
+          : undefined;
+    return { label, danger, disabled: reason !== undefined, title: reason, onSelect: () => setTableAction({ action, objects }) };
+  };
+
+  /** Actions on a multi-selection: copy names and, for relations of one database, truncate / empty / drop. */
+  const bulkActions = (targets: Node[]): MenuEntry[] => {
+    const copyNames = async () => {
+      if (!sid) return;
+      await copyText(Promise.all(targets.map((t) => api.qualifiedName(sid, t))).then((names) => names.join('\n')));
+      toast(`${targets.length} names copied`);
+    };
+    const oneDatabase = targets.every((t) => t.database === targets[0]?.database);
+    const writable = targets.every(isRelation) && oneDatabase && session?.documents == null && !session?.server.read_only;
+    const n = targets.length;
+    return [
+      { type: 'label', label: `${n} selected` },
+      { label: 'Copy names', onSelect: () => void copyNames() },
+      ...(writable
+        ? [
+            { type: 'separator' as const },
+            tableActionEntry('truncate', `Truncate ${n} tables…`, targets),
+            tableActionEntry('empty', `Empty ${n} tables…`, targets),
+            tableActionEntry('drop', `Drop ${n} objects…`, targets),
+          ]
+        : []),
+    ];
+  };
+
   const template = async (node: Node, kind: TemplateKind) => {
     if (!sid) return;
     try {
@@ -124,6 +199,8 @@ export function Explorer({ width }: { width: number }) {
   };
 
   const actions = (node: Node): MenuEntry[] => {
+    const bulk = bulkTargets(selection, nodeKey(node), order, (k) => nodes.find((n) => n.key === k)?.node);
+    if (bulk) return bulkActions(bulk);
     const copyName = async () => {
       if (!sid) return;
       await copyText(api.qualifiedName(sid, node));
@@ -148,6 +225,13 @@ export function Explorer({ width }: { width: number }) {
               { label: 'ER diagram', onSelect: () => openContainerTab('diagram', node.database, schema) },
               { label: 'Framework migrations', onSelect: () => openContainerTab('migrations', node.database, schema) },
               ...(caps?.schema_diff ? [{ label: 'Compare with… (schema diff)', onSelect: () => navigate({ name: 'diff' }) }] : []),
+            ]
+          : []),
+        ...(caps?.backup
+          ? [
+              { type: 'separator' as const },
+              { label: t('action.backup'), onSelect: () => openBackup('backup', node.database, schema) },
+              ...(session?.server.read_only ? [] : [{ label: t('action.restore'), danger: true, onSelect: () => openBackup('restore', node.database) }]),
             ]
           : []),
       ];
@@ -191,6 +275,14 @@ export function Explorer({ width }: { width: number }) {
       { label: 'Open structure', onSelect: () => openTableTab(node, 'structure') },
       { label: 'View DDL', onSelect: () => openTableTab(node, 'ddl') },
       { label: 'Dependencies', onSelect: () => openTableTab(node, 'dependencies') },
+      ...(table && session && dataCompareAvailable() && comparesData(session.flavor)
+        ? [
+            {
+              label: 'Compare data with…',
+              onSelect: () => openDataCompare({ connection_id: session.connection.id, database: node.database, schema: node.schema, table: node.name }),
+            },
+          ]
+        : []),
       { type: 'separator' },
       { label: 'Copy qualified name', onSelect: () => void copyName() },
       { label: 'Generate SELECT', onSelect: () => void template(node, 'select') },
@@ -206,8 +298,15 @@ export function Explorer({ width }: { width: number }) {
         ? [
             { type: 'separator' as const },
             { label: 'Rename table…', onSelect: () => void editTable(node, { kind: 'rename-table' }) },
-            { label: 'Drop table…', danger: true, onSelect: () => void editTable(node, { kind: 'drop-table' }) },
+            tableActionEntry('duplicate', 'Duplicate table…', [node], false),
+            { type: 'separator' as const },
+            tableActionEntry('truncate', 'Truncate table…', [node]),
+            tableActionEntry('empty', 'Empty table…', [node]),
+            tableActionEntry('drop', 'Drop table…', [node]),
           ]
+        : []),
+      ...(!table && !session?.server.read_only
+        ? [{ type: 'separator' as const }, tableActionEntry('drop', `Drop ${KIND_LABEL[node.kind].toLowerCase()}…`, [node])]
         : []),
     ];
   };
@@ -215,15 +314,25 @@ export function Explorer({ width }: { width: number }) {
   const onKeyDown = (e: KeyboardEvent) => {
     const index = nodes.findIndex((n) => n.key === selected);
     const current = nodes[index]?.node;
-    const go = (i: number) => {
+    const go = (i: number, extend = false) => {
       const next = nodes[Math.max(0, Math.min(nodes.length - 1, i))];
       if (next) {
-        select(next.key);
+        if (extend) setSelection(extendSelection(selection, next.key, order), next.key);
+        else select(next.key);
         virtualizer.scrollToIndex(items.indexOf(next), { align: 'auto' });
       }
     };
-    if (e.key === 'ArrowDown') go(index + 1);
-    else if (e.key === 'ArrowUp') go(index - 1);
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (e.key === 'ArrowDown') go(index + 1, e.shiftKey);
+    else if (e.key === 'ArrowUp') go(index - 1, e.shiftKey);
+    else if (mod && e.key.toLowerCase() === 'a' && current && selected) {
+      // Every visible row at the cursor's depth that is, like it, a relation (or not).
+      const depth = nodes[index]?.depth;
+      const relation = isRelation(current);
+      const level = new Set(nodes.filter((n) => n.depth === depth && isRelation(n.node) === relation).map((n) => n.key));
+      setSelection(selectSiblings(order, selected, (k) => level.has(k)), selected);
+    } else if (e.key === ' ' && selected) setSelection(toggleKey(selection, selected, order), selected);
+    else if (e.key === 'Escape' && selected && selectedKeys.size > 1) select(selected);
     else if (e.key === 'ArrowRight' && current?.expandable && !expanded[nodeKey(current)]) toggle(current);
     else if (e.key === 'ArrowLeft' && current?.expandable && expanded[nodeKey(current)]) toggle(current);
     else if (e.key === 'ArrowLeft' && current) {
@@ -268,16 +377,19 @@ export function Explorer({ width }: { width: number }) {
         role="treeitem"
         aria-level={item.depth + 1}
         aria-expanded={node.expandable ? open : undefined}
-        aria-selected={selected === item.key}
+        aria-selected={selectedKeys.has(item.key)}
+        data-cursor={selected === item.key}
         aria-label={`${KIND_LABEL[node.kind]} ${objectName(node)}`}
         className={styles.node}
         data-container={node.expandable}
         data-current={node.current}
         style={{ paddingLeft: pad }}
         title={node.comment ?? undefined}
-        onClick={() => activate(node)}
+        onClick={(e) => onRowClick(e, item)}
         onContextMenu={(e) => {
-          select(item.key);
+          // Inside a multi-selection the menu acts on all of it.
+          if (selectedKeys.size > 1 && selectedKeys.has(item.key)) setSelection(selection, item.key);
+          else select(item.key);
           context.open(e, node);
         }}
       >
@@ -320,6 +432,7 @@ export function Explorer({ width }: { width: number }) {
         className={styles.tree}
         role="tree"
         aria-label="Database objects"
+        aria-multiselectable
         tabIndex={0}
         onKeyDown={onKeyDown}
         onFocus={() => !selected && nodes[0] && select(nodes[0].key)}
@@ -347,17 +460,17 @@ export function Explorer({ width }: { width: number }) {
           }}
         />
       )}
+      {tableAction && session && (
+        <TableActionDialog action={tableAction.action} objects={tableAction.objects} onClose={() => setTableAction(null)} onApplied={() => refreshParents(tableAction.objects)} />
+      )}
       {editing && session && (
         <StructureEditDialog
           edit={editing.edit}
           structure={editing.structure}
           flavor={session.flavor}
           onClose={() => setEditing(null)}
-          onApplied={() => {
-            // Refresh the parent so renamed or dropped objects disappear.
-            const parentKey = nodes.slice(0, nodes.findIndex((n) => n.key === nodeKey(editing.node))).reverse().find((n) => n.node.expandable && !isRelation(n.node));
-            refresh(parentKey?.node ?? null);
-          }}
+          // Refresh the parent so renamed or dropped objects disappear.
+          onApplied={() => refreshParents([editing.node])}
         />
       )}
     </aside>

@@ -8,6 +8,7 @@ mod connect;
 mod error;
 mod monitor;
 mod session;
+mod users;
 pub mod values;
 
 use std::sync::Arc;
@@ -43,6 +44,7 @@ impl MysqlAdapter {
         monitoring: true,
         transactions: true,
         schema_diff: true,
+        backup: true,
     };
 }
 

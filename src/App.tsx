@@ -20,12 +20,17 @@ import wsStyles from '@/features/workspace/Workspace.module.css';
 import { formatCount, formatDuration } from '@/lib/format';
 import { CommandPalette } from '@/features/commands/CommandPalette';
 import { appCommands, commandKeys, openNewWindow } from '@/features/commands/commands';
+import { DataComparePage } from '@/features/datacompare/DataComparePage';
+import { dataCompareAvailable, openDataCompare } from '@/features/datacompare/entry';
+import { ProGate } from '@/features/license/ProGate';
 import { SchemaDiffPage } from '@/features/schema/SchemaDiffPage';
 import { setLanguage, t } from '@/i18n';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
 import { useConnections, useEngine } from '@/stores/connections';
 import { useCompletion } from '@/stores/completion';
+import { startFolderSync } from '@/stores/folderSync';
 import { useLayout } from '@/stores/layout';
+import { useLicense } from '@/stores/license';
 import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
 import { startUpdateChecks } from '@/stores/updates';
@@ -47,11 +52,14 @@ export function App() {
         stopUpdateChecks = startUpdateChecks();
       });
     void useConnections.getState().load();
+    void useLicense.getState().load();
     void useLayout.getState().load();
     void useCompletion.getState().loadSnippets();
     const unlisten = listen<{ session_id: string; reason: string }>('session-closed', (e) => noteSessionClosed(e.payload.session_id, e.payload.reason));
+    const stopFolderSync = startFolderSync();
     return () => {
       stopUpdateChecks?.();
+      stopFolderSync();
       void unlisten.then((fn) => fn());
     };
   }, []);
@@ -85,7 +93,16 @@ export function App() {
         {view.name === 'engines' && <EnginePicker />}
         {view.name === 'connection-form' && <ConnectionForm key={`${view.engine}:${view.connectionId ?? 'new'}`} engine={view.engine} connectionId={view.connectionId} prefill={view.prefill} />}
         {view.name === 'history' && <HistoryPage />}
-        {view.name === 'diff' && <SchemaDiffPage />}
+        {view.name === 'diff' && (
+          <ProGate feature="Schema diff" summary="Compare the schemas of two connections and get the migration SQL that makes the target match, with a preview before anything runs.">
+            <SchemaDiffPage />
+          </ProGate>
+        )}
+        {view.name === 'data-compare' && (
+          <ProGate feature="Data compare" summary="Compare the rows of two tables, on the same or different connections, and get the INSERT, UPDATE and DELETE that make the target match.">
+            <DataComparePage key={JSON.stringify(view.source ?? null)} initialSource={view.source} />
+          </ProGate>
+        )}
         {view.name === 'settings' && <SettingsPage section={view.section} />}
       </div>
       {view.name === 'workspace' && session && <WorkspaceStatus />}
@@ -113,6 +130,9 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
       </IconButton>
       {session?.capabilities.monitoring && view.name === 'workspace' && (
         <TitleBarButton icon="activity" label={t('nav.monitoring')} onClick={() => useWorkspace.getState().openMonitorTab()} />
+      )}
+      {session?.users && view.name === 'workspace' && (
+        <TitleBarButton icon="key" label={t('nav.users')} onClick={() => useWorkspace.getState().openUsersTab()} />
       )}
       <TitleBarButton icon="history" label={t('nav.history')} onClick={() => navigate({ name: 'history' })} />
       <TitleBarButton icon="settings" label={t('nav.settings')} onClick={() => navigate({ name: 'settings', section: 'general' })} />
@@ -178,6 +198,7 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
               { label: 'All connections', onSelect: home },
               { label: t('action.newWindow'), hint: shortcutLabel(commandKeys('window.new') ?? ''), onSelect: openNewWindow },
               { label: t('nav.schemaDiff'), onSelect: () => navigate({ name: 'diff' }) },
+              ...(dataCompareAvailable() ? [{ label: t('nav.dataCompare'), onSelect: () => openDataCompare() }] : []),
               { label: 'Edit connection', onSelect: () => navigate({ name: 'connection-form', engine: c.config.engine, connectionId: c.id }) },
               { type: 'separator' },
               { label: 'Reconnect', onSelect: () => void reconnect() },
@@ -195,7 +216,7 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
     );
   }
 
-  const backToWorkspace = session && (view.name === 'history' || view.name === 'settings' || view.name === 'diff') && (
+  const backToWorkspace = session && (view.name === 'history' || view.name === 'settings' || view.name === 'diff' || view.name === 'data-compare') && (
     <Button size="sm" onClick={back}>
       ← Back to {session.connection.name}
     </Button>
@@ -214,6 +235,8 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
       return <TitleBar onBrand={home} crumbs={<Crumbs items={[{ label: 'Settings' }]} />} actions={backToWorkspace || undefined} />;
     case 'diff':
       return <TitleBar onBrand={home} crumbs={<Crumbs items={[{ label: t('nav.schemaDiff') }]} />} actions={backToWorkspace || navButtons} />;
+    case 'data-compare':
+      return <TitleBar onBrand={home} crumbs={<Crumbs items={[{ label: t('nav.dataCompare') }]} />} actions={backToWorkspace || navButtons} />;
     default:
       return <TitleBar onBrand={home} actions={navButtons} />;
   }

@@ -27,7 +27,8 @@ pub async fn app_info() -> CmdResult<AppInfo> {
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
-        license: env!("CARGO_PKG_LICENSE"),
+        // `LicenseRef-Proprietary` in Cargo.toml; shown as "Proprietary".
+        license: env!("CARGO_PKG_LICENSE").strip_prefix("LicenseRef-").unwrap_or(env!("CARGO_PKG_LICENSE")),
     })
 }
 

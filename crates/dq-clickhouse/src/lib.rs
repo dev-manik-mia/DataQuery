@@ -37,6 +37,7 @@ impl ClickhouseAdapter {
         monitoring: true,
         transactions: false,
         schema_diff: true,
+        backup: false,
     };
 }
 

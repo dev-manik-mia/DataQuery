@@ -38,14 +38,20 @@ pub struct ColumnMapping {
 #[ts(export)]
 pub struct TransferProgress {
     pub job_id: String,
+    /// Rows, or objects for backups.
     #[ts(type = "number")]
     pub rows: u64,
     #[ts(type = "number")]
     pub bytes: u64,
+    /// Known size of the whole job (restores, SQLite backups).
+    #[ts(type = "number | null")]
+    pub total_bytes: Option<u64>,
+    /// What a backup tool is doing, e.g. `dumping contents of table "public.orders"`.
+    pub detail: Option<String>,
 }
 
 /// Paths come from the native file dialog; they must be absolute.
-fn file_path(path: &str) -> CmdResult<PathBuf> {
+pub(crate) fn file_path(path: &str) -> CmdResult<PathBuf> {
     let path = PathBuf::from(path);
     if !path.is_absolute() {
         return Err(DbError::invalid("Choose a file with the file dialog."));
@@ -54,22 +60,31 @@ fn file_path(path: &str) -> CmdResult<PathBuf> {
 }
 
 /// Registers a job: its cancel flag and a progress callback that emits at most every 200 ms.
-fn start_job(app: &AppHandle, state: &AppState, job_id: &str) -> TransferControl {
+pub(crate) fn start_job(app: &AppHandle, state: &AppState, job_id: &str) -> TransferControl {
     let cancelled = Arc::new(AtomicBool::new(false));
     state.transfers.lock().expect("transfers lock").insert(job_id.to_owned(), cancelled.clone());
     let app = app.clone();
     let job = job_id.to_owned();
     let last = std::sync::Mutex::new(Instant::now().checked_sub(Duration::from_secs(1)).unwrap());
-    TransferControl::new(cancelled, move |rows, bytes| {
+    TransferControl::with_progress(cancelled, move |p| {
         let mut last = last.lock().expect("progress lock");
         if last.elapsed() >= Duration::from_millis(200) {
             *last = Instant::now();
-            let _ = app.emit(PROGRESS_EVENT, TransferProgress { job_id: job.clone(), rows, bytes });
+            let _ = app.emit(
+                PROGRESS_EVENT,
+                TransferProgress {
+                    job_id: job.clone(),
+                    rows: p.rows,
+                    bytes: p.bytes,
+                    total_bytes: p.total_bytes,
+                    detail: p.detail.map(str::to_owned),
+                },
+            );
         }
     })
 }
 
-fn end_job(state: &AppState, job_id: &str) {
+pub(crate) fn end_job(state: &AppState, job_id: &str) {
     state.transfers.lock().expect("transfers lock").remove(job_id);
 }
 
@@ -137,7 +152,8 @@ pub async fn import_data(
     Ok(Guarded::Done { value: result? })
 }
 
-/// Cancels a running export or import. Imports roll back the open transaction.
+/// Cancels a running export, import, backup or restore. Imports roll back the
+/// open transaction; backup tools are killed and their partial files removed.
 #[tauri::command]
 pub async fn cancel_transfer(state: State<'_, AppState>, job_id: String) -> CmdResult<bool> {
     let flag = state.transfers.lock().expect("transfers lock").get(&job_id).cloned();

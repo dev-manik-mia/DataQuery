@@ -87,6 +87,27 @@ impl std::fmt::Debug for ConnectionDraft {
     }
 }
 
+/// A connection to create from an export file or another app. It never holds
+/// a secret: passwords are entered again after the import.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ConnectionImport {
+    pub name: String,
+    /// Folder name; created when no folder has this name yet.
+    pub folder: Option<String>,
+    pub environment: Environment,
+    pub favorite: bool,
+    pub config: ConnConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export)]
+pub struct ConnectionImportReport {
+    pub imported: u32,
+    /// One line per connection that was not imported, with the reason.
+    pub skipped: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -281,6 +302,8 @@ pub struct Settings {
     /// Line height in percent of the font size.
     pub editor_line_height: u16,
     pub editor_ligatures: bool,
+    /// Vim key bindings in the SQL editor.
+    pub editor_vim: bool,
     /// Command id → shortcut such as `mod+shift+p`; only changed bindings are stored.
     pub keymap: BTreeMap<String, String>,
     pub page_size: u32,
@@ -307,6 +330,13 @@ pub struct Settings {
     pub check_updates_on_launch: bool,
     /// Download and install updates in the background; they apply on the next restart.
     pub auto_install_updates: bool,
+    /// Folder that holds the encrypted connection sync file; empty when sync is off.
+    pub sync_folder: String,
+    /// Folder where saved scripts are mirrored as `.sql` files; empty when off.
+    pub scripts_folder: String,
+    /// Backup tool → program path chosen by the user (e.g. `pg_dump` →
+    /// `/opt/homebrew/opt/libpq/bin/pg_dump`); unset tools are found automatically.
+    pub backup_tools: BTreeMap<String, String>,
 }
 
 pub const DEFAULT_MASK_PATTERNS: &[&str] =
@@ -326,6 +356,7 @@ impl Default for Settings {
             editor_font_family: "JetBrains Mono".into(),
             editor_line_height: 150,
             editor_ligatures: false,
+            editor_vim: false,
             keymap: BTreeMap::new(),
             page_size: 100,
             manual_commit: false,
@@ -341,11 +372,15 @@ impl Default for Settings {
             ai_endpoint: "http://localhost:11434/v1".into(),
             check_updates_on_launch: true,
             auto_install_updates: false,
+            sync_folder: String::new(),
+            scripts_folder: String::new(),
+            backup_tools: BTreeMap::new(),
         }
     }
 }
 
-fn clean_text(s: &str, max: usize) -> String {
+/// Trims, drops control characters and keeps at most `max` characters.
+pub(crate) fn clean_text(s: &str, max: usize) -> String {
     s.trim().chars().filter(|c| !c.is_control()).take(max).collect()
 }
 
@@ -377,6 +412,18 @@ impl Settings {
         self.history_max_days = self.history_max_days.min(3650);
         self.ai_model = clean_text(&self.ai_model, 100);
         self.ai_endpoint = clean_text(&self.ai_endpoint, 500);
+        self.sync_folder = clean_text(&self.sync_folder, 4096);
+        self.scripts_folder = clean_text(&self.scripts_folder, 4096);
+        // Known tools only, with absolute paths; anything else is dropped.
+        self.backup_tools = std::mem::take(&mut self.backup_tools)
+            .into_iter()
+            .filter(|(tool, path)| {
+                dq_core::backup::Tool::from_id(tool).is_some()
+                    && path.len() <= 4096
+                    && !path.chars().any(char::is_control)
+                    && std::path::Path::new(path).is_absolute()
+            })
+            .collect();
         self
     }
 }
@@ -384,6 +431,16 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_tool_paths_are_checked() {
+        let s: Settings = serde_json::from_str(
+            r#"{"backup_tools":{"pg_dump":"/opt/pg/bin/pg_dump","psql":"relative/psql","rm":"/bin/rm"}}"#,
+        )
+        .unwrap();
+        let s = s.normalized();
+        assert_eq!(s.backup_tools.into_iter().collect::<Vec<_>>(), [("pg_dump".into(), "/opt/pg/bin/pg_dump".into())]);
+    }
 
     #[test]
     fn older_local_model_setting_loads_as_custom() {

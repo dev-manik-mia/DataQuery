@@ -15,6 +15,10 @@ language: string, row_limit: number, timeout_secs: number, confirm_destructive: 
  */
 editor_line_height: number, editor_ligatures: boolean, 
 /**
+ * Vim key bindings in the SQL editor.
+ */
+editor_vim: boolean, 
+/**
  * Command id → shortcut such as `mod+shift+p`; only changed bindings are stored.
  */
 keymap: { [key in string]?: string }, page_size: number, 
@@ -57,4 +61,17 @@ check_updates_on_launch: boolean,
 /**
  * Download and install updates in the background; they apply on the next restart.
  */
-auto_install_updates: boolean, };
+auto_install_updates: boolean, 
+/**
+ * Folder that holds the encrypted connection sync file; empty when sync is off.
+ */
+sync_folder: string, 
+/**
+ * Folder where saved scripts are mirrored as `.sql` files; empty when off.
+ */
+scripts_folder: string, 
+/**
+ * Backup tool → program path chosen by the user (e.g. `pg_dump` →
+ * `/opt/homebrew/opt/libpq/bin/pg_dump`); unset tools are found automatically.
+ */
+backup_tools: { [key in string]?: string }, };

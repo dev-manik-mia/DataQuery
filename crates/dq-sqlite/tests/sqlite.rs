@@ -465,3 +465,73 @@ async fn explain_and_schema_changes() {
     let plan = diff(s.dialect(), &snapshot("main").await, &main, &snapshot("b").await, &b).unwrap();
     assert!(plan.warnings.iter().any(|w| w.starts_with("widen: SQLite cannot change")), "{:?}", plan.warnings);
 }
+
+#[tokio::test]
+async fn table_actions_truncate_empty_and_duplicate() {
+    use dq_core::edit::BoundStatement;
+    use dq_core::sql::ddl::SchemaChange;
+
+    let (_dir, _cfg, s) = seeded().await;
+    let apply = |changes: Vec<SchemaChange>| {
+        let s = s.clone();
+        async move {
+            let sql = ops::schema_statements(&*s, &changes).await?;
+            let mut bound =
+                sql.into_iter().map(|q| Ok(BoundStatement { sql: q, params: Vec::new(), expect_rows: None }));
+            s.run_in_transaction("main", &mut bound).await
+        }
+    };
+    let scalar = |sql: &'static str| {
+        let s = s.clone();
+        async move { text(&s.execute(sql, &[], OPTS).await.unwrap().rows[0][0]) }
+    };
+
+    // Duplicate from the stored CREATE TABLE: rows, defaults, checks and foreign keys come along.
+    let copy = SchemaChange::DuplicateTable { table: table("orders"), new_name: "ta_orders".into(), with_data: true };
+    apply(vec![copy]).await.unwrap();
+    assert_eq!(scalar("SELECT COUNT(*) FROM ta_orders").await, "1200");
+    let bad = s.execute("INSERT INTO ta_orders (customer_id, status, total) VALUES (1, 'lost', 1)", &[], OPTS).await;
+    assert_eq!(bad.unwrap_err().kind, ErrorKind::Constraint, "the CHECK was copied");
+    // Generated columns are recomputed, not copied.
+    let samples =
+        SchemaChange::DuplicateTable { table: table("type_samples"), new_name: "ta_samples".into(), with_data: true };
+    apply(vec![samples]).await.unwrap();
+    assert_eq!(scalar("SELECT total FROM ta_samples WHERE id = 1").await, "3.0");
+    let shape =
+        SchemaChange::DuplicateTable { table: table("customers"), new_name: "ta_shape".into(), with_data: false };
+    apply(vec![shape]).await.unwrap();
+    assert_eq!(scalar("SELECT COUNT(*) FROM ta_shape").await, "0");
+
+    // No TRUNCATE in SQLite: rows are deleted, and AUTOINCREMENT restarts only when asked.
+    run_all(&*s, "CREATE TABLE ta_auto (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT); INSERT INTO ta_auto (v) VALUES ('a'), ('b')").await;
+    let truncate = |restart_identity: bool| SchemaChange::TruncateTable {
+        table: table("ta_auto"),
+        restart_identity,
+        cascade: false,
+        disable_foreign_keys: false,
+    };
+    apply(vec![truncate(false)]).await.unwrap();
+    run_all(&*s, "INSERT INTO ta_auto (v) VALUES ('c')").await;
+    assert_eq!(scalar("SELECT MAX(id) FROM ta_auto").await, "3");
+    apply(vec![truncate(true)]).await.unwrap();
+    run_all(&*s, "INSERT INTO ta_auto (v) VALUES ('d')").await;
+    assert_eq!(scalar("SELECT MAX(id) FROM ta_auto").await, "1");
+    // RESTART IDENTITY on a table without AUTOINCREMENT just deletes.
+    apply(vec![SchemaChange::TruncateTable {
+        table: table("ta_shape"),
+        restart_identity: true,
+        cascade: false,
+        disable_foreign_keys: false,
+    }])
+    .await
+    .unwrap();
+
+    // Empty several tables at once.
+    apply(vec![
+        SchemaChange::EmptyTable { table: table("ta_orders") },
+        SchemaChange::EmptyTable { table: table("ta_samples") },
+    ])
+    .await
+    .unwrap();
+    assert_eq!(scalar("SELECT (SELECT COUNT(*) FROM ta_orders) + (SELECT COUNT(*) FROM ta_samples)").await, "0");
+}

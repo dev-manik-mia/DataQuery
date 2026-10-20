@@ -61,7 +61,7 @@
   font-weight: 600;
 }
 
-.tree:focus-visible .node[aria-selected='true'] {
+.tree:focus-visible .node[data-cursor='true'] {
   outline: var(--ring-w) solid var(--ring-color);
   outline-offset: -2px;
 }

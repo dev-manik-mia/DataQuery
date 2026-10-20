@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 dq-core.workspace = true
 async-trait.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["backup"] }
 tokio.workspace = true
 uuid.workspace = true
 
