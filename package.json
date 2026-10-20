@@ -31,7 +31,8 @@
     "db:up:bigquery": "docker compose -p dataquery --profile bigquery up -d bigquery",
     "test:integration:bigquery": "DATAQUERY_TEST_BIGQUERY=http://localhost:59050 cargo test -p dq-bigquery --test bigquery -- --test-threads=1",
     "test:integration:vertica": "DATAQUERY_TEST_VERTICA=localhost:55443 cargo test -p dq-vertica --test vertica",
-    "db:down": "docker compose -p dataquery --profile wide --profile search --profile libsql --profile bigquery --profile vertica down -v"
+    "db:down": "docker compose -p dataquery --profile wide --profile search --profile libsql --profile bigquery --profile vertica down -v",
+    "test:d1:live": "cargo test -p dq-sqlite-http --test d1_live -- --nocapture"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.0",
