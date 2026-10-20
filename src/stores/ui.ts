@@ -8,7 +8,7 @@ import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import { errorMessage } from '@/lib/errors';
 import { uid } from '@/lib/id';
 
-export type SettingsSection = 'general' | 'editor' | 'keyboard' | 'results' | 'history' | 'security' | 'ai' | 'engines' | 'about';
+export type SettingsSection = 'general' | 'editor' | 'keyboard' | 'results' | 'history' | 'security' | 'ai' | 'engines' | 'license' | 'about';
 
 export type View =
   | { name: 'home' }

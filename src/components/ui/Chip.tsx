@@ -32,8 +32,14 @@ export function EnvironmentChip({ environment, small }: { environment: Environme
 
 const priorityTone: Record<Priority, ChipTone> = { MVP: 'positive', P0: 'accent', P1: 'mute', P2: 'faint' };
 
-export function PriorityChip({ priority, available }: { priority: Priority; available?: boolean }) {
-  if (available) return <Chip tone="positive" small>Ready</Chip>;
+export function PriorityChip({ priority, available, beta }: { priority: Priority; available?: boolean; beta?: boolean }) {
+  if (available && beta)
+    return (
+      <Chip tone="caution" small title="Tested against an emulator only, not yet against the real service">
+        Beta
+      </Chip>
+    );
+  if (available) return <Chip tone="positive" small>Stable</Chip>;
   return (
     <Chip tone={priorityTone[priority]} small>
       {priority}

@@ -281,6 +281,8 @@ pub struct Settings {
     /// Line height in percent of the font size.
     pub editor_line_height: u16,
     pub editor_ligatures: bool,
+    /// Vim key bindings in the SQL editor.
+    pub editor_vim: bool,
     /// Command id → shortcut such as `mod+shift+p`; only changed bindings are stored.
     pub keymap: BTreeMap<String, String>,
     pub page_size: u32,
@@ -326,6 +328,7 @@ impl Default for Settings {
             editor_font_family: "JetBrains Mono".into(),
             editor_line_height: 150,
             editor_ligatures: false,
+            editor_vim: false,
             keymap: BTreeMap::new(),
             page_size: 100,
             manual_commit: false,

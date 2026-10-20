@@ -17,6 +17,7 @@ import { api } from '@/lib/ipc';
 
 import { useCompletion } from './completion';
 import { useExplorer } from './explorer';
+import { withinFreeLimit } from './license';
 import { useSettings } from './settings';
 import { guarded, useUi } from './ui';
 
@@ -262,6 +263,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     else set({ activeTabId: id });
   };
   const addTab = (tab: Tab) => {
+    if (!withinFreeLimit('tabs', get().tabs.length)) return;
     set({ tabs: [...get().tabs, tab] });
     showTab(tab.id);
   };

@@ -1,7 +1,14 @@
+.frame {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .scroller {
   position: relative;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   background: var(--surface);
   font-size: var(--text-caption);
@@ -345,5 +352,70 @@
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: 12px;
+  resize: vertical;
+}
+
+/* Row details (Space) */
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  flex: none;
+  padding: 8px;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.detailHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.detailTitle {
+  font-weight: 600;
+  font-size: var(--text-caption);
+}
+
+.detailFields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.detailField {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.detailField[data-active='true'] {
+  background: var(--surface);
+}
+
+.detailField[data-edited='true'] .detailInput {
+  border-color: var(--caution);
+}
+
+.detailLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--text-caption);
+}
+
+.detailType {
+  color: var(--ink-2);
+}
+
+.detailInput {
+  width: 100%;
   resize: vertical;
 }

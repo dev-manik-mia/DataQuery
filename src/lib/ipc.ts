@@ -43,6 +43,7 @@ import type { ConsoleReply } from '@/bindings/ConsoleReply';
 import type { KeychainStatus } from '@/bindings/KeychainStatus';
 import type { KeyRole } from '@/bindings/KeyRole';
 import type { KeyWrite } from '@/bindings/KeyWrite';
+import type { LicenseStatus } from '@/bindings/LicenseStatus';
 import type { MonitorSnapshot } from '@/bindings/MonitorSnapshot';
 import type { Node } from '@/bindings/Node';
 import type { ObjectRef } from '@/bindings/ObjectRef';
@@ -109,6 +110,12 @@ export const api = {
   parseUrl: (url: string) => call<ParsedUrl>('parse_url', { url }),
   readSqlFile: (path: string) => call<string>('read_sql_file', { path }),
   writeSqlFile: (path: string, contents: string) => call<void>('write_sql_file', { path, contents }),
+
+  // licence
+  licenseStatus: () => call<LicenseStatus>('license_status'),
+  licenseActivate: (key: string) => call<LicenseStatus>('license_activate', { key }),
+  licenseDeactivate: () => call<LicenseStatus>('license_deactivate'),
+  openPricing: () => call<void>('open_pricing'),
 
   // settings and UI state
   getSettings: () => call<Settings>('get_settings'),

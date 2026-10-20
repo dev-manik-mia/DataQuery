@@ -20,12 +20,14 @@ import wsStyles from '@/features/workspace/Workspace.module.css';
 import { formatCount, formatDuration } from '@/lib/format';
 import { CommandPalette } from '@/features/commands/CommandPalette';
 import { appCommands, commandKeys, openNewWindow } from '@/features/commands/commands';
+import { ProGate } from '@/features/license/ProGate';
 import { SchemaDiffPage } from '@/features/schema/SchemaDiffPage';
 import { setLanguage, t } from '@/i18n';
 import { matchShortcut, shortcutLabel } from '@/lib/platform';
 import { useConnections, useEngine } from '@/stores/connections';
 import { useCompletion } from '@/stores/completion';
 import { useLayout } from '@/stores/layout';
+import { useLicense } from '@/stores/license';
 import { applyTheme, useSettings } from '@/stores/settings';
 import { useUi, type View } from '@/stores/ui';
 import { startUpdateChecks } from '@/stores/updates';
@@ -47,6 +49,7 @@ export function App() {
         stopUpdateChecks = startUpdateChecks();
       });
     void useConnections.getState().load();
+    void useLicense.getState().load();
     void useLayout.getState().load();
     void useCompletion.getState().loadSnippets();
     const unlisten = listen<{ session_id: string; reason: string }>('session-closed', (e) => noteSessionClosed(e.payload.session_id, e.payload.reason));
@@ -85,7 +88,11 @@ export function App() {
         {view.name === 'engines' && <EnginePicker />}
         {view.name === 'connection-form' && <ConnectionForm key={`${view.engine}:${view.connectionId ?? 'new'}`} engine={view.engine} connectionId={view.connectionId} prefill={view.prefill} />}
         {view.name === 'history' && <HistoryPage />}
-        {view.name === 'diff' && <SchemaDiffPage />}
+        {view.name === 'diff' && (
+          <ProGate feature="Schema diff" summary="Compare the schemas of two connections and get the migration SQL that makes the target match, with a preview before anything runs.">
+            <SchemaDiffPage />
+          </ProGate>
+        )}
         {view.name === 'settings' && <SettingsPage section={view.section} />}
       </div>
       {view.name === 'workspace' && session && <WorkspaceStatus />}

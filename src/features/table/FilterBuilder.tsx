@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { FilterCondition } from '@/bindings/FilterCondition';
 import type { FilterOp } from '@/bindings/FilterOp';
 import { Button, Icon, IconButton, Segmented } from '@/components/ui';
+import { withinFreeLimit } from '@/stores/license';
 
 import styles from './Table.module.css';
 
@@ -111,7 +112,7 @@ export function FilterBuilder({ columns, applied, onApply, onClose }: FilterBuil
         </div>
       ))}
       <div className={styles.filterActions}>
-        <Button size="sm" onClick={() => setRows((r) => [...r, blank()])}>
+        <Button size="sm" onClick={() => withinFreeLimit('filters', rows.length) && setRows((r) => [...r, blank()])}>
           <Icon name="plus" size={12} /> Condition
         </Button>
         <span style={{ flex: 1 }} />

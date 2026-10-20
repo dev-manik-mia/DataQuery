@@ -135,6 +135,7 @@ async fn diff_table(session: &dyn Session, object: &ObjectRef) -> DbResult<DiffT
 /// that makes `target` match `source`. Opens its own sessions and closes them.
 #[tauri::command]
 pub async fn schema_diff(state: State<'_, AppState>, source: DiffSide, target: DiffSide) -> CmdResult<SchemaDiff> {
+    super::license::require_pro(&state, "Schema diff").await?;
     let open_side = |side: DiffSide| {
         let state = &state;
         async move {

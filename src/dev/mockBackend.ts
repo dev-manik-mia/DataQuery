@@ -34,9 +34,12 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
 
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
   ({
-    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, file_based: port === null,
+    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: e === 'snowflake' || e === 'dynamodb', file_based: port === null,
     capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])) } : none,
   }) as EngineInfo;
+
+const FREE = { plan: 'free', source_build: false, claims: null, limits: { tabs: 4, windows: 4, filters: 4 } };
+let license: unknown = FREE;
 
 const ENGINES: EngineInfo[] = [
   engine('postgres', 'PostgreSQL', 'Pg', 250, 'relational', 'SQL', 5432, '5432 · SQL · v12–17', 'MVP', true),
@@ -174,6 +177,14 @@ const handlers: Record<string, (a: Args) => unknown> = {
   app_info: () => ({ name: 'DataQuery', version: '0.1.0', os: 'macos', arch: 'aarch64', license: 'MIT OR Apache-2.0' }),
   list_engines: () => ENGINES,
   keychain_status: () => ({ available: true, backend: 'macOS Keychain', detail: null }),
+  license_status: () => license,
+  license_activate: (a) => {
+    if (!String(a.key).startsWith('DQ1.')) throw { kind: 'invalid_input', code: null, message: 'This licence token is not valid.', detail: null, hint: null, action: null, position: null };
+    license = { plan: 'pro', source_build: false, limits: null, claims: { v: 1, plan: 'pro', name: 'Preview User', email: 'preview@example.com', order: '1', instance: null, issued: '2026-10-20' } };
+    return license;
+  },
+  license_deactivate: () => (license = FREE),
+  open_pricing: () => null,
   analyze_sql: (a) => split(String(a.sql)),
   format_sql: (a) => String(a.sql),
   get_settings: () => ({
@@ -188,6 +199,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
     editor_font_family: 'JetBrains Mono',
     editor_line_height: 150,
     editor_ligatures: false,
+    editor_vim: false,
     keymap: {},
     page_size: 100,
     manual_commit: false,

@@ -51,6 +51,7 @@ export const en = {
   'settings.security': 'Security and privacy',
   'settings.ai': 'AI assistant',
   'settings.engines': 'Engines',
+  'settings.license': 'License',
   'settings.about': 'About',
   'settings.language': 'Language',
   'settings.languageHelp': 'Strings live in one table per language (src/i18n). English is the only translation so far.',

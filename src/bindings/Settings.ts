@@ -15,6 +15,10 @@ language: string, row_limit: number, timeout_secs: number, confirm_destructive: 
  */
 editor_line_height: number, editor_ligatures: boolean, 
 /**
+ * Vim key bindings in the SQL editor.
+ */
+editor_vim: boolean, 
+/**
  * Command id → shortcut such as `mod+shift+p`; only changed bindings are stored.
  */
 keymap: { [key in string]?: string }, page_size: number, 

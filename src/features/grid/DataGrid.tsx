@@ -13,6 +13,7 @@ import { useUi } from '@/stores/ui';
 
 import { CellInspector } from './CellInspector';
 import { CellView } from './CellView';
+import { RowDetail } from './RowDetail';
 import { columnOffsets, columnRange, columnSlots, revealScrollLeft } from './columnWindow';
 import styles from './Grid.module.css';
 
@@ -89,6 +90,9 @@ function initialWidth(c: GridColumn): number {
   return Math.max(byType, Math.min(320, c.name.length * 8 + 28));
 }
 
+/** The row panel stays open for the next grid once the user opened it. */
+let detailPreference = false;
+
 function canEdit(column: GridColumn | undefined, row: GridRow | undefined): boolean {
   return Boolean(column?.editable && row && row.status !== 'deleted');
 }
@@ -128,6 +132,11 @@ export function DataGrid({
   const [ownSelection, setOwnSelection] = useState<Set<number>>(new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
   const [inspect, setInspect] = useState<CellPosition | null>(null);
+  const [detail, setDetailState] = useState(detailPreference);
+  const setDetail = (open: boolean) => {
+    detailPreference = open;
+    setDetailState(open);
+  };
   const [menu, setMenu] = useState<{ x: number; y: number; at: CellPosition } | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const [hidden, setHidden] = useState<Set<number>>(new Set());
@@ -335,9 +344,13 @@ export function DataGrid({
     } else if ((e.key === 'Enter' || e.key === 'F2') && active) {
       e.preventDefault();
       if (!startEdit(active)) setInspect(active);
-    } else if (e.key === ' ' && active) {
+    } else if (e.key === ' ' && e.shiftKey && active) {
       e.preventDefault();
       setInspect(active);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (!active && shownRows.length) setActive({ row: shownRows[0]!, col: visible[0] ?? 0 });
+      setDetail(!detail);
     } else if (mod && e.key.toLowerCase() === 'c') {
       e.preventDefault();
       if (selection.size > 0) copyRows([...selection].sort((a, b) => a - b), 'tsv');
@@ -426,7 +439,8 @@ export function DataGrid({
           ]
         : []),
       { type: 'separator' },
-      { label: 'Inspect value…', hint: 'Space', onSelect: () => setInspect(at) },
+      { label: detail ? 'Hide row details' : 'Row details', hint: 'Space', onSelect: () => setDetail(!detail) },
+      { label: 'Inspect value…', hint: shortcutLabel('shift+space'), onSelect: () => setInspect(at) },
       ...(foreignKeys?.has(at.col) && cell.kind !== 'null' ? [{ label: foreignKeys.get(at.col)!.title, onSelect: () => foreignKeys.get(at.col)!.open(at.row) }] : []),
       ...(onSaveCell && (cell.kind === 'binary' || isTruncated(cell)) ? [{ label: 'Save value to file…', onSelect: () => onSaveCell(at.row, at.col) }] : []),
       ...(extraMenu?.(at) ?? []),
@@ -488,149 +502,179 @@ export function DataGrid({
   const inspected = inspect && rows[inspect.row]?.cells[inspect.col];
   const searching = Object.values(searches).some((v) => v.trim());
 
+  const detailRow = detail && active ? rows[active.row] : undefined;
+
   return (
     <>
-      <div
-        ref={scroller}
-        className={styles.scroller}
-        tabIndex={0}
-        role="grid"
-        aria-label={label}
-        aria-rowcount={rows.length + 1}
-        aria-colcount={visible.length + 1}
-        onKeyDown={onKeyDown}
-        onScroll={windowed ? syncRange : undefined}
-        onPaste={(e) => {
-          if (!onPaste || !active || editing) return;
-          const text = e.clipboardData.getData('text/plain');
-          if (!text) return;
-          e.preventDefault();
-          onPaste(active, parseClipboardGrid(text));
-        }}
-      >
-        <div className={styles.header} style={{ gridTemplateColumns: template, width: totalWidth }} role="row">
-          <div className={`${styles.headCell} ${styles.cornerCell}`} style={{ gridColumn: 1, gridRow: 1 }} role="columnheader" aria-colindex={1} aria-label="Row number" />
-          {slots.map((k) => {
-            const ci = visible[k]!;
-            const c = columns[ci]!;
-            const sorted = sort?.column === c.name;
-            const left = pinLeft.get(ci);
-            return (
-              <div
-                key={c.name + ci}
-                role="columnheader"
-                aria-colindex={k + 2}
-                aria-sort={sorted ? (sort?.descending ? 'descending' : 'ascending') : undefined}
-                className={styles.headCell}
-                data-pinned={left !== undefined}
-                style={left !== undefined ? { gridColumn: k + 2, gridRow: 1, position: 'sticky', left, zIndex: 3 } : { gridColumn: k + 2, gridRow: 1 }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setHeadMenu({ x: e.clientX, y: e.clientY, col: ci });
-                }}
-                data-numeric={c.numeric}
-                data-sortable={Boolean(onSort)}
-                data-dragover={dragOver === ci}
-                draggable
-                title={onSort ? `Sort by ${c.name}` : c.name}
-                onClick={() => onSort?.(c.name)}
-                onDragStart={(e) => e.dataTransfer.setData('text/x-dq-column', String(ci))}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOver(ci);
-                }}
-                onDragLeave={() => setDragOver(null)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOver(null);
-                  dropColumn(Number(e.dataTransfer.getData('text/x-dq-column')), ci);
-                }}
-              >
-                <span className={styles.headName}>
-                  {pinned.includes(ci) && <Icon name="pin" size={10} />}
-                  <span className="ellipsis">{c.name}</span>
-                  {c.badge && (
-                    <span className={styles.headBadge} data-kind={c.badge.startsWith('PK') ? 'partition' : 'clustering'}>
-                      {c.badge}
-                    </span>
-                  )}
-                  {sorted && <Icon name={sort?.descending ? 'arrowDown' : 'arrowUp'} size={11} />}
-                  {masked.has(ci) && <Icon name="eyeOff" size={11} title="Masked: right-click to reveal" />}
-                  {foreignKeys?.has(ci) && <Icon name="link" size={11} title={foreignKeys.get(ci)!.title} />}
-                </span>
-                <span className={styles.headType}>{c.typeName}</span>
-                <span
-                  className={styles.resizer}
-                  role="separator"
-                  aria-label={`Resize ${c.name}`}
-                  onPointerDown={(e) => startResize(e, ci)}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    autosize(ci);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              </div>
-            );
-          })}
-          {searchOpen && (
-            <>
-              <div className={`${styles.searchCell} ${styles.cornerCell}`} style={{ gridColumn: 1, gridRow: 2 }}>
-                <Icon name="search" size={11} />
-              </div>
-              {slots.map((k) => {
-                const ci = visible[k]!;
-                const left = pinLeft.get(ci);
-                return (
-                  <div
-                    key={`search-${ci}`}
-                    className={styles.searchCell}
-                    style={left !== undefined ? { gridColumn: k + 2, gridRow: 2, position: 'sticky', left, zIndex: 3 } : { gridColumn: k + 2, gridRow: 2 }}
-                  >
-                    <input
-                      className={styles.searchInput}
-                      aria-label={`Search ${columns[ci]?.name}`}
-                      placeholder="contains…"
-                      value={searches[ci] ?? ''}
-                      onChange={(e) => setSearches((s) => ({ ...s, [ci]: e.target.value }))}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    />
-                  </div>
-                );
-              })}
-            </>
-          )}
-        </div>
-        {shownRows.length === 0 ? (
-          <div className={styles.empty}>{searching && !onColumnSearch ? 'No loaded rows match the column search.' : emptyText}</div>
-        ) : (
-          <div className={styles.body} style={{ height: virtualizer.getTotalSize(), width: totalWidth }}>
-            {items.map((item) => {
-              const index = shownRows[item.index]!;
+      <div className={styles.frame}>
+        <div
+          ref={scroller}
+          className={styles.scroller}
+          tabIndex={0}
+          role="grid"
+          aria-label={label}
+          aria-rowcount={rows.length + 1}
+          aria-colcount={visible.length + 1}
+          onKeyDown={onKeyDown}
+          onScroll={windowed ? syncRange : undefined}
+          onPaste={(e) => {
+            if (!onPaste || !active || editing) return;
+            const text = e.clipboardData.getData('text/plain');
+            if (!text) return;
+            e.preventDefault();
+            onPaste(active, parseClipboardGrid(text));
+          }}
+        >
+          <div className={styles.header} style={{ gridTemplateColumns: template, width: totalWidth }} role="row">
+            <div className={`${styles.headCell} ${styles.cornerCell}`} style={{ gridColumn: 1, gridRow: 1 }} role="columnheader" aria-colindex={1} aria-label="Row number" />
+            {slots.map((k) => {
+              const ci = visible[k]!;
+              const c = columns[ci]!;
+              const sorted = sort?.column === c.name;
+              const left = pinLeft.get(ci);
               return (
-              <GridRowView
-                key={rows[index]!.key}
-                index={index}
-                top={item.start}
-                row={rows[index]!}
-                number={rowOffset + index + 1}
-                order={visible}
-                slots={slots}
-                pinLeft={pinLeft}
-                masked={masked}
-                foreignKeys={foreignKeys}
-                columns={columns}
-                template={template}
-                width={totalWidth}
-                selected={selection.has(index)}
-                activeCol={active?.row === index ? active.col : null}
-                editing={editing?.row === index ? editing : null}
-                handlers={rowHandlers}
-              />
+                <div
+                  key={c.name + ci}
+                  role="columnheader"
+                  aria-colindex={k + 2}
+                  aria-sort={sorted ? (sort?.descending ? 'descending' : 'ascending') : undefined}
+                  className={styles.headCell}
+                  data-pinned={left !== undefined}
+                  style={left !== undefined ? { gridColumn: k + 2, gridRow: 1, position: 'sticky', left, zIndex: 3 } : { gridColumn: k + 2, gridRow: 1 }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setHeadMenu({ x: e.clientX, y: e.clientY, col: ci });
+                  }}
+                  data-numeric={c.numeric}
+                  data-sortable={Boolean(onSort)}
+                  data-dragover={dragOver === ci}
+                  draggable
+                  title={onSort ? `Sort by ${c.name}` : c.name}
+                  onClick={() => onSort?.(c.name)}
+                  onDragStart={(e) => e.dataTransfer.setData('text/x-dq-column', String(ci))}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(ci);
+                  }}
+                  onDragLeave={() => setDragOver(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(null);
+                    dropColumn(Number(e.dataTransfer.getData('text/x-dq-column')), ci);
+                  }}
+                >
+                  <span className={styles.headName}>
+                    {pinned.includes(ci) && <Icon name="pin" size={10} />}
+                    <span className="ellipsis">{c.name}</span>
+                    {c.badge && (
+                      <span className={styles.headBadge} data-kind={c.badge.startsWith('PK') ? 'partition' : 'clustering'}>
+                        {c.badge}
+                      </span>
+                    )}
+                    {sorted && <Icon name={sort?.descending ? 'arrowDown' : 'arrowUp'} size={11} />}
+                    {masked.has(ci) && <Icon name="eyeOff" size={11} title="Masked: right-click to reveal" />}
+                    {foreignKeys?.has(ci) && <Icon name="link" size={11} title={foreignKeys.get(ci)!.title} />}
+                  </span>
+                  <span className={styles.headType}>{c.typeName}</span>
+                  <span
+                    className={styles.resizer}
+                    role="separator"
+                    aria-label={`Resize ${c.name}`}
+                    onPointerDown={(e) => startResize(e, ci)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      autosize(ci);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
               );
             })}
+            {searchOpen && (
+              <>
+                <div className={`${styles.searchCell} ${styles.cornerCell}`} style={{ gridColumn: 1, gridRow: 2 }}>
+                  <Icon name="search" size={11} />
+                </div>
+                {slots.map((k) => {
+                  const ci = visible[k]!;
+                  const left = pinLeft.get(ci);
+                  return (
+                    <div
+                      key={`search-${ci}`}
+                      className={styles.searchCell}
+                      style={left !== undefined ? { gridColumn: k + 2, gridRow: 2, position: 'sticky', left, zIndex: 3 } : { gridColumn: k + 2, gridRow: 2 }}
+                    >
+                      <input
+                        className={styles.searchInput}
+                        aria-label={`Search ${columns[ci]?.name}`}
+                        placeholder="contains…"
+                        value={searches[ci] ?? ''}
+                        onChange={(e) => setSearches((s) => ({ ...s, [ci]: e.target.value }))}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                  );
+                })}
+              </>
+            )}
           </div>
-        )}
+          {shownRows.length === 0 ? (
+            <div className={styles.empty}>{searching && !onColumnSearch ? 'No loaded rows match the column search.' : emptyText}</div>
+          ) : (
+            <div className={styles.body} style={{ height: virtualizer.getTotalSize(), width: totalWidth }}>
+              {items.map((item) => {
+                const index = shownRows[item.index]!;
+                return (
+                <GridRowView
+                  key={rows[index]!.key}
+                  index={index}
+                  top={item.start}
+                  row={rows[index]!}
+                  number={rowOffset + index + 1}
+                  order={visible}
+                  slots={slots}
+                  pinLeft={pinLeft}
+                  masked={masked}
+                  foreignKeys={foreignKeys}
+                  columns={columns}
+                  template={template}
+                  width={totalWidth}
+                  selected={selection.has(index)}
+                  activeCol={active?.row === index ? active.col : null}
+                  editing={editing?.row === index ? editing : null}
+                  handlers={rowHandlers}
+                />
+                );
+              })}
+            </div>
+          )}
+        </div>
+        {detail &&
+          (detailRow && active ? (
+            <RowDetail
+              columns={columns}
+              row={detailRow}
+              rowIndex={active.row}
+              number={rowOffset + active.row + 1}
+              order={visible}
+              display={(col) => maskCell(detailRow.cells[col] ?? { kind: 'null' }, col)}
+              masked={masked}
+              foreignKeys={foreignKeys}
+              activeCol={active.col}
+              canEdit={(col) => editable && Boolean(onEditCell) && canEdit(columns[col], detailRow)}
+              onEdit={(col, value) => onEditCell?.(active.row, col, value)}
+              onInspect={(col) => setInspect({ row: active.row, col })}
+              onFocusColumn={(col) => setActive({ row: active.row, col })}
+              onClose={() => {
+                setDetail(false);
+                scroller.current?.focus();
+              }}
+            />
+          ) : (
+            <aside className={styles.detail} aria-label="Row details">
+              <div className={styles.empty}>Select a row to see its fields.</div>
+            </aside>
+          ))}
       </div>
       {menu && <Menu x={menu.x} y={menu.y} items={menuItems(menu.at)} onClose={() => setMenu(null)} label="Cell actions" />}
       {headMenu && <Menu x={headMenu.x} y={headMenu.y} items={headActions(headMenu.col)} onClose={() => setHeadMenu(null)} label="Column actions" />}

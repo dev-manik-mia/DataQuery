@@ -146,6 +146,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RELEASE_ID: ${{ needs.create-release.outputs.id }}
+      # Official builds apply the Free plan limits until a Pro licence is entered
+      # (src-tauri/src/license.rs); builds from source have every feature.
+      DATAQUERY_OFFICIAL_BUILD: 1
     steps:
       - uses: actions/checkout@v6
       - name: Linux libraries

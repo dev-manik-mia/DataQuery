@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editor_font_family: 'JetBrains Mono',
   editor_line_height: 150,
   editor_ligatures: false,
+  editor_vim: false,
   keymap: {},
   page_size: 100,
   language: 'en',
@@ -31,7 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ai_model: '',
   ai_endpoint: 'http://localhost:11434/v1',
   check_updates_on_launch: true,
-    auto_install_updates: false,
+  auto_install_updates: false,
 };
 
 interface SettingsState {

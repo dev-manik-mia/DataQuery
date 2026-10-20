@@ -8,6 +8,7 @@ pub mod documents;
 pub mod explorer;
 pub mod history;
 pub mod keys;
+pub mod license;
 pub mod monitor;
 pub mod query;
 pub mod schema;

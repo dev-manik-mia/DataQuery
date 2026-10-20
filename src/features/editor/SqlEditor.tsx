@@ -4,6 +4,7 @@ import { bracketMatching, indentOnInput } from '@codemirror/language';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, placeholder } from '@codemirror/view';
+import { Vim, vim } from '@replit/codemirror-vim';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import type { SchemaModel } from '@/bindings/SchemaModel';
@@ -54,6 +55,8 @@ export interface EditorKeys {
 
 interface SqlEditorProps {
   value: string;
+  /** Vim key bindings. */
+  vimMode: boolean;
   flavor: SqlFlavor;
   errorAt: number | null;
   active: boolean;
@@ -71,6 +74,15 @@ interface SqlEditorProps {
 
 const ANALYZE_DELAY_MS = 150;
 
+/** `:w` saves the editor it was typed in. */
+const vimSave = new WeakMap<EditorView, () => void>();
+Vim.defineEx('write', 'w', (cm: { cm6?: EditorView }) => {
+  if (cm.cm6) vimSave.get(cm.cm6)?.();
+});
+
+// Vim's keymap must come before the others so normal mode sees keys first.
+const vimExtension = (on: boolean) => (on ? Prec.highest(vim()) : []);
+
 function editorKeymap(keys: EditorKeys, callbacks: React.RefObject<Pick<SqlEditorProps, 'onRunStatement' | 'onRunScript' | 'onExplain' | 'onSave'>>) {
   const bind = (shortcut: string | undefined, run: (v: EditorView) => boolean) => (shortcut ? [{ key: codeMirrorKey(shortcut), run, preventDefault: true }] : []);
   return Prec.highest(
@@ -87,7 +99,7 @@ function editorKeymap(keys: EditorKeys, callbacks: React.RefObject<Pick<SqlEdito
 }
 
 export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor(
-  { value, flavor, errorAt, active, keys, model, snippets, bookmarks, onChange, onBookmarks, onRunStatement, onRunScript, onExplain, onSave },
+  { value, vimMode, flavor, errorAt, active, keys, model, snippets, bookmarks, onChange, onBookmarks, onRunStatement, onRunScript, onExplain, onSave },
   ref,
 ) {
   const host = useRef<HTMLDivElement>(null);
@@ -96,6 +108,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
   callbacks.current = { onChange, onBookmarks, onRunStatement, onRunScript, onExplain, onSave };
   const language = useRef(new Compartment());
   const keyCompartment = useRef(new Compartment());
+  const vimCompartment = useRef(new Compartment());
   const analyzeTimer = useRef<number>(undefined);
   /** The text last passed to `onChange`. */
   const emitted = useRef<string | null>(null);
@@ -110,6 +123,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
     const state = EditorState.create({
       doc: value,
       extensions: [
+        vimCompartment.current.of(vimExtension(vimMode)),
         keyCompartment.current.of(editorKeymap(keys, callbacks)),
         bookmarkGutter,
         lineNumbers(),
@@ -154,6 +168,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       ],
     });
     view.current = new EditorView({ state, parent: host.current! });
+    vimSave.set(view.current, () => callbacks.current.onSave());
     view.current.dispatch({ effects: setBookmarks.of(bookmarks) });
     void analyze(value);
     return () => {
@@ -181,6 +196,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
     view.current?.dispatch({ effects: keyCompartment.current.reconfigure(editorKeymap(keys, callbacks)) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySignature]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: vimCompartment.current.reconfigure(vimExtension(vimMode)) });
+  }, [vimMode]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: setErrorAt.of(errorAt) });

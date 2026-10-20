@@ -5,6 +5,7 @@ mod ai_client;
 mod cloud_auth;
 mod commands;
 mod connector;
+mod license;
 mod registry;
 mod safety;
 mod state;
@@ -42,6 +43,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::ai::ai_disclosure,
+            commands::license::license_status,
+            commands::license::license_activate,
+            commands::license::license_deactivate,
+            commands::license::open_pricing,
             commands::ai::ai_ask,
             commands::ai::ai_providers,
             commands::ai::ai_models,

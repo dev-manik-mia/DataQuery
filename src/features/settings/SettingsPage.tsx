@@ -14,6 +14,7 @@ import { openNewWindow } from '@/features/commands/commands';
 import { languages, t } from '@/i18n';
 import { api } from '@/lib/ipc';
 import { useConnections } from '@/stores/connections';
+import { useLicense } from '@/stores/license';
 import { useSettings } from '@/stores/settings';
 import { useUi, type SettingsSection } from '@/stores/ui';
 import { useUpdates } from '@/stores/updates';
@@ -22,7 +23,7 @@ import { KeyboardSettings } from './KeyboardSettings';
 import styles from './Settings.module.css';
 import { UpdatesCard } from './Updates';
 
-const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results', 'history', 'security', 'ai', 'engines', 'about'];
+const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results', 'history', 'security', 'ai', 'engines', 'license', 'about'];
 
 export function SettingsPage({ section }: { section: SettingsSection }) {
   const navigate = useUi((s) => s.navigate);
@@ -48,6 +49,7 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
           {section === 'security' && <Security />}
           {section === 'ai' && <AiSettings />}
           {section === 'engines' && <Engines />}
+          {section === 'license' && <License />}
           {section === 'about' && <About />}
         </div>
       </div>
@@ -154,6 +156,7 @@ function Editor() {
         </div>
         <div className={styles.check}>
           <Checkbox label="Font ligatures" help="Combine characters such as -> and != when the font supports it." checked={settings.editor_ligatures} onChange={(v) => void update({ editor_ligatures: v })} />
+          <Checkbox label="Vim mode" help="Vim key bindings in the SQL editor (normal, insert and visual modes, :w saves)." checked={settings.editor_vim} onChange={(v) => void update({ editor_vim: v })} />
         </div>
       </Card>
       <Card title="Autocomplete" flush>
@@ -574,6 +577,75 @@ function Engines() {
   );
 }
 
+function License() {
+  const { status, activate, deactivate } = useLicense();
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const toast = useUi((s) => s.toast);
+  const run = async (action: () => Promise<void>, done: string) => {
+    setBusy(true);
+    try {
+      await action();
+      setKey('');
+      toast(done, 'positive');
+    } catch (e) {
+      useUi.getState().toastError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const claims = status?.claims;
+  return (
+    <>
+      <PageHead eyebrow="Settings" title="License" />
+      <Card flush>
+        <Row
+          title="Plan"
+          help={
+            status?.source_build
+              ? 'Built from source: every feature is on. Official builds need a licence for Pro.'
+              : claims
+                ? `Pro, licensed to ${claims.name || claims.email} (order ${claims.order}, ${claims.issued}). Lifetime updates.`
+                : `Free: ER diagrams, monitoring, every engine, ${status?.limits?.tabs ?? 4} tabs, ${status?.limits?.windows ?? 4} windows and ${status?.limits?.filters ?? 4} filter conditions.`
+          }
+        >
+          <Chip tone={status?.plan === 'free' ? 'mute' : 'positive'}>{status?.plan === 'free' ? 'Free' : 'Pro'}</Chip>
+        </Row>
+        {claims && !status?.source_build && (
+          <Row title="This device" help="Frees the seat so you can use the licence on another device (3 devices per licence).">
+            <Button size="sm" disabled={busy} onClick={() => void run(deactivate, 'Licence removed from this device.')}>
+              Deactivate
+            </Button>
+          </Row>
+        )}
+      </Card>
+      {status?.plan === 'free' && (
+        <Card
+          title="Activate Pro"
+          footer={
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <Button size="sm" onClick={() => void api.openPricing().catch(useUi.getState().toastError)}>
+                Get Pro — $59 once
+              </Button>
+              <Button size="sm" variant="primary" disabled={busy || !key.trim()} onClick={() => void run(() => activate(key), 'DataQuery Pro is active. Thank you!')}>
+                Activate
+              </Button>
+            </div>
+          }
+        >
+          <TextField
+            label="Licence key"
+            hint="The key from your purchase email. Activation checks it once online; after that it works offline. A DQ1 token works without internet."
+            value={key}
+            spellCheck={false}
+            onChange={(e) => setKey(e.target.value)}
+          />
+        </Card>
+      )}
+    </>
+  );
+}
+
 function About() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   useEffect(() => {
@@ -586,7 +658,7 @@ function About() {
       <Card flush>
         <Row title="Version" help={info ? `DataQuery ${info.version}` : '…'} />
         <Row title="Platform" help={platform} />
-        <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account.`} />
+        <Row title="Licence" help={`${info?.license ?? 'MIT OR Apache-2.0'}. Free, no account. DataQuery Pro is a one-time licence (Settings → License).`} />
       </Card>
       <UpdatesCard />
     </>

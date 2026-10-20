@@ -1,7 +1,8 @@
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { getAllWebviewWindows, WebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 import { t } from '@/i18n';
 import { uid } from '@/lib/id';
+import { withinFreeLimit } from '@/stores/license';
 import { useSettings } from '@/stores/settings';
 import { useUi } from '@/stores/ui';
 import { useWorkspace } from '@/stores/workspace';
@@ -51,7 +52,8 @@ export function commandKeys(id: string): string | undefined {
 let windows = 0;
 
 /** Opens another app window with its own workspace. */
-export function openNewWindow() {
+export async function openNewWindow() {
+  if (!withinFreeLimit('windows', (await getAllWebviewWindows().catch(() => [])).length)) return;
   windows += 1;
   const label = `window-${uid('w').replace(/[^a-zA-Z0-9-]/g, '')}`;
   const w = new WebviewWindow(label, {

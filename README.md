@@ -1,9 +1,71 @@
 # DataQuery
 
 A fast, safe desktop database client: Tauri 2, a Rust core and a React + TypeScript UI.
-Supports **PostgreSQL**, **CockroachDB**, **MySQL**, **MariaDB**, **SQL Server**, **Oracle**, **ClickHouse**, **DuckDB**, **Snowflake**, **MongoDB**, **DynamoDB**, **Redis**, **Valkey**, **Dragonfly**, **Cassandra**, **ScyllaDB**, **Elasticsearch / OpenSearch** and **Neo4j**. Passwords live in the OS keychain, and there is no telemetry, account or cloud service.
+Supports **PostgreSQL**, **CockroachDB**, **MySQL**, **MariaDB**, **SQL Server**, **Oracle**, **ClickHouse**, **DuckDB**, **Snowflake**, **MongoDB**, **DynamoDB**, **Redis**, **Valkey**, **Dragonfly**, **Cassandra**, **ScyllaDB**, **Elasticsearch / OpenSearch**, **Neo4j** and **SQLite**. Passwords live in the OS keychain, and there is no telemetry, account or cloud service.
 
-Feature status: [`feature_completed.md`](feature_completed.md) · Task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) · Designs: [`html/`](html)
+Feature status and task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE_FEATURES.md`](RUSTBASE_FEATURES.md) · Designs: [`html/`](html)
+
+## Why DataQuery
+
+- **The same app on macOS, Windows and Linux.** Every feature ships on all three; nothing is Mac-only.
+- **ER diagrams, schema diff and data compare** built in: see a schema, get the migration SQL between two
+  connections, and get the INSERT / UPDATE / DELETE that makes one table's rows match another's.
+- **Real monitoring:** connections against the limit, running queries with cancel / terminate, locks and blocking
+  chains, replication lag, table and index sizes.
+- **SQL and NoSQL in one client:** MongoDB, DynamoDB, Redis / Valkey / Dragonfly, Cassandra / ScyllaDB,
+  Elasticsearch / OpenSearch and Neo4j each get their own explorer and query language, not a SQL shim.
+- **No feature limits that matter:** Free has 4 tabs, 4 windows and 4 filter conditions (TablePlus Free has 2 of each)
+  and keeps ER diagrams, monitoring, backups and every engine. Pro is one payment with lifetime updates.
+- **Moving over is quick:** import your connections from TablePlus, DBeaver, Sequel Ace or DataGrip (passwords stay
+  behind; you type them once).
+- **Open source** (MIT or Apache-2.0), no account, no telemetry.
+
+## Free and Pro
+
+|  | **DataQuery Free** | **DataQuery Pro** |
+|---|---|---|
+| Price | $0 | **$59 once**, lifetime updates |
+| Devices | any | 3 per person |
+| Open tabs / windows / filter conditions | 4 / 4 / 4 | unlimited |
+| Every engine, ER diagram, monitoring, row details, charts, backup & restore, users & roles, AI (your own key), Vim mode, connection sync, scripts folder | ✓ | ✓ |
+| Schema diff with migration SQL | — | ✓ |
+| Data compare with sync SQL | — | ✓ |
+
+Builds from source have every feature; the limits apply only to the official builds (`DATAQUERY_OFFICIAL_BUILD`).
+
+### Compared with TablePlus
+
+From TablePlus's [pricing page](https://tableplus.com/pricing) and [documentation index](https://docs.tableplus.com/llms.txt),
+checked 2026-10-20. "Not documented" means the TablePlus docs have no page for it.
+
+**Free versions**
+
+|  | TablePlus Free | DataQuery Free |
+|---|---|---|
+| Open tabs at a time | 2 | **4** |
+| Open windows at a time | 2 | **4** |
+| Advanced filters | 2 (none in the free Windows version) | **4, on every platform** |
+| ER diagram | not documented | ✓ |
+| Monitoring: running queries, locks, server load | not documented | ✓ |
+| Import connections from other apps | not documented | ✓ TablePlus, DBeaver, Sequel Ace, DataGrip |
+| Source code | closed | open (MIT or Apache-2.0) |
+
+**Paid versions**
+
+|  | TablePlus (Basic / Standard) | DataQuery Pro |
+|---|---|---|
+| Price | $99 (1 device) / $129 (2 devices) | **$59** (3 devices) |
+| Updates | 1 year; then $59 per device per renewal | **lifetime** |
+| Extra device | $79 each | 3 included |
+| Schema diff / migration SQL | not documented | ✓ |
+| Data compare / sync SQL | not documented | ✓ |
+| ER diagram | not documented | ✓ |
+| Backup & restore | ✓ | ✓ |
+| User management | ✓ | ✓ PostgreSQL, MySQL, MariaDB |
+| Charts | Metrics board | ✓ bar, line, pie, scatter from any result |
+| AI | LLM plugin | ✓ built in: Claude, OpenAI, Gemini, DeepSeek, Mistral, any OpenAI-compatible endpoint |
+| Engines | 13 (Oracle on macOS only) | 19 (Snowflake and DynamoDB in beta), the same on every platform |
+| Connection sync | — | ✓ encrypted file in a folder you choose (iCloud Drive, Dropbox, a git repo); no passwords in it |
 
 ## Getting started
 
@@ -191,6 +253,21 @@ src/            React UI: components/ (design system), features/ (screens), stor
 - Table views and exports run on **read-only** connections. Grid edits run in one transaction, and each change must affect exactly one row or everything rolls back.
 - Destructive statements and production writes need a confirmation, checked in the backend and not only in the UI.
 - Error messages are redacted before they reach the UI, logs or history.
+
+### Licences (maintainers)
+
+Pro licences are Ed25519-signed tokens checked offline (`src-tauri/src/license.rs`). The signing key is at
+`~/.dataquery/license-signing.pem` and is **not** in the repository; the public key is compiled into the app.
+
+- **Lemon Squeezy:** create the product "DataQuery Pro" ($59, licence keys on, activation limit 3). Customers paste the
+  licence key from their receipt into Settings → License.
+- **Activation endpoint:** `DataQueryWebsite/functions/api/license/[action].js` (Cloudflare Pages Function, deployed with
+  the website). It activates a seat with Lemon Squeezy and returns a signed token. Set these on the Pages project:
+  `LICENSE_PRIVATE_KEY` (secret: the contents of `~/.dataquery/license-signing.pkcs8.b64`), `LS_STORE_ID`, `LS_PRODUCT_ID`.
+- **By hand** (offline customers, support): `node scripts/license-token.mjs --name "…" --email … --order …` prints a
+  `DQ1.…` token that works without internet.
+- CI builds set `DATAQUERY_OFFICIAL_BUILD=1`, which turns on the Free limits; `DATAQUERY_FREE_PLAN=1` previews them in a
+  dev build. `DATAQUERY_TEST_LICENSE_TOKEN=<token> cargo test -p dataquery license` checks a token against the real key.
 
 ## License
 
