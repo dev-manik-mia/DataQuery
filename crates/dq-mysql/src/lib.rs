@@ -8,6 +8,7 @@ mod connect;
 mod error;
 mod monitor;
 mod session;
+mod users;
 pub mod values;
 
 use std::sync::Arc;

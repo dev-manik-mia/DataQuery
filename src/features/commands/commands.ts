@@ -113,6 +113,7 @@ export function appCommands(): AppCommand[] {
     { id: 'nav.schemaDiff', title: t('nav.schemaDiff'), group: 'Navigate', available: true, run: () => ui.navigate({ name: 'diff' }) },
     { id: 'nav.dataCompare', title: t('nav.dataCompare'), group: 'Navigate', available: dataCompareAvailable(), run: () => openDataCompare() },
     { id: 'nav.monitor', title: t('nav.monitoring'), group: 'Navigate', available: Boolean(caps?.monitoring), run: () => (ui.navigate({ name: 'workspace' }), ws.openMonitorTab()) },
+    { id: 'nav.users', title: t('nav.users'), group: 'Navigate', available: Boolean(session?.users), run: () => (ui.navigate({ name: 'workspace' }), ws.openUsersTab()) },
     { id: 'nav.workspace', title: `Back to ${session?.connection.name ?? 'workspace'}`, group: 'Navigate', available: Boolean(session) && !inWorkspace, run: () => ui.navigate({ name: 'workspace' }) },
     { id: 'conn.reconnect', title: t('action.reconnect'), group: 'Connection', available: Boolean(session), run: () => void ws.reconnect() },
     { id: 'conn.disconnect', title: t('action.disconnect'), group: 'Connection', available: Boolean(session), run: () => void ws.disconnect().then(() => ui.navigate({ name: 'home' })) },

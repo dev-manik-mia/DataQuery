@@ -12,6 +12,7 @@ import { MonitorView } from '@/features/monitor/MonitorView';
 import { DiagramView } from '@/features/schema/DiagramView';
 import { MigrationsView } from '@/features/schema/MigrationsView';
 import { TableTabView } from '@/features/table/TableTabView';
+import { UsersView } from '@/features/users/UsersView';
 import { t } from '@/i18n';
 import { shortcutLabel } from '@/lib/platform';
 import { LAYOUT_LIMITS, useLayout } from '@/stores/layout';
@@ -35,6 +36,8 @@ const TabContent = memo(function TabContent({ tab, active }: { tab: Tab; active:
       return <Console full />;
     case 'monitor':
       return <MonitorView active={active} />;
+    case 'users':
+      return <UsersView active={active} />;
   }
 });
 

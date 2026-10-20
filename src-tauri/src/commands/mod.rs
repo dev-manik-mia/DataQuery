@@ -19,6 +19,7 @@ pub mod sync;
 pub mod system;
 pub mod table;
 pub mod transfer;
+pub mod users;
 
 use dq_core::DbResult;
 use serde::Serialize;

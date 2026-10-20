@@ -131,6 +131,9 @@ function AppTitleBar({ view, production }: { view: View; production: boolean }) 
       {session?.capabilities.monitoring && view.name === 'workspace' && (
         <TitleBarButton icon="activity" label={t('nav.monitoring')} onClick={() => useWorkspace.getState().openMonitorTab()} />
       )}
+      {session?.users && view.name === 'workspace' && (
+        <TitleBarButton icon="key" label={t('nav.users')} onClick={() => useWorkspace.getState().openUsersTab()} />
+      )}
       <TitleBarButton icon="history" label={t('nav.history')} onClick={() => navigate({ name: 'history' })} />
       <TitleBarButton icon="settings" label={t('nav.settings')} onClick={() => navigate({ name: 'settings', section: 'general' })} />
     </>

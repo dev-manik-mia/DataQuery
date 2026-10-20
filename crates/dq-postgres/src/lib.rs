@@ -9,6 +9,7 @@ mod error;
 mod monitor;
 mod session;
 mod tls;
+mod users;
 pub mod values;
 
 use std::sync::Arc;

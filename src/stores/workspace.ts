@@ -10,6 +10,7 @@ import type { RunReport } from '@/bindings/RunReport';
 import type { SessionInfo } from '@/bindings/SessionInfo';
 import type { TxAction } from '@/bindings/TxAction';
 import type { TxStatus } from '@/bindings/TxStatus';
+import { t } from '@/i18n';
 import { toAppError } from '@/lib/errors';
 import { formatCount, plural } from '@/lib/format';
 import { uid } from '@/lib/id';
@@ -97,9 +98,10 @@ export interface ContainerTab {
   schema: string | null;
 }
 
+/** A server page: Monitoring, or Users & roles. */
 export interface MonitorTab {
   id: string;
-  kind: 'monitor';
+  kind: 'monitor' | 'users';
   title: string;
 }
 
@@ -157,6 +159,7 @@ interface WorkspaceState {
   setTableMatches: (id: string, matches: ColumnValue[] | undefined) => void;
   openContainerTab: (kind: ContainerTab['kind'], database: string, schema: string | null) => void;
   openMonitorTab: () => void;
+  openUsersTab: () => void;
   toggleSplit: () => void;
   focusPane: (pane: 'left' | 'right') => void;
   moveToOtherPane: (id: string) => void;
@@ -268,6 +271,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
     if (!withinFreeLimit('tabs', get().tabs.length)) return;
     set({ tabs: [...get().tabs, tab] });
     showTab(tab.id);
+  };
+  /** Server pages are opened once per session and shown again after that. */
+  const openServerPage = (kind: MonitorTab['kind'], title: string) => {
+    const existing = get().tabs.find((tab) => tab.kind === kind);
+    if (existing) return showTab(existing.id);
+    addTab({ id: uid('tab'), kind, title });
   };
 
   return {
@@ -381,11 +390,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => {
       addTab({ id: uid('tab'), kind, database, schema, title: kind === 'diagram' ? `ER · ${where}` : kind === 'console' ? `Console · db ${where}` : `Migrations · ${where}` });
     },
 
-    openMonitorTab: () => {
-      const existing = get().tabs.find((t) => t.kind === 'monitor');
-      if (existing) return showTab(existing.id);
-      addTab({ id: uid('tab'), kind: 'monitor', title: 'Monitoring' });
-    },
+    openMonitorTab: () => openServerPage('monitor', 'Monitoring'),
+    openUsersTab: () => openServerPage('users', t('nav.users')),
 
     toggleSplit: () => {
       const { split, tabs, activeTabId } = get();

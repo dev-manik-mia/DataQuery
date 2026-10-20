@@ -8,7 +8,7 @@ import { isDirty, useWorkspace, type Tab } from '@/stores/workspace';
 import styles from './Workspace.module.css';
 
 const CONTAINER_MARK = { diagram: 'ER', migrations: 'Mg',
-  console: '>_', monitor: '≈' } as const;
+  console: '>_', monitor: '≈', users: '@' } as const;
 
 function tabLabel(tab: Tab): string {
   return tab.kind === 'table' ? objectLabel(tab.object) : tab.title;
