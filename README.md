@@ -259,11 +259,13 @@ src/            React UI: components/ (design system), features/ (screens), stor
 Pro licences are Ed25519-signed tokens checked offline (`src-tauri/src/license.rs`). The signing key is at
 `~/.dataquery/license-signing.pem` and is **not** in the repository; the public key is compiled into the app.
 
-- **Lemon Squeezy:** create the product "DataQuery Pro" ($59, licence keys on, activation limit 3). Customers paste the
-  licence key from their receipt into Settings → License.
+- **Paddle:** the website's Buy button opens Paddle checkout for the "DataQuery Pro" price ($59 one-time). The licence
+  key is the purchase's transaction id (`txn_…`), shown after checkout and in the Paddle receipt; customers paste it into
+  Settings → License.
 - **Activation endpoint:** `DataQueryWebsite/functions/api/license/[action].js` (Cloudflare Pages Function, deployed with
-  the website). It activates a seat with Lemon Squeezy and returns a signed token. Set these on the Pages project:
-  `LICENSE_PRIVATE_KEY` (secret: the contents of `~/.dataquery/license-signing.pkcs8.b64`), `LS_STORE_ID`, `LS_PRODUCT_ID`.
+  the website). It checks the transaction with the Paddle API (paid, DataQuery Pro price, not refunded), keeps up to 3
+  seats per purchase in the `LICENSES` KV namespace and returns a signed token. Configuration is in
+  `DataQueryWebsite/wrangler.toml` and `DataQueryWebsite/DEPLOY.md`.
 - **By hand** (offline customers, support): `node scripts/license-token.mjs --name "…" --email … --order …` prints a
   `DQ1.…` token that works without internet.
 - CI builds set `DATAQUERY_OFFICIAL_BUILD=1`, which turns on the Free limits; `DATAQUERY_FREE_PLAN=1` previews them in a

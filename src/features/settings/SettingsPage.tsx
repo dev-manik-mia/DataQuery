@@ -651,7 +651,7 @@ function License() {
         >
           <TextField
             label="Licence key"
-            hint="The key from your purchase email. Activation checks it once online; after that it works offline. A DQ1 token works without internet."
+            hint="The licence key (txn_…) shown after checkout and in your Paddle receipt. Activation checks it once online; after that it works offline. A DQ1 token works without internet."
             value={key}
             spellCheck={false}
             onChange={(e) => setKey(e.target.value)}

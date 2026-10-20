@@ -1,8 +1,9 @@
 //! DataQuery Pro licences: an Ed25519-signed token verified offline.
 //!
-//! A purchase on Lemon Squeezy gives a licence key. The app exchanges it once at
-//! the activation endpoint (`DataQueryWebsite/functions/api/license`), which
-//! activates a seat with Lemon Squeezy and returns a signed token; after that the
+//! A purchase through Paddle gives a licence key: its transaction id (`txn_…`).
+//! The app exchanges it once at the activation endpoint
+//! (`DataQueryWebsite/functions/api/license`), which checks the purchase with
+//! Paddle, takes one of its 3 seats and returns a signed token; after that the
 //! token is checked offline on every launch. Tokens can also be pasted directly
 //! (`DQ1.…`, issued with `scripts/license-token.mjs`) for machines without internet.
 //!
@@ -52,9 +53,9 @@ pub struct LicenseClaims {
     pub plan: String,
     pub name: String,
     pub email: String,
-    /// Lemon Squeezy order number, or an id for hand-issued tokens.
+    /// Paddle transaction id, or an id for hand-issued tokens.
     pub order: String,
-    /// Lemon Squeezy activation instance, needed to free the seat again.
+    /// Seat taken at activation, needed to free it again.
     #[serde(default)]
     pub instance: Option<String>,
     /// Issue date, `YYYY-MM-DD`.
@@ -103,7 +104,7 @@ pub fn verify(token: &str) -> DbResult<LicenseClaims> {
 }
 
 fn verify_with(token: &str, public_key: &[u8; 32]) -> DbResult<LicenseClaims> {
-    let invalid = || DbError::invalid("This licence token is not valid. Copy it again from your purchase email.");
+    let invalid = || DbError::invalid("This licence token is not valid. Copy it again from your purchase page.");
     let token = token.trim();
     if token.len() > MAX_TOKEN_LEN {
         return Err(invalid());

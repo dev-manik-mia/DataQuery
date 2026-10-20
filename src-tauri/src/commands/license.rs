@@ -13,7 +13,7 @@ use crate::state::AppState;
 
 /// Store key of the signed token (not a secret: it only proves a purchase).
 const TOKEN_KEY: &str = "license:token";
-/// Keychain id of the Lemon Squeezy licence key, kept to free the seat later.
+/// Keychain id of the licence key (Paddle transaction id), kept to free the seat later.
 const KEY_SECRET: &str = "license:key";
 const DEVICE_KEY: &str = "license:device";
 const MAX_KEY_LEN: usize = 200;
@@ -35,19 +35,19 @@ pub async fn license_status(state: State<'_, AppState>) -> CmdResult<LicenseStat
     current(&state).await
 }
 
-/// Accepts a signed token (`DQ1.…`, checked offline) or a Lemon Squeezy licence
+/// Accepts a signed token (`DQ1.…`, checked offline) or a Paddle licence
 /// key, which is exchanged once for a token at the activation endpoint.
 #[tauri::command]
 pub async fn license_activate(state: State<'_, AppState>, key: String) -> CmdResult<LicenseStatus> {
     let key = key.trim().to_owned();
     if key.is_empty() || key.len() > 4096 {
-        return Err(DbError::invalid("Paste the licence key from your purchase email."));
+        return Err(DbError::invalid("Paste the licence key (txn_…) from your purchase page or receipt."));
     }
     let token = if key.starts_with(TOKEN_PREFIX) {
         key
     } else {
-        if key.len() > MAX_KEY_LEN || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return Err(DbError::invalid("That doesn't look like a licence key. It has letters, digits and dashes."));
+        if key.len() > MAX_KEY_LEN || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err(DbError::invalid("That doesn't look like a licence key. It starts with txn_."));
         }
         let device = device_name(&state).await?;
         let reply = post(ACTIVATE_URL, json!({ "license_key": key, "instance_name": device })).await?;
@@ -90,7 +90,7 @@ pub async fn open_pricing() -> CmdResult<()> {
     })
 }
 
-/// "DataQuery on macOS · 3f2a9c1e": shown in the customer's Lemon Squeezy seat list.
+/// "DataQuery on macOS · 3f2a9c1e": the name recorded for the seat.
 async fn device_name(state: &AppState) -> DbResult<String> {
     let id = state
         .with_store(|s| {
