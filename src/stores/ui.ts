@@ -8,7 +8,7 @@ import type { ParsedUrl } from '@/bindings/ParsedUrl';
 import { errorMessage } from '@/lib/errors';
 import { uid } from '@/lib/id';
 
-export type SettingsSection = 'general' | 'editor' | 'keyboard' | 'results' | 'history' | 'security' | 'ai' | 'engines' | 'license' | 'about';
+export type SettingsSection = 'general' | 'editor' | 'keyboard' | 'results' | 'history' | 'sync' | 'security' | 'ai' | 'engines' | 'license' | 'about';
 
 export type View =
   | { name: 'home' }
@@ -34,6 +34,13 @@ interface AskOptions {
   danger?: boolean;
 }
 
+/** A question with more than two answers; resolves the chosen `value`, or `null` when dismissed. */
+interface ChoiceOptions {
+  title: string;
+  body: string;
+  choices: { value: string; label: string; variant?: 'primary' | 'danger' }[];
+}
+
 interface UiState {
   view: View;
   /** Where Back returns to from History and Settings. */
@@ -41,6 +48,7 @@ interface UiState {
   toasts: Toast[];
   confirmation: { request: ConfirmationRequest; resolve: (c: Confirmation | null) => void } | null;
   question: (AskOptions & { resolve: (ok: boolean) => void }) | null;
+  choice: (ChoiceOptions & { resolve: (value: string | null) => void }) | null;
   paletteOpen: boolean;
   commandsOpen: boolean;
 
@@ -51,6 +59,7 @@ interface UiState {
   dismissToast: (id: string) => void;
   requestConfirmation: (request: ConfirmationRequest) => Promise<Confirmation | null>;
   ask: (options: AskOptions) => Promise<boolean>;
+  choose: (options: ChoiceOptions) => Promise<string | null>;
   setPaletteOpen: (open: boolean) => void;
   setCommandsOpen: (open: boolean) => void;
 }
@@ -63,6 +72,7 @@ export const useUi = create<UiState>((set, get) => ({
   toasts: [],
   confirmation: null,
   question: null,
+  choice: null,
   paletteOpen: false,
   commandsOpen: false,
 
@@ -104,6 +114,19 @@ export const useUi = create<UiState>((set, get) => ({
           resolve: (ok) => {
             set({ question: null });
             resolve(ok);
+          },
+        },
+      }),
+    ),
+
+  choose: (options) =>
+    new Promise((resolve) =>
+      set({
+        choice: {
+          ...options,
+          resolve: (value) => {
+            set({ choice: null });
+            resolve(value);
           },
         },
       }),

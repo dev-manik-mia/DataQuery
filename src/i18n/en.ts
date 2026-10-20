@@ -48,6 +48,7 @@ export const en = {
   'settings.keyboard': 'Keyboard',
   'settings.results': 'Results',
   'settings.history': 'History',
+  'settings.sync': 'Sync',
   'settings.security': 'Security and privacy',
   'settings.ai': 'AI assistant',
   'settings.engines': 'Engines',

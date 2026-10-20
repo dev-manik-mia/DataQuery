@@ -93,6 +93,25 @@ function QuestionDialog() {
   );
 }
 
+/** A question with several answers (e.g. a script changed on disk while edited). */
+function ChoiceDialog() {
+  const choice = useUi((s) => s.choice);
+  if (!choice) return null;
+  return (
+    <Dialog
+      title={choice.title}
+      onClose={() => choice.resolve(null)}
+      footer={choice.choices.map((c) => (
+        <Button key={c.value} variant={c.variant} onClick={() => choice.resolve(c.value)}>
+          {c.label}
+        </Button>
+      ))}
+    >
+      <p>{choice.body}</p>
+    </Dialog>
+  );
+}
+
 export function GlobalDialogs() {
   const exporting = useExportRequest((s) => s.request);
   return (
@@ -100,6 +119,7 @@ export function GlobalDialogs() {
       {exporting && <ExportDialog key={exporting.baseName + exporting.format} />}
       <ConfirmationDialog />
       <QuestionDialog />
+      <ChoiceDialog />
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { AppInfo } from '@/bindings/AppInfo';
@@ -20,10 +20,12 @@ import { useUi, type SettingsSection } from '@/stores/ui';
 import { useUpdates } from '@/stores/updates';
 
 import { KeyboardSettings } from './KeyboardSettings';
+import { Row } from './Row';
 import styles from './Settings.module.css';
+import { SyncSettings } from './SyncSettings';
 import { UpdatesCard } from './Updates';
 
-const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results', 'history', 'security', 'ai', 'engines', 'license', 'about'];
+const SECTIONS: SettingsSection[] = ['general', 'editor', 'keyboard', 'results', 'history', 'sync', 'security', 'ai', 'engines', 'license', 'about'];
 
 export function SettingsPage({ section }: { section: SettingsSection }) {
   const navigate = useUi((s) => s.navigate);
@@ -46,6 +48,7 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
           {section === 'keyboard' && <KeyboardSettings />}
           {section === 'results' && <Results />}
           {section === 'history' && <History />}
+          {section === 'sync' && <SyncSettings />}
           {section === 'security' && <Security />}
           {section === 'ai' && <AiSettings />}
           {section === 'engines' && <Engines />}
@@ -53,18 +56,6 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
           {section === 'about' && <About />}
         </div>
       </div>
-    </div>
-  );
-}
-
-function Row({ title, help, children }: { title: ReactNode; help?: ReactNode; children?: ReactNode }) {
-  return (
-    <div className={styles.row}>
-      <div className={styles.rowText}>
-        <span className={styles.rowTitle}>{title}</span>
-        {help && <span className={styles.rowHelp}>{help}</span>}
-      </div>
-      {children}
     </div>
   );
 }

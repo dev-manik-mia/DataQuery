@@ -14,6 +14,7 @@ pub mod query;
 pub mod schema;
 pub mod session;
 pub mod settings;
+pub mod sync;
 pub mod system;
 pub mod table;
 pub mod transfer;

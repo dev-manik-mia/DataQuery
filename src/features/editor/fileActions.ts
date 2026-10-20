@@ -1,5 +1,6 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
 
+import { resolveScriptConflict } from '@/features/history/scriptConflicts';
 import { api } from '@/lib/ipc';
 import { useUi } from '@/stores/ui';
 import { useWorkspace, type QueryTab } from '@/stores/workspace';
@@ -43,6 +44,11 @@ export async function saveTabAsScript(tab: QueryTab, name: string): Promise<void
   try {
     // Keep the folder, tags and pin of an existing script.
     const existing = tab.scriptId ? (await api.listScripts()).find((s) => s.id === tab.scriptId) : undefined;
+    // Changed elsewhere (e.g. its file in the scripts folder) since this tab loaded it: ask, never overwrite.
+    if (existing && existing.sql !== tab.savedSql && existing.sql !== tab.sql) {
+      await resolveScriptConflict(tab.id, existing);
+      return;
+    }
     const script = await api.saveScript({
       id: existing?.id ?? null,
       name,

@@ -309,6 +309,10 @@ pub struct Settings {
     pub check_updates_on_launch: bool,
     /// Download and install updates in the background; they apply on the next restart.
     pub auto_install_updates: bool,
+    /// Folder that holds the encrypted connection sync file; empty when sync is off.
+    pub sync_folder: String,
+    /// Folder where saved scripts are mirrored as `.sql` files; empty when off.
+    pub scripts_folder: String,
 }
 
 pub const DEFAULT_MASK_PATTERNS: &[&str] =
@@ -344,6 +348,8 @@ impl Default for Settings {
             ai_endpoint: "http://localhost:11434/v1".into(),
             check_updates_on_launch: true,
             auto_install_updates: false,
+            sync_folder: String::new(),
+            scripts_folder: String::new(),
         }
     }
 }
@@ -380,6 +386,8 @@ impl Settings {
         self.history_max_days = self.history_max_days.min(3650);
         self.ai_model = clean_text(&self.ai_model, 100);
         self.ai_endpoint = clean_text(&self.ai_endpoint, 500);
+        self.sync_folder = clean_text(&self.sync_folder, 4096);
+        self.scripts_folder = clean_text(&self.scripts_folder, 4096);
         self
     }
 }

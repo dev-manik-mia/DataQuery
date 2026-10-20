@@ -196,6 +196,19 @@ impl Store {
         self.with(|db| db.execute("UPDATE folders SET name = ?2 WHERE id = ?1", params![id, name])).map(drop)
     }
 
+    /// Inserts or renames a folder with a known id (from sync).
+    pub fn put_folder(&self, folder: &Folder) -> DbResult<()> {
+        let name = require_name(&folder.name, "Folder")?;
+        self.with(|db| {
+            db.execute(
+                "INSERT INTO folders (id, name, position) VALUES (?1, ?2, (SELECT coalesce(max(position), 0) + 1 FROM folders)) \
+                 ON CONFLICT (id) DO UPDATE SET name = ?2",
+                params![folder.id, name],
+            )
+        })
+        .map(drop)
+    }
+
     /// Deletes a folder; its connections move to "no folder".
     pub fn delete_folder(&self, id: &str) -> DbResult<()> {
         self.with(|db| db.execute("DELETE FROM folders WHERE id = ?1", params![id])).map(drop)
@@ -462,15 +475,26 @@ impl Store {
     }
 
     /// Updates only the SQL of a saved script (autosave from an open tab).
-    pub fn update_script_sql(&self, id: &str, sql: &str) -> DbResult<()> {
+    /// With `base`, the update only applies while the stored SQL is still
+    /// `base`; otherwise it fails with code `script_conflict` (the script was
+    /// changed elsewhere, e.g. its file in the scripts folder).
+    pub fn update_script_sql(&self, id: &str, sql: &str, base: Option<&str>) -> DbResult<()> {
         if sql.len() > MAX_SQL_BYTES {
             return Err(DbError::invalid("Scripts are limited to 1 MB."));
         }
         let changed = self.with(|db| {
-            db.execute("UPDATE scripts SET sql = ?2, updated_at = ?3 WHERE id = ?1", params![id, sql, now_ms()])
+            db.execute(
+                "UPDATE scripts SET sql = ?2, updated_at = ?3 WHERE id = ?1 AND (?4 IS NULL OR sql = ?4)",
+                params![id, sql, now_ms(), base],
+            )
         })?;
         if changed == 0 {
-            return Err(DbError::not_found("The script no longer exists."));
+            let exists = self
+                .with(|db| db.query_row("SELECT 1 FROM scripts WHERE id = ?1", params![id], |_| Ok(())).optional())?;
+            return Err(match exists {
+                Some(()) => DbError::invalid("The script changed outside this tab.").with_code("script_conflict"),
+                None => DbError::not_found("The script no longer exists."),
+            });
         }
         Ok(())
     }
@@ -815,9 +839,12 @@ mod tests {
             (scripts[1].folder.as_deref(), scripts[1].tags.clone()),
             (Some("Reports"), vec!["a".to_owned(), "b".to_owned()])
         );
-        store.update_script_sql(&script.id, "select 4").unwrap();
+        store.update_script_sql(&script.id, "select 4", None).unwrap();
         assert_eq!(store.scripts().unwrap()[1].sql, "select 4");
-        assert!(store.update_script_sql("missing", "x").is_err());
+        assert!(store.update_script_sql("missing", "x", None).is_err());
+        let stale = store.update_script_sql(&script.id, "select 5", Some("select 2")).unwrap_err();
+        assert_eq!(stale.code.as_deref(), Some("script_conflict"));
+        store.update_script_sql(&script.id, "select 5", Some("select 4")).unwrap();
 
         let snippet = store
             .save_snippet(&SnippetDraft {

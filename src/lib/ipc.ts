@@ -65,6 +65,7 @@ import type { SchemaChange } from '@/bindings/SchemaChange';
 import type { SchemaDiff } from '@/bindings/SchemaDiff';
 import type { SchemaModel } from '@/bindings/SchemaModel';
 import type { ScriptDraft } from '@/bindings/ScriptDraft';
+import type { ScriptsFolderStatus } from '@/bindings/ScriptsFolderStatus';
 import type { ServerInfo } from '@/bindings/ServerInfo';
 import type { ServerSetting } from '@/bindings/ServerSetting';
 import type { SessionInfo } from '@/bindings/SessionInfo';
@@ -74,6 +75,7 @@ import type { Snippet } from '@/bindings/Snippet';
 import type { SnippetDraft } from '@/bindings/SnippetDraft';
 import type { SqlFlavor } from '@/bindings/SqlFlavor';
 import type { StatementInfo } from '@/bindings/StatementInfo';
+import type { SyncStatus } from '@/bindings/SyncStatus';
 import type { TablePage } from '@/bindings/TablePage';
 import type { TablePageRequest } from '@/bindings/TablePageRequest';
 import type { TableStructure } from '@/bindings/TableStructure';
@@ -246,11 +248,21 @@ export const api = {
   applyHistoryRetention: () => call<void>('apply_history_retention'),
   listScripts: () => call<SavedScript[]>('list_scripts'),
   saveScript: (draft: ScriptDraft) => call<SavedScript>('save_script', { draft }),
-  updateScriptSql: (id: string, sql: string) => call<void>('update_script_sql', { id, sql }),
+  /** With `base`, fails with code `script_conflict` when the script no longer has that SQL. */
+  updateScriptSql: (id: string, sql: string, base: string | null = null) => call<void>('update_script_sql', { id, sql, base }),
   deleteScript: (id: string) => call<void>('delete_script', { id }),
   listSnippets: () => call<Snippet[]>('list_snippets'),
   saveSnippet: (draft: SnippetDraft) => call<Snippet>('save_snippet', { draft }),
   deleteSnippet: (id: string) => call<void>('delete_snippet', { id }),
+
+  // folder sync: connections (encrypted file) and scripts (.sql files)
+  syncStatus: () => call<SyncStatus>('sync_status'),
+  syncConfigure: (folder: string, passphrase: string | null) => call<Settings>('sync_configure', { folder, passphrase }),
+  syncDisable: () => call<Settings>('sync_disable'),
+  syncNow: () => call<SyncStatus>('sync_now'),
+  scriptsFolderStatus: () => call<ScriptsFolderStatus>('scripts_folder_status'),
+  setScriptsFolder: (folder: string | null) => call<Settings>('set_scripts_folder', { folder }),
+  scriptsFolderSync: () => call<ScriptsFolderStatus>('scripts_folder_sync'),
 
   // AI assistant (opt-in; never runs SQL)
   aiDisclosure: ({ sessionId }: Sid, request: AiRequest) => call<AiDisclosure>('ai_disclosure', { sessionId, request }),
