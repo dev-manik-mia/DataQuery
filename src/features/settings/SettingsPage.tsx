@@ -622,7 +622,7 @@ function License() {
               ? 'Built from source: every feature is on. Official builds need a licence for Pro.'
               : claims
                 ? `Pro, licensed to ${claims.name || claims.email} (order ${claims.order}, ${claims.issued}). Lifetime updates.`
-                : `Free: ER diagrams, monitoring, every engine, ${status?.limits?.tabs ?? 4} tabs, ${status?.limits?.windows ?? 4} windows and ${status?.limits?.filters ?? 4} filter conditions.`
+                : `Free: ER diagrams, backups, users and roles, every engine, ${status?.limits?.tabs ?? 4} tabs, ${status?.limits?.windows ?? 4} windows and ${status?.limits?.filters ?? 4} filter conditions.`
           }
         >
           <Chip tone={status?.plan === 'free' ? 'mute' : 'positive'}>{status?.plan === 'free' ? 'Free' : 'Pro'}</Chip>

@@ -10,12 +10,12 @@ Feature status and task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE
 - **The same app on macOS, Windows and Linux.** Every feature ships on all three; nothing is Mac-only.
 - **ER diagrams, schema diff and data compare** built in: see a schema, get the migration SQL between two
   connections, and get the INSERT / UPDATE / DELETE that makes one table's rows match another's.
-- **Real monitoring:** connections against the limit, running queries with cancel / terminate, locks and blocking
+- **Real monitoring (Pro):** connections against the limit, running queries with cancel / terminate, locks and blocking
   chains, replication lag, table and index sizes.
 - **SQL and NoSQL in one client:** MongoDB, DynamoDB, Redis / Valkey / Dragonfly, Cassandra / ScyllaDB,
   Elasticsearch / OpenSearch and Neo4j each get their own explorer and query language, not a SQL shim.
 - **No feature limits that matter:** Free has 4 tabs, 4 windows and 4 filter conditions (TablePlus Free has 2 of each)
-  and keeps ER diagrams, monitoring, backups and every engine. Pro is one payment with lifetime updates.
+  and keeps ER diagrams, backups, users and roles and every engine. Pro is one payment with lifetime updates.
 - **Moving over is quick:** import your connections from TablePlus, DBeaver, Sequel Ace or DataGrip (passwords stay
   behind; you type them once).
 - **Open source** (MIT or Apache-2.0), no account, no telemetry.
@@ -27,7 +27,8 @@ Feature status and task list: [`tasks.md`](tasks.md) · Target scope: [`RUSTBASE
 | Price | $0 | **$59 once**, lifetime updates |
 | Devices | any | 3 per person |
 | Open tabs / windows / filter conditions | 4 / 4 / 4 | unlimited |
-| Every engine, ER diagram, monitoring, row details, charts, backup & restore, users & roles, AI (your own key), Vim mode, connection sync, scripts folder | ✓ | ✓ |
+| Every engine, ER diagram, row details, charts, backup & restore, users & roles, AI (your own key), Vim mode, connection sync, scripts folder | ✓ | ✓ |
+| Monitoring: running queries, locks, server load | — | ✓ |
 | Schema diff with migration SQL | — | ✓ |
 | Data compare with sync SQL | — | ✓ |
 
@@ -46,7 +47,6 @@ checked 2026-10-20. "Not documented" means the TablePlus docs have no page for i
 | Open windows at a time | 2 | **4** |
 | Advanced filters | 2 (none in the free Windows version) | **4, on every platform** |
 | ER diagram | not documented | ✓ |
-| Monitoring: running queries, locks, server load | not documented | ✓ |
 | Import connections from other apps | not documented | ✓ TablePlus, DBeaver, Sequel Ace, DataGrip |
 | Source code | closed | open (MIT or Apache-2.0) |
 
@@ -57,6 +57,7 @@ checked 2026-10-20. "Not documented" means the TablePlus docs have no page for i
 | Price | $99 (1 device) / $129 (2 devices) | **$59** (3 devices) |
 | Updates | 1 year; then $59 per device per renewal | **lifetime** |
 | Extra device | $79 each | 3 included |
+| Monitoring: running queries, locks, server load | not documented | ✓ |
 | Schema diff / migration SQL | not documented | ✓ |
 | Data compare / sync SQL | not documented | ✓ |
 | ER diagram | not documented | ✓ |
