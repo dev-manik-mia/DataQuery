@@ -40,7 +40,7 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
 
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
   ({
-    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: ['snowflake', 'dynamodb', 'd1', 'redshift', 'bigquery'].includes(e), file_based: e === 'sqlite' || e === 'duckdb',
+    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: ['snowflake', 'dynamodb', 'redshift', 'bigquery'].includes(e), file_based: e === 'sqlite' || e === 'duckdb',
     capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])), backup: BACKUP.has(e) } : none,
   }) as EngineInfo;
 

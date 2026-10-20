@@ -101,6 +101,13 @@ fn value_of(json: Json) -> Value {
     }
 }
 
+/// D1 serialises results as JavaScript numbers: integers past ±(2^53 − 1)
+/// arrive rounded (9223372036854775807 comes as 9223372036854776000).
+fn beyond_safe_integer(json: &Json) -> bool {
+    const SAFE: f64 = 9_007_199_254_740_991.0;
+    json.as_f64().is_some_and(|n| n.fract() == 0.0 && n.abs() > SAFE)
+}
+
 fn query_body(sql: &str, params: &[Option<String>]) -> Json {
     json!({ "sql": sql, "params": params })
 }
@@ -108,10 +115,12 @@ fn query_body(sql: &str, params: &[Option<String>]) -> Json {
 impl RawResult {
     fn into_output(self) -> Output {
         let RawRows { columns, rows } = self.results.unwrap_or_default();
+        let imprecise = rows.iter().flatten().any(beyond_safe_integer);
         Output {
             columns: columns.into_iter().map(|name| Column { name, decltype: String::new() }).collect(),
             rows: rows.into_iter().map(|r| r.into_iter().map(value_of).collect()).collect(),
             affected: self.meta.map_or(0, |m| m.changes),
+            imprecise,
         }
     }
 }

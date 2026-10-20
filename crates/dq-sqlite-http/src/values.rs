@@ -58,6 +58,7 @@ mod tests {
                 vec![Value::Integer(7), Value::Integer(1), Value::Null],
             ],
             affected: 0,
+            imprecise: false,
         };
         let meta = column_meta(&output);
         assert!(meta[0].numeric && !meta[1].numeric && !meta[2].numeric);

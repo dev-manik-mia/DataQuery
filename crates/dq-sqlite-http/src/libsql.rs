@@ -139,7 +139,7 @@ impl StmtResult {
             .into_iter()
             .map(|r| r.into_iter().map(HranaValue::into_value).collect::<DbResult<Vec<_>>>())
             .collect::<DbResult<Vec<_>>>()?;
-        Ok(Output { columns, rows, affected: self.affected_row_count })
+        Ok(Output { columns, rows, affected: self.affected_row_count, imprecise: false })
     }
 }
 

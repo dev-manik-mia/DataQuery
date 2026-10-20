@@ -40,6 +40,8 @@ struct MockD1 {
 fn json_of(value: ValueRef<'_>) -> Json {
     match value {
         ValueRef::Null => Json::Null,
+        // Like the real service: JavaScript numbers, so big integers arrive rounded.
+        ValueRef::Integer(i) if i.unsigned_abs() > (1 << 53) - 1 => json!(i as f64),
         ValueRef::Integer(i) => json!(i),
         ValueRef::Real(f) => json!(f),
         ValueRef::Text(t) => json!(String::from_utf8_lossy(t)),
@@ -67,6 +69,10 @@ impl MockD1 {
         let sql = query["sql"].as_str().unwrap_or_default();
         if sql.trim_start().to_ascii_uppercase().starts_with("BEGIN") {
             return Err("D1 runs each request as a transaction; BEGIN is not allowed".into());
+        }
+        // Like the real service, which refuses some SQLite functions.
+        if sql.contains("sqlite_version(") {
+            return Err("not authorized to use function: sqlite_version at offset 7: SQLITE_ERROR".into());
         }
         let params: Vec<Option<String>> = query["params"]
             .as_array()
@@ -234,8 +240,9 @@ async fn connects_by_name_or_id_and_lists_databases() {
     let port = mock.serve().await;
     assert_eq!(D1Adapter.databases(&params(port, "")).await.unwrap(), ["shop", "staging"]);
     let info = D1Adapter.test(&params(port, DATABASE_ID)).await.unwrap();
-    assert!(info.version.starts_with("Cloudflare D1 (SQLite 3."), "{}", info.version);
-    assert!(Engine::D1.is_beta() && !D1Adapter.capabilities().transactions);
+    // D1 refuses sqlite_version(), so the product name stands alone.
+    assert_eq!(info.version, "Cloudflare D1");
+    assert!(!Engine::D1.is_beta() && !D1Adapter.capabilities().transactions);
 
     let missing = D1Adapter.test(&params(port, "nope")).await.unwrap_err();
     assert_eq!(missing.kind, ErrorKind::NotFound);
@@ -265,7 +272,10 @@ async fn explorer_values_and_bounded_results() {
     assert!(s.search("ORDER", 10).await.unwrap().iter().any(|n| n.object.name == "orders"));
 
     let r = s.execute("SELECT big, ratio, doc, raw, label FROM type_samples ORDER BY id", &[], OPTS).await.unwrap();
-    assert_eq!(r.rows[0][0], Cell::number("9223372036854775807"));
+    assert_eq!(r.rows[0][0], Cell::number("9223372036854776000"), "D1 rounds integers past 2^53");
+    assert!(r.notices.iter().any(|n| n.contains("CAST(column AS TEXT)")), "{:?}", r.notices);
+    let exact = s.execute("SELECT CAST(big AS TEXT) FROM type_samples ORDER BY id", &[], OPTS).await.unwrap();
+    assert_eq!(text(&exact.rows[0][0]), "9223372036854775807");
     assert_eq!(r.rows[0][1], Cell::number("1.5"));
     assert_eq!(r.rows[0][3], Cell::Binary { length: 4, head_hex: "89504e47".into() });
     assert!(r.columns[0].numeric && !r.columns[4].numeric, "numeric from the values: D1 sends no types");

@@ -25,6 +25,8 @@ pub struct Output {
     pub rows: Vec<Vec<Value>>,
     /// Rows the statement changed.
     pub affected: u64,
+    /// Some integer arrived rounded (D1 sends JavaScript numbers, exact only up to 2^53).
+    pub imprecise: bool,
 }
 
 #[async_trait]

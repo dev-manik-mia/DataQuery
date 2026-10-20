@@ -476,10 +476,10 @@ impl Engine {
     }
 
     /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`,
-    /// `bigquery-emulator`), a mock of the documented API (Cloudflare D1) or unit tests
-    /// (Redshift cannot run locally), never a real account; the engine picker labels them "Beta".
+    /// `bigquery-emulator`) or unit tests (Redshift cannot run locally), never a real
+    /// account; the engine picker labels them "Beta".
     pub fn is_beta(self) -> bool {
-        matches!(self, Self::Snowflake | Self::Dynamodb | Self::D1 | Self::Redshift | Self::Bigquery)
+        matches!(self, Self::Snowflake | Self::Dynamodb | Self::Redshift | Self::Bigquery)
     }
 
     /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.

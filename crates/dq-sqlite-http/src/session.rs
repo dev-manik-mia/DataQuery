@@ -71,6 +71,8 @@ fn read_only_error() -> DbError {
         .with_action(Some("Edit the connection and turn off Read-only to change data."))
 }
 
+const IMPRECISE: &str = "Cloudflare D1 sends numbers as JavaScript numbers, so integers beyond ±9,007,199,254,740,991 are shown rounded. Select them with CAST(column AS TEXT) to see every digit.";
+
 fn timeout_of(options: ExecOptions) -> Option<Duration> {
     (options.timeout_secs > 0).then(|| Duration::from_secs(u64::from(options.timeout_secs)))
 }
@@ -92,7 +94,7 @@ fn statement_result(sql: &str, output: Output, row_limit: u32, started: Instant)
         command: command_tag(sql, SqlFlavor::Sqlite),
         affected,
         duration_ms: started.elapsed().as_millis() as u64,
-        notices: Vec::new(),
+        notices: if output.imprecise { vec![IMPRECISE.into()] } else { Vec::new() },
     };
     (result, has_more.then_some(Pending { columns: output.columns, rows: rest }))
 }
@@ -102,11 +104,19 @@ impl<T: Transport> RemoteSession<T> {
     pub async fn open(transport: Arc<T>, params: &ConnectParams) -> DbResult<Self> {
         let started = Instant::now();
         let timeout = Duration::from_secs(u64::from(params.config.connect_timeout_secs));
-        let version = transport.query("SELECT sqlite_version()", &[], Some(timeout)).await?;
-        let version = version.rows.first().and_then(|r| text_row(r).text(0)).unwrap_or_default();
+        // Cloudflare D1 refuses `sqlite_version()` ("not authorized to use function"):
+        // there, `SELECT 1` proves the connection and the product name stands alone.
+        let version = match transport.query("SELECT sqlite_version()", &[], Some(timeout)).await {
+            Ok(out) => out.rows.first().and_then(|r| text_row(r).text(0)).map(|v| format!(" (SQLite {v})")),
+            Err(e) if e.kind == ErrorKind::Permission => {
+                transport.query("SELECT 1", &[], Some(timeout)).await?;
+                None
+            }
+            Err(e) => return Err(e),
+        };
         let info = ServerInfo {
             engine: params.config.engine,
-            version: format!("{} (SQLite {version})", transport.product()),
+            version: format!("{}{}", transport.product(), version.unwrap_or_default()),
             latency_ms: started.elapsed().as_millis() as u64,
             tls: transport.http().tls.clone(),
             user: params.config.username.clone(),
