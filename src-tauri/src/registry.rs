@@ -46,3 +46,17 @@ impl Registry {
         self.0.get(&engine).map(|a| a.capabilities())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_capability_matches_the_backup_table() {
+        let registry = Registry::new();
+        for (engine, adapter) in &registry.0 {
+            let family = dq_core::backup::BackupFamily::of(*engine);
+            assert_eq!(adapter.capabilities().backup, family.is_some(), "{engine:?}");
+        }
+    }
+}

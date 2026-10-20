@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use dq_core::adapter::{BatchFn, ConnectParams, Params, Session, StatementIter, check_affected};
+use dq_core::backup::NativeBackup;
 use dq_core::explain::ExplainResult;
 use dq_core::node::{Node, NodeKind, ObjectRef};
 use dq_core::result::{ColumnMeta, ExecOptions, Row as CellRow, RowsPage, ServerInfo, StatementResult};
@@ -31,18 +32,18 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct SqliteSession {
     info: ServerInfo,
-    read_only: bool,
+    pub(crate) read_only: bool,
     worker: mpsc::Sender<Command>,
     interrupter: Arc<Interrupter>,
     catalog: Arc<Mutex<Connection>>,
-    writer: Arc<Mutex<Connection>>,
+    pub(crate) writer: Arc<Mutex<Connection>>,
     /// Where the connections open, for export connections.
     location: (String, OpenFlags),
     /// `ATTACH` / `DETACH` statements run so far, replayed on export connections.
     attachments: Mutex<Vec<(String, Vec<Option<String>>)>>,
 }
 
-fn read_only_error() -> DbError {
+pub(crate) fn read_only_error() -> DbError {
     DbError::new(ErrorKind::Permission, "This connection is read-only.")
         .with_action(Some("Edit the connection and turn off Read-only to change data."))
 }
@@ -164,7 +165,7 @@ impl SqliteSession {
 
     /// A new connection that sees what the catalog connection sees: same
     /// file, flags and attached databases.
-    async fn export_connection(&self) -> DbResult<Connection> {
+    pub(crate) async fn export_connection(&self) -> DbResult<Connection> {
         let ((path, flags), read_only) = (self.location.clone(), self.read_only);
         let attachments =
             self.attachments.lock().map_err(|_| DbError::internal("attachment list lock poisoned"))?.clone();
@@ -386,6 +387,10 @@ impl Session for SqliteSession {
             Ok(crate::explain::plan(rows))
         })
         .await
+    }
+
+    fn native_backup(&self) -> Option<&dyn NativeBackup> {
+        Some(self)
     }
 
     async fn close(&self) {

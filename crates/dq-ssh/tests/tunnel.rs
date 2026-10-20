@@ -88,6 +88,51 @@ async fn tunnels_to_postgres_after_trusting_the_host_key() {
 }
 
 #[tokio::test]
+async fn backup_tools_connect_through_the_tunnel() {
+    use dq_core::backup::{self, BackupContent, BackupOptions, Tool, ToolOverrides};
+    let (host, port) = require_ssh!();
+    if backup::tools::locate(Tool::PgDump, dq_core::engine::Engine::Postgres, None, None).await.found.is_none() {
+        eprintln!("skipped: pg_dump is not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let known = Arc::new(KnownHosts::app_only(dir.path().join("known_hosts")));
+    let tunnel = SshTunnel { host: hop(&host, port), jumps: vec![] };
+    let secrets = vec![Some("dataquery".to_owned())];
+    trust(&known, &tunnel, &secrets).await;
+    let opened = dq_ssh::open(&tunnel, &secrets, ("postgres", 5432), &known, TIMEOUT).await.unwrap();
+    // `postgres` only resolves inside the compose network: pg_dump must use the tunnel's address.
+    let config = ConnConfig {
+        host: "postgres".into(),
+        port: 5432,
+        database: "dataquery_test".into(),
+        username: "dataquery".into(),
+        ssl_mode: SslMode::Disable,
+        ssh: Some(tunnel),
+        ..ConnConfig::default()
+    };
+    let params = ConnectParams { config, password: Some("dataquery".into()), endpoint: Some(opened.local_addr()) };
+    let options = BackupOptions {
+        database: "dataquery_test".into(),
+        content: BackupContent::SchemaOnly,
+        ..BackupOptions::default()
+    };
+    let path = dir.path().join("schema.dump");
+    let report = backup::backup(
+        &params,
+        "",
+        None,
+        &options,
+        &path,
+        &ToolOverrides::new(),
+        &dq_core::transfer::TransferControl::none(),
+    )
+    .await
+    .unwrap();
+    assert!(report.bytes > 0 && path.is_file());
+}
+
+#[tokio::test]
 async fn jump_hosts_are_chained() {
     let (host, port) = require_ssh!();
     let dir = tempfile::tempdir().unwrap();

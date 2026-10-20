@@ -19,6 +19,7 @@ import { useSettings } from '@/stores/settings';
 import { useUi, type SettingsSection } from '@/stores/ui';
 import { useUpdates } from '@/stores/updates';
 
+import { BackupToolsCard } from './BackupTools';
 import { KeyboardSettings } from './KeyboardSettings';
 import { Row } from './Row';
 import styles from './Settings.module.css';
@@ -452,6 +453,7 @@ const CAPABILITY_COLUMNS: { key: keyof Capabilities; label: string }[] = [
   { key: 'monitoring', label: 'Monitoring' },
   { key: 'transactions', label: 'Transactions' },
   { key: 'schema_diff', label: 'Schema diff' },
+  { key: 'backup', label: 'Backup' },
 ];
 
 type CapabilityKey = keyof Capabilities;
@@ -490,6 +492,28 @@ const NOT_OFFERED: Partial<Record<Engine, Partial<Record<CapabilityKey, string>>
   },
 };
 
+const SERVER_SIDE = 'are written by the server itself; there is no client dump tool to run from this computer.';
+const SNAPSHOTS = `Snapshots (SAVE, BGSAVE, AOF) ${SERVER_SIDE}`;
+const CQL_SNAPSHOTS = `Snapshots (nodetool snapshot) ${SERVER_SIDE}`;
+
+/** Why an engine has no Backup and Restore (`dq_core::backup::BackupFamily::of`). */
+const NO_BACKUP: Partial<Record<Engine, string>> = {
+  cockroachdb: 'CockroachDB rejects pg_dump; back up with its BACKUP statement to cloud or nodelocal storage.',
+  sqlserver: `Backups (BACKUP DATABASE … TO DISK) ${SERVER_SIDE}`,
+  oracle: `Data Pump dump files (expdp) ${SERVER_SIDE}`,
+  clickhouse: `Backups (the BACKUP statement, to server disks or object storage) ${SERVER_SIDE}`,
+  duckdb: 'Copy the database file, or run EXPORT DATABASE in the editor.',
+  snowflake: 'Snowflake keeps history with Time Travel and zero-copy clones; there is no dump tool.',
+  redis: SNAPSHOTS,
+  valkey: SNAPSHOTS,
+  dragonfly: SNAPSHOTS,
+  dynamodb: 'DynamoDB backups are managed by AWS (on-demand backups, point-in-time recovery).',
+  cassandra: CQL_SNAPSHOTS,
+  scylladb: CQL_SNAPSHOTS,
+  elasticsearch: `Snapshot repositories ${SERVER_SIDE}`,
+  neo4j: `Dumps (neo4j-admin database dump) ${SERVER_SIDE}`,
+};
+
 function CapabilityCell({ engine, name, capability, supported, available, priority }: {
   engine: Engine;
   name: string;
@@ -513,7 +537,7 @@ function CapabilityCell({ engine, name, capability, supported, available, priori
       </span>
     );
   }
-  const reason = NOT_OFFERED[engine]?.[capability.key] ?? `${name} does not offer this.`;
+  const reason = NOT_OFFERED[engine]?.[capability.key] ?? (capability.key === 'backup' ? NO_BACKUP[engine] : undefined) ?? `${name} does not offer this.`;
   return (
     <span className={styles.no} title={reason} aria-label={`Not offered: ${reason}`}>
       —
@@ -564,6 +588,7 @@ function Engines() {
           </table>
         </div>
       </Card>
+      <BackupToolsCard />
     </>
   );
 }

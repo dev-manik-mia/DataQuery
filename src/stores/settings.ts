@@ -35,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   auto_install_updates: false,
   sync_folder: '',
   scripts_folder: '',
+  backup_tools: {},
 };
 
 interface SettingsState {

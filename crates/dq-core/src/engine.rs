@@ -67,6 +67,8 @@ pub struct Capabilities {
     pub monitoring: bool,
     pub transactions: bool,
     pub schema_diff: bool,
+    /// Backup and restore, see [`crate::backup::BackupFamily`].
+    pub backup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

@@ -69,4 +69,9 @@ sync_folder: string,
 /**
  * Folder where saved scripts are mirrored as `.sql` files; empty when off.
  */
-scripts_folder: string, };
+scripts_folder: string, 
+/**
+ * Backup tool → program path chosen by the user (e.g. `pg_dump` →
+ * `/opt/homebrew/opt/libpq/bin/pg_dump`); unset tools are found automatically.
+ */
+backup_tools: { [key in string]?: string }, };

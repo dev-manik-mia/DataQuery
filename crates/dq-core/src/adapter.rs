@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
+use crate::backup::NativeBackup;
 use crate::config::ConnConfig;
 use crate::document::DocumentStore;
 use crate::edit::BoundStatement;
@@ -206,6 +207,11 @@ pub trait Session: Send + Sync {
 
     /// Key browser operations, for key-value engines (Redis, Valkey, Dragonfly).
     fn keys(&self) -> Option<&dyn KeyValueStore> {
+        None
+    }
+
+    /// Backup and restore without external tools, for embedded engines (`SQLite`).
+    fn native_backup(&self) -> Option<&dyn NativeBackup> {
         None
     }
 

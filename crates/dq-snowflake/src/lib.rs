@@ -39,6 +39,7 @@ impl SnowflakeAdapter {
         monitoring: false,
         transactions: true,
         schema_diff: true,
+        backup: false,
     };
 }
 

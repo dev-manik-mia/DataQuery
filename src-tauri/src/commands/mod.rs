@@ -3,6 +3,7 @@
 //! the UI thread.
 
 pub mod ai;
+pub mod backup;
 pub mod connections;
 pub mod data_compare;
 pub mod documents;

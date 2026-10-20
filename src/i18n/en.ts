@@ -26,6 +26,8 @@ export const en = {
   'action.begin': 'Begin',
   'action.commit': 'Commit',
   'action.rollback': 'Rollback',
+  'action.backup': 'Backup…',
+  'action.restore': 'Restore…',
   'nav.connections': 'Connections',
   'nav.history': 'History',
   'nav.settings': 'Settings',

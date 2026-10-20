@@ -1930,6 +1930,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "encoding_rs_io",
+ "nix 0.31.3",
  "regex",
  "rust_xlsxwriter",
  "rustls",

@@ -6,6 +6,7 @@
 //! this crate rather than written by hand.
 
 pub mod adapter;
+pub mod backup;
 pub mod config;
 pub mod data_compare;
 pub mod diff;
@@ -19,6 +20,7 @@ pub mod migrations;
 pub mod monitor;
 pub mod node;
 pub mod ops;
+pub mod programs;
 pub mod redact;
 pub mod result;
 pub mod schema;

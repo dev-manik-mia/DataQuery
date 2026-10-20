@@ -45,6 +45,7 @@ impl MongodbAdapter {
         monitoring: true,
         transactions: true,
         schema_diff: false,
+        backup: true,
     };
 }
 

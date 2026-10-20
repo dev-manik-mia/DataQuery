@@ -7,37 +7,22 @@ use std::time::Duration;
 
 use dq_core::config::{AuthMethod, ConnConfig};
 use dq_core::engine::Engine;
+use dq_core::programs;
 use dq_core::{DbError, DbResult, ErrorKind};
-use tokio::process::Command;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Directories searched for the CLIs in addition to `PATH`: apps started from
-/// the Finder or a desktop launcher often get a minimal `PATH`.
-fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> =
-        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"].map(PathBuf::from));
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        dirs.push(home.join("google-cloud-sdk/bin"));
-        dirs.push(home.join(".local/bin"));
-    }
-    dirs
-}
-
+/// The CLI `name` on `PATH`, in the usual install directories or in the Google Cloud SDK.
 fn find_cli(name: &str) -> Option<PathBuf> {
-    let candidates: &[&str] = if cfg!(windows) { &[".cmd", ".exe", ""] } else { &[""] };
-    search_dirs()
-        .into_iter()
-        .find_map(|dir| candidates.iter().map(|ext| dir.join(format!("{name}{ext}"))).find(|p| p.is_file()))
+    let sdk = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("google-cloud-sdk/bin"));
+    programs::find(&programs::search_path(sdk), name)
 }
 
 async fn run(cli: &str, args: &[&str], install_hint: &str) -> DbResult<String> {
     let path = find_cli(cli).ok_or_else(|| {
         DbError::new(ErrorKind::Auth, format!("The `{cli}` command was not found.")).with_action(Some(install_hint))
     })?;
-    let output = tokio::time::timeout(CLI_TIMEOUT, Command::new(&path).args(args).kill_on_drop(true).output())
+    let output = tokio::time::timeout(CLI_TIMEOUT, programs::command(&path).args(args).output())
         .await
         .map_err(|_| DbError::new(ErrorKind::Timeout, format!("`{cli}` did not answer within 60 seconds.")))?
         .map_err(|e| DbError::new(ErrorKind::Auth, format!("Cannot run `{cli}`: {e}")))?;

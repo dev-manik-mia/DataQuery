@@ -334,6 +334,9 @@ pub struct Settings {
     pub sync_folder: String,
     /// Folder where saved scripts are mirrored as `.sql` files; empty when off.
     pub scripts_folder: String,
+    /// Backup tool → program path chosen by the user (e.g. `pg_dump` →
+    /// `/opt/homebrew/opt/libpq/bin/pg_dump`); unset tools are found automatically.
+    pub backup_tools: BTreeMap<String, String>,
 }
 
 pub const DEFAULT_MASK_PATTERNS: &[&str] =
@@ -371,6 +374,7 @@ impl Default for Settings {
             auto_install_updates: false,
             sync_folder: String::new(),
             scripts_folder: String::new(),
+            backup_tools: BTreeMap::new(),
         }
     }
 }
@@ -410,6 +414,16 @@ impl Settings {
         self.ai_endpoint = clean_text(&self.ai_endpoint, 500);
         self.sync_folder = clean_text(&self.sync_folder, 4096);
         self.scripts_folder = clean_text(&self.scripts_folder, 4096);
+        // Known tools only, with absolute paths; anything else is dropped.
+        self.backup_tools = std::mem::take(&mut self.backup_tools)
+            .into_iter()
+            .filter(|(tool, path)| {
+                dq_core::backup::Tool::from_id(tool).is_some()
+                    && path.len() <= 4096
+                    && !path.chars().any(char::is_control)
+                    && std::path::Path::new(path).is_absolute()
+            })
+            .collect();
         self
     }
 }
@@ -417,6 +431,16 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_tool_paths_are_checked() {
+        let s: Settings = serde_json::from_str(
+            r#"{"backup_tools":{"pg_dump":"/opt/pg/bin/pg_dump","psql":"relative/psql","rm":"/bin/rm"}}"#,
+        )
+        .unwrap();
+        let s = s.normalized();
+        assert_eq!(s.backup_tools.into_iter().collect::<Vec<_>>(), [("pg_dump".into(), "/opt/pg/bin/pg_dump".into())]);
+    }
 
     #[test]
     fn older_local_model_setting_loads_as_custom() {
