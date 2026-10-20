@@ -22,6 +22,8 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
   clickhouse: ['grid_edit', 'transactions'],
   duckdb: ['monitoring'],
   sqlite: ['monitoring'],
+  libsql: ['monitoring'],
+  d1: ['monitoring', 'transactions'],
   snowflake: ['monitoring'],
   redis: ['explain', 'schema_diff'],
   valkey: ['explain', 'schema_diff'],
@@ -36,7 +38,7 @@ const GAPS: Record<string, (keyof typeof caps)[]> = {
 
 const engine = (e: string, name: string, mark: string, hue: number, group: string, language: string, port: number | null, summary: string, priority: string, available = false): EngineInfo =>
   ({
-    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: e === 'snowflake' || e === 'dynamodb', file_based: port === null,
+    engine: e, name, mark, hue, group, language, default_port: port, summary, versions: summary, priority, available, beta: e === 'snowflake' || e === 'dynamodb' || e === 'd1', file_based: port === null,
     capabilities: available ? { ...caps, ...Object.fromEntries((GAPS[e] ?? []).map((k) => [k, false])), backup: BACKUP.has(e) } : none,
   }) as EngineInfo;
 
@@ -48,6 +50,8 @@ const ENGINES: EngineInfo[] = [
   engine('mysql', 'MySQL', 'My', 220, 'relational', 'SQL', 3306, '3306 · SQL · v5.7–8.4', 'P0', true),
   engine('mariadb', 'MariaDB', 'Ma', 60, 'relational', 'SQL', 3306, '3306 · SQL · v10.6–11', 'P0', true),
   engine('sqlite', 'SQLite', 'Sl', 200, 'relational', 'SQL', null, 'local file · SQL', 'P0', true),
+  engine('libsql', 'libSQL', 'Ls', 170, 'relational', 'SQL', 443, 'HTTPS · SQLite (Hrana)', 'P2', true),
+  engine('d1', 'Cloudflare D1', 'D1', 45, 'relational', 'SQL', 443, 'Cloudflare API · SQLite', 'P2', true),
   engine('sqlserver', 'SQL Server', 'Ms', 0, 'relational', 'T-SQL', 1433, '1433 · T-SQL · 2017–2022', 'P1', true),
   engine('oracle', 'Oracle', 'Or', 15, 'relational', 'PL/SQL', 1521, '1521 · PL/SQL · 19c–23ai', 'P2', true),
   engine('cockroachdb', 'CockroachDB', 'Cr', 280, 'relational', 'SQL', 26257, '26257 · Postgres wire', 'P2', true),
@@ -410,6 +414,7 @@ const handlers: Record<string, (a: Args) => unknown> = {
   }),
   list_scripts: () => [{ id: 'sc1', name: 'paid-orders', sql: "SELECT * FROM public.orders WHERE status = 'paid';", connection_id: 'c1', created_at: now, updated_at: now, folder: 'Reports', tags: ['billing'], pinned: true }],
   test_connection: () => ({ engine: 'postgres', version: 'PostgreSQL 16.4', latency_ms: 84, tls: { version: 'TLSv1.3', verified: true, mode: 'verify-full' }, user: 'app_readonly', database: 'app_dev', read_only: false }),
+  draft_databases: () => ['shop', 'staging'],
   session_options: (a) =>
     String(a.sessionId) === 's-c7'
       ? [

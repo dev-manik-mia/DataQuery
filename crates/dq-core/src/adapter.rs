@@ -81,6 +81,13 @@ pub trait DatabaseAdapter: Send + Sync {
     async fn test(&self, params: &ConnectParams) -> DbResult<ServerInfo>;
 
     async fn connect(&self, params: &ConnectParams) -> DbResult<Arc<dyn Session>>;
+
+    /// Databases the credentials can open, for the connection form of engines
+    /// whose database is picked from an account (Cloudflare D1).
+    async fn databases(&self, params: &ConnectParams) -> DbResult<Vec<String>> {
+        let _ = params;
+        Err(DbError::unsupported(format!("{} has no database list to choose from.", self.engine().name())))
+    }
 }
 
 /// An open connection. Methods take `&self`; implementations serialise access
@@ -102,6 +109,20 @@ pub trait Session: Send + Sync {
     /// [`Session::fetch_more`] or the next `execute`. `params` bind the
     /// statement's placeholders (`$1` / `?`) as text.
     async fn execute(&self, sql: &str, params: Params<'_>, options: ExecOptions) -> DbResult<StatementResult>;
+
+    /// Runs a script's statements in one request that applies all or none of
+    /// them, for engines without interactive transactions (Cloudflare D1).
+    /// `None` (the default) runs scripts statement by statement with
+    /// [`Session::execute`]. Results are bounded by `row_limit` each and
+    /// cannot be fetched further.
+    async fn execute_script(
+        &self,
+        statements: &[&str],
+        options: ExecOptions,
+    ) -> Option<DbResult<Vec<StatementResult>>> {
+        let _ = (statements, options);
+        None
+    }
 
     async fn fetch_more(&self, limit: u32) -> DbResult<RowsPage>;
 

@@ -6,12 +6,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dq_core::result::{ExecOptions, Row as CellRow, RowsPage, StatementResult};
-use dq_core::sql::{SqlFlavor, StatementKind, analyze, command_tag};
+use dq_core::sql::{SqlFlavor, command_tag};
 use dq_core::value::CellLimits;
 use dq_core::{DbError, DbResult, ErrorKind};
 use rusqlite::{Connection, InterruptHandle, Rows, params_from_iter};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::counts_rows;
 use crate::error::map_error;
 use crate::values::{self, column_meta};
 
@@ -136,12 +137,6 @@ pub fn take(
         None => None,
     };
     Ok((out, pending.is_some()))
-}
-
-fn counts_rows(sql: &str) -> bool {
-    analyze(sql, SqlFlavor::Sqlite).is_some_and(|s| {
-        matches!(s.kind, StatementKind::Insert | StatementKind::Update | StatementKind::Delete | StatementKind::Merge)
-    })
 }
 
 fn elapsed_ms(started: Instant) -> u64 {

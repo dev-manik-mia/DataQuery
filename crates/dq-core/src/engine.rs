@@ -26,6 +26,10 @@ pub enum Engine {
     Scylladb,
     Elasticsearch,
     Neo4j,
+    /// libSQL over HTTP (Hrana): Turso or a self-hosted `sqld`.
+    Libsql,
+    /// Cloudflare D1 through the Cloudflare API.
+    D1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -357,6 +361,30 @@ const SPECS: &[Spec] = &[
         "Graph · Neo4j 5.19+ Query API",
         P::P2,
     ),
+    spec(
+        Engine::Libsql,
+        "libSQL",
+        "Ls",
+        170,
+        G::Relational,
+        "SQL",
+        Some(443),
+        "HTTPS · SQLite (Hrana)",
+        "Turso or self-hosted sqld",
+        P::P2,
+    ),
+    spec(
+        Engine::D1,
+        "Cloudflare D1",
+        "D1",
+        45,
+        G::Relational,
+        "SQL",
+        Some(443),
+        "Cloudflare API · SQLite",
+        "Serverless SQLite on Cloudflare",
+        P::P2,
+    ),
 ];
 
 /// Builds the full engine catalog. `capabilities_of` returns `Some` for engines
@@ -395,10 +423,11 @@ impl Engine {
         SPECS.iter().find(|s| s.engine == self).and_then(|s| s.port)
     }
 
-    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`), never
-    /// a real account; the engine picker labels them "Beta".
+    /// Adapters verified only against an emulator (`fakesnow`, `DynamoDB Local`) or a
+    /// mock of the documented API (Cloudflare D1), never a real account; the engine
+    /// picker labels them "Beta".
     pub fn is_beta(self) -> bool {
-        matches!(self, Self::Snowflake | Self::Dynamodb)
+        matches!(self, Self::Snowflake | Self::Dynamodb | Self::D1)
     }
 
     /// Speaks the Redis protocol (Redis, Valkey, Dragonfly): numbered databases, the key browser.

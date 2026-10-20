@@ -229,6 +229,9 @@ pub struct OracleDialect;
 pub struct ClickhouseDialect;
 pub struct DuckdbDialect;
 pub struct SqliteDialect;
+/// `SQLite` as Cloudflare D1 runs it: the same SQL, but at most 100 bound
+/// parameters per statement.
+pub struct D1Dialect;
 pub struct SnowflakeDialect;
 pub struct MongoDialect;
 pub struct PartiqlDialect;
@@ -790,6 +793,71 @@ impl Dialect for SqliteDialect {
     /// A column may declare `COLLATE NOCASE`; any value sorts by bytes with `BINARY`.
     fn sort_key(&self, quoted_column: &str, _data_type: &str) -> String {
         format!("{quoted_column} COLLATE BINARY")
+    }
+}
+
+/// Everything as [`SqliteDialect`] except the parameter limit, so imports and
+/// data compare batch fewer rows per `INSERT`.
+impl Dialect for D1Dialect {
+    fn flavor(&self) -> SqlFlavor {
+        SqlFlavor::Sqlite
+    }
+
+    fn quote_ident(&self, ident: &str) -> String {
+        SqliteDialect.quote_ident(ident)
+    }
+
+    fn needs_quotes(&self, ident: &str) -> bool {
+        SqliteDialect.needs_quotes(ident)
+    }
+
+    fn quote_literal(&self, value: &str) -> String {
+        SqliteDialect.quote_literal(value)
+    }
+
+    fn placeholder(&self, index: usize, column_type: &str) -> String {
+        SqliteDialect.placeholder(index, column_type)
+    }
+
+    fn cast_to_text(&self, quoted_column: &str) -> String {
+        SqliteDialect.cast_to_text(quoted_column)
+    }
+
+    fn comparable(&self, data_type: &str) -> bool {
+        SqliteDialect.comparable(data_type)
+    }
+
+    fn search_predicate(&self, quoted_column: &str, placeholder: &str) -> String {
+        SqliteDialect.search_predicate(quoted_column, placeholder)
+    }
+
+    fn template_placeholder(&self, n: usize) -> String {
+        SqliteDialect.template_placeholder(n)
+    }
+
+    fn begin_transaction(&self) -> &'static str {
+        SqliteDialect.begin_transaction()
+    }
+
+    fn identity_clause(&self) -> Option<&'static str> {
+        SqliteDialect.identity_clause()
+    }
+
+    fn binary_literal(&self, hex: &str) -> String {
+        SqliteDialect.binary_literal(hex)
+    }
+
+    fn bool_literal(&self, value: bool) -> &'static str {
+        SqliteDialect.bool_literal(value)
+    }
+
+    /// D1 binds at most 100 parameters per query.
+    fn max_params(&self) -> usize {
+        100
+    }
+
+    fn sort_key(&self, quoted_column: &str, data_type: &str) -> String {
+        SqliteDialect.sort_key(quoted_column, data_type)
     }
 }
 

@@ -289,6 +289,10 @@ fn validate_path(path: &str, what: &str) -> DbResult<()> {
 
 impl ConnConfig {
     pub const MAX_TIMEOUT_SECS: u32 = 300;
+    /// Property holding a Cloudflare D1 connection's account id.
+    pub const D1_ACCOUNT: &str = "account_id";
+    /// Host of the Cloudflare API, where D1 connections go.
+    pub const D1_API_HOST: &str = "api.cloudflare.com";
 
     /// Redis database index: empty means 0.
     pub fn database_index(&self) -> Option<u32> {
@@ -338,6 +342,23 @@ impl ConnConfig {
         Ok(())
     }
 
+    /// Cloudflare D1: an account id and a database (id or name), reached
+    /// through the Cloudflare API host rather than a database server.
+    fn validate_d1(&self) -> DbResult<()> {
+        let account_ok =
+            self.property(Self::D1_ACCOUNT).is_some_and(|a| a.len() == 32 && a.chars().all(|c| c.is_ascii_hexdigit()));
+        if !account_ok {
+            return Err(DbError::invalid("Enter the Cloudflare account ID (32 hexadecimal characters)."));
+        }
+        if self.database.trim().is_empty() {
+            return Err(DbError::invalid("Enter the D1 database ID or name, or load the list with your API token."));
+        }
+        if self.ssh.is_some() {
+            return Err(DbError::invalid("Cloudflare D1 is reached through the Cloudflare API, not an SSH tunnel."));
+        }
+        Ok(())
+    }
+
     fn validate_properties(&self) -> DbResult<()> {
         for (key, value) in &self.properties {
             let key_ok =
@@ -363,12 +384,16 @@ impl ConnConfig {
         } else {
             validate_host(&self.host, "Host")?;
         }
+        if self.engine == Engine::D1 {
+            self.validate_d1()?;
+        }
         if self.port == 0 {
             return Err(DbError::invalid("Port must be between 1 and 65535."));
         }
         // MongoDB and Redis may run without authentication (Redis uses the `default` user);
         // DynamoDB checks its access key above.
         // Cassandra and ScyllaDB accept anonymous logins unless an authenticator is set.
+        // libSQL and D1 authenticate with a token alone.
         let optional_user = matches!(
             self.engine,
             Engine::Mongodb
@@ -379,6 +404,8 @@ impl ConnConfig {
                 | Engine::Cassandra
                 | Engine::Scylladb
                 | Engine::Elasticsearch
+                | Engine::Libsql
+                | Engine::D1
         );
         if self.username.trim().is_empty() && !optional_user {
             return Err(DbError::invalid("Username is required."));
@@ -486,7 +513,7 @@ fn parse_file_url(input: &str) -> DbResult<Option<ParsedUrl>> {
 /// Parses `postgres://`, `postgresql://`, `cockroachdb://`, `mysql://`,
 /// `mariadb://`, `sqlserver://` (or `mssql://`), `oracle://`, `clickhouse://`,
 /// `snowflake://`, `duckdb://`, `sqlite://`, `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`, `valkey://`,
-/// `valkeys://`, `dragonfly://` and `dragonflys://` URLs. For Oracle the path is the service name; for Snowflake it is `database/schema`; for
+/// `valkeys://`, `dragonfly://`, `dragonflys://` and `libsql://` URLs (`?tls=0`, `?authToken=`). For Oracle the path is the service name; for Snowflake it is `database/schema`; for
 /// `DuckDB` and `SQLite` it is the file; for Redis it is the database number.
 pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     // Several hosts are not a valid URL authority, so MongoDB URLs are read by hand.
@@ -510,6 +537,7 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
         "neo4j" | "neo4j+s" | "neo4j+ssc" | "bolt" | "bolt+s" | "bolt+ssc" => Engine::Neo4j,
         "valkey" | "valkeys" => Engine::Valkey,
         "dragonfly" | "dragonflys" => Engine::Dragonfly,
+        "libsql" => Engine::Libsql,
         other => {
             return Err(DbError::unsupported(format!("Unsupported URL scheme `{other}`.")));
         }
@@ -542,11 +570,14 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     };
     // `+ssc`: TLS with a self-signed certificate (not verified).
     let mut trust_server_certificate = url.scheme().ends_with("+ssc");
+    let mut token = None;
     for (key, value) in url.query_pairs() {
         let truthy = matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "strict" | "mandatory");
         match key.as_ref() {
-            // SQL Server `encrypt`, ClickHouse `secure`.
-            "encrypt" | "secure" => encrypt = Some(truthy),
+            // SQL Server `encrypt`, ClickHouse `secure`, libSQL `tls`.
+            "encrypt" | "secure" | "tls" => encrypt = Some(truthy),
+            // libSQL clients take the database token in the URL.
+            "authToken" => token = Some(value.into_owned()),
             "warehouse" | "role" | "account" => {
                 properties.insert(key.into_owned(), value.into_owned());
             }
@@ -575,6 +606,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     let port = match (engine, url.port()) {
         (Engine::Neo4j, None | Some(7687)) if ssl_mode == SslMode::Disable => Some(7474),
         (Engine::Neo4j, None | Some(7687)) => Some(7473),
+        // A self-hosted `sqld` listens on 8080 without TLS.
+        (Engine::Libsql, None) if ssl_mode == SslMode::Disable => Some(8080),
         (_, port) => port,
     };
     let config = ConnConfig {
@@ -591,7 +624,8 @@ pub fn parse_connection_url(input: &str) -> DbResult<ParsedUrl> {
     };
     config.validate()?;
     let name_suggestion = if database.is_empty() { host } else { format!("{database}@{host}") };
-    Ok(ParsedUrl { password: url.password().map(decode).filter(|p| !p.is_empty()), config, name_suggestion })
+    let password = token.or_else(|| url.password().map(decode)).filter(|p| !p.is_empty());
+    Ok(ParsedUrl { config, password, name_suggestion })
 }
 
 /// `mongodb://user:pw@h1:27017,h2:27018/db?replicaSet=rs0&authSource=admin&tls=true`
@@ -683,6 +717,26 @@ mod tests {
         assert_eq!((p.config.port, p.config.ssl_mode), (7474, SslMode::Disable));
         assert_eq!(parse_connection_url("neo4j://neo4j@localhost:57474").unwrap().config.port, 57474);
         assert_eq!(parse_connection_url("neo4j+ssc://a@h").unwrap().config.ssl_mode, SslMode::Require);
+    }
+
+    #[test]
+    fn parses_libsql_urls_and_checks_d1() {
+        let p = parse_connection_url("libsql://shop-acme.turso.io?authToken=eyJ.x").unwrap();
+        assert_eq!((p.config.engine, p.config.port, p.config.ssl_mode), (Engine::Libsql, 443, SslMode::VerifyFull));
+        assert_eq!((p.config.host.as_str(), p.password.as_deref()), ("shop-acme.turso.io", Some("eyJ.x")));
+        let p = parse_connection_url("libsql://localhost?tls=0").unwrap();
+        assert_eq!((p.config.port, p.config.ssl_mode, p.password), (8080, SslMode::Disable, None));
+        let d1 = |account: &str, database: &str| ConnConfig {
+            engine: Engine::D1,
+            host: ConnConfig::D1_API_HOST.into(),
+            port: 443,
+            database: database.into(),
+            properties: BTreeMap::from([(ConnConfig::D1_ACCOUNT.to_owned(), account.to_owned())]),
+            ..ConnConfig::default()
+        };
+        assert!(d1("0123456789abcdef0123456789ABCDEF", "shop").validate().is_ok());
+        assert!(d1("not-an-account", "shop").validate().is_err());
+        assert!(d1("0123456789abcdef0123456789abcdef", " ").validate().is_err());
     }
 
     #[test]

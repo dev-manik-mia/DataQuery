@@ -1,6 +1,17 @@
 //! Builds a plan tree from `EXPLAIN QUERY PLAN` rows: `(id, parent, notused, detail)`.
 
+use dq_core::DbError;
 use dq_core::explain::{ExplainResult, PlanNode};
+
+/// `EXPLAIN QUERY PLAN` for one statement.
+pub fn statement(sql: &str) -> String {
+    format!("EXPLAIN QUERY PLAN {}", sql.trim().trim_end_matches(';'))
+}
+
+/// `SQLite` only plans: there is no `EXPLAIN ANALYZE`.
+pub fn no_analyze() -> DbError {
+    DbError::unsupported("SQLite has no EXPLAIN ANALYZE. Run the query to see its time, or use Explain for the plan.")
+}
 
 /// `detail` such as `SEARCH orders USING INDEX by_status (status=?)` becomes
 /// the label `SEARCH` and the detail `orders USING INDEX by_status (status=?)`.

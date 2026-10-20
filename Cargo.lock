@@ -1569,6 +1569,7 @@ dependencies = [
  "dq-redis",
  "dq-snowflake",
  "dq-sqlite",
+ "dq-sqlite-http",
  "dq-sqlserver",
  "dq-ssh",
  "dq-store",
@@ -2115,6 +2116,21 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "dq-sqlite-http"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "dq-core",
+ "dq-sqlite",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

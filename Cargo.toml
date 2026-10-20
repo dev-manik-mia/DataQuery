@@ -19,6 +19,7 @@ dq-sqlserver = { path = "crates/dq-sqlserver" }
 dq-oracle = { path = "crates/dq-oracle" }
 dq-duckdb = { path = "crates/dq-duckdb" }
 dq-sqlite = { path = "crates/dq-sqlite" }
+dq-sqlite-http = { path = "crates/dq-sqlite-http" }
 dq-clickhouse = { path = "crates/dq-clickhouse" }
 dq-snowflake = { path = "crates/dq-snowflake" }
 dq-mongodb = { path = "crates/dq-mongodb" }
