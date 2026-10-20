@@ -87,6 +87,27 @@ impl std::fmt::Debug for ConnectionDraft {
     }
 }
 
+/// A connection to create from an export file or another app. It never holds
+/// a secret: passwords are entered again after the import.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ConnectionImport {
+    pub name: String,
+    /// Folder name; created when no folder has this name yet.
+    pub folder: Option<String>,
+    pub environment: Environment,
+    pub favorite: bool,
+    pub config: ConnConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export)]
+pub struct ConnectionImportReport {
+    pub imported: u32,
+    /// One line per connection that was not imported, with the reason.
+    pub skipped: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -354,7 +375,8 @@ impl Default for Settings {
     }
 }
 
-fn clean_text(s: &str, max: usize) -> String {
+/// Trims, drops control characters and keeps at most `max` characters.
+pub(crate) fn clean_text(s: &str, max: usize) -> String {
     s.trim().chars().filter(|c| !c.is_control()).take(max).collect()
 }
 

@@ -11,8 +11,9 @@ use dq_core::{DbError, DbResult, ErrorKind};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::model::{
-    ConnectionDraft, Folder, HistoryEntry, HistoryPage, HistoryQuery, HistoryStatus, NewHistoryEntry, Retention,
-    SavedConnection, SavedScript, ScriptDraft, Settings, Snippet, SnippetDraft,
+    ConnectionDraft, ConnectionImport, ConnectionImportReport, Folder, HistoryEntry, HistoryPage, HistoryQuery,
+    HistoryStatus, NewHistoryEntry, PasswordChange, Retention, SavedConnection, SavedScript, ScriptDraft, Settings,
+    Snippet, SnippetDraft,
 };
 
 const MIGRATIONS: &[&str] = &[
@@ -293,6 +294,45 @@ impl Store {
     pub fn touch_connection(&self, id: &str) -> DbResult<()> {
         self.with(|db| db.execute("UPDATE connections SET last_used_at = ?2 WHERE id = ?1", params![id, now_ms()]))
             .map(drop)
+    }
+
+    /// Creates each connection under a new id, without secrets, and the folders
+    /// they name. Invalid connections are reported, not saved.
+    pub fn import_connections(&self, items: Vec<ConnectionImport>) -> DbResult<ConnectionImportReport> {
+        let mut report = ConnectionImportReport::default();
+        let mut folders = self.folders()?;
+        for c in items {
+            if let Err(e) = c.config.validate() {
+                report.skipped.push(format!("{}: {}", c.name, e.message));
+                continue;
+            }
+            let folder_id = match c.folder.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+                Some(name) => Some(if let Some(f) = folders.iter().find(|f| f.name == name) {
+                    f.id.clone()
+                } else {
+                    let folder = self.create_folder(name)?;
+                    folders.push(folder.clone());
+                    folder.id
+                }),
+                None => None,
+            };
+            let hops = c.config.ssh.as_ref().map_or(0, |t| t.hops().count());
+            let draft = ConnectionDraft {
+                id: None,
+                name: c.name,
+                folder_id,
+                environment: c.environment,
+                favorite: c.favorite,
+                config: c.config,
+                password: PasswordChange::Clear,
+                ssh_secrets: Vec::new(),
+            };
+            match self.save_connection(&draft, false, &vec![false; hops]) {
+                Ok(_) => report.imported += 1,
+                Err(e) => report.skipped.push(format!("{}: {}", draft.name, e.message)),
+            }
+        }
+        Ok(report)
     }
 
     // ------------------------------------------------------------------ history
@@ -593,7 +633,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PasswordChange;
     use dq_core::config::SslMode;
     use dq_core::engine::Engine;
 
@@ -617,6 +656,24 @@ mod tests {
             password: PasswordChange::Set { value: "hunter2-secret".into() },
             ssh_secrets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn imports_connections_into_shared_folders() {
+        let store = Store::in_memory().unwrap();
+        let item = |name: &str, user: &str| ConnectionImport {
+            name: name.into(),
+            folder: Some("Team".into()),
+            environment: Environment::Staging,
+            favorite: false,
+            config: ConnConfig { username: user.into(), ..draft(name).config },
+        };
+        let report = store.import_connections(vec![item("a", "app"), item("b", "app"), item("c", "")]).unwrap();
+        assert_eq!((report.imported, report.skipped), (2, vec!["c: Username is required.".to_owned()]));
+        let folders = store.folders().unwrap();
+        assert_eq!(folders.len(), 1);
+        let saved = store.connections().unwrap();
+        assert!(saved.iter().all(|c| c.folder_id.as_deref() == Some(folders[0].id.as_str()) && !c.has_password));
     }
 
     #[test]

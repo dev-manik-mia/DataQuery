@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="dataSourceStorageLocal" created-in="DB-243.21565.180">
+    <data-source name="orders@prod" uuid="0b7c2f5e-3d1a-4c9b-8e2f-6a5d4c3b2a19">
+      <database-info product="PostgreSQL" version="16.2" jdbc-version="4.2" driver-name="PostgreSQL JDBC Driver" driver-version="42.7.3" dbms="POSTGRES" exact-version="16.2" exact-driver-version="42.7">
+        <identifier-quote-string>&quot;</identifier-quote-string>
+      </database-info>
+      <case-sensitivity plain-identifiers="lower" quoted-identifiers="exact" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>orders_ro</user-name>
+      <schema-mapping>
+        <introspection-scope>
+          <node kind="database" qname="@">
+            <node kind="schema" qname="@" />
+          </node>
+        </introspection-scope>
+      </schema-mapping>
+      <ssh-properties>
+        <enabled>true</enabled>
+        <ssh-config-id>7d3a1f42-9c8b-4e6d-a5f4-0c1b2a3d4e5f</ssh-config-id>
+      </ssh-properties>
+      <ssl-config>
+        <ca-cert>$USER_HOME$/certs/prod-ca.pem</ca-cert>
+        <mode>VERIFY_FULL</mode>
+        <enabled>true</enabled>
+      </ssl-config>
+    </data-source>
+    <data-source name="events" uuid="1c8d3a6f-4e2b-4dac-9f3a-7b6e5d4c3b2a">
+      <secret-storage>master_key</secret-storage>
+      <user-name>default</user-name>
+    </data-source>
+    <data-source name="crm" uuid="2d9e4b7a-5f3c-4ebd-8a4b-8c7f6e5d4c3b">
+      <secret-storage>master_key</secret-storage>
+      <user-name>crm_reader</user-name>
+      <ssh-properties>
+        <enabled>true</enabled>
+        <ssh-config-id>8e4b2053-ad9c-4f7e-b6a5-1d2c3b4a5f6e</ssh-config-id>
+      </ssh-properties>
+    </data-source>
+  </component>
+</project>

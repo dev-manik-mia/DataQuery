@@ -505,3 +505,69 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* Import from another app */
+.importList {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.importRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 22px minmax(0, 0.8fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px var(--space-3);
+  border-bottom: 1px solid var(--line-2);
+}
+
+.importRow:last-child,
+.sourceRow:last-child {
+  border-bottom: none;
+}
+
+.importStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.importProblem {
+  font-size: var(--text-caption);
+  color: var(--critical);
+}
+
+.importSkipped {
+  margin: var(--space-2) 0 0;
+  padding-left: 18px;
+  font-size: var(--text-caption);
+  color: var(--ink-2);
+}
+
+.sourceRow {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 8px var(--space-3);
+  border: none;
+  border-bottom: 1px solid var(--line-2);
+  background: none;
+  color: var(--ink);
+  text-align: left;
+}
+
+.sourceRow:hover:not(:disabled) {
+  background: var(--sunk);
+}
+
+.sourcePick {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+}

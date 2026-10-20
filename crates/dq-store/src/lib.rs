@@ -5,6 +5,7 @@
 //! this crate that is written to disk has a field that could hold one.
 
 mod files;
+pub mod import;
 mod model;
 pub mod script_files;
 mod secrets;
